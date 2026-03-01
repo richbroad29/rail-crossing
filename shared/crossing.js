@@ -396,7 +396,7 @@ function showModal(type) {
 }
 
 function closeModal(e) {
-  if (e && e.target && e.target.id !== 'modalOverlay') return;
+  if (e && e.stopPropagation) e.stopPropagation();
   $('modalOverlay').classList.add('hidden');
 }
 
