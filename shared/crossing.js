@@ -1,7 +1,4 @@
-var NR_TOKEN = '314e8e0f-87f4-4b59-a04e-8abd3187d5a9';
-var NR_ENDPOINT = 'https://lite.realtime.nationalrail.co.uk/OpenLDBWS/ldb12.asmx';
-var CORS_PROXY = 'https://corsproxy.io/?url=';
-var Q = String.fromCharCode(34);
+var API_BASE = 'https://rail-crossing-api.richardbroad29.workers.dev';
 var BASE_URL = 'https://richbroad29.github.io/rail-crossing/';
 
 var CFG = null;
