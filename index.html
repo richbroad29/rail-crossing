@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#0F172A">
+<title>UK Rail Crossing Status</title>
+<link rel="stylesheet" href="shared/crossing.css">
+</head>
+<body>
+<div class="landing">
+  <h1>UK Rail Crossing Status</h1>
+  <p>Live level crossing predictions powered by National Rail data. Choose a crossing below.</p>
+  <ul class="crossing-list" id="crossingList">
+    <li><div class="empty">Loading crossings...</div></li>
+  </ul>
+  <div style="margin-top:24px">
+    <a class="link-btn" href="mailto:richardbroad29@gmail.com?subject=New%20Crossing%20Request&body=I%27d%20like%20to%20request%20a%20new%20level%20crossing%20be%20added%3A%0A%0ACrossing%20name%3A%0ALocation%3A%0ANearest%20station%3A" style="display:inline-block;max-width:200px;margin:0 auto">Request a New Crossing</a>
+  </div>
+</div>
+<script>
+async function loadCrossings() {
+  try {
+    var resp = await fetch('shared/crossings.json');
+    var data = await resp.json();
+    var list = document.getElementById('crossingList');
+    var html = '';
+    var keys = Object.keys(data);
+    for (var i = 0; i < keys.length; i++) {
+      var id = keys[i];
+      var c = data[id];
+      html += '<li><a class="crossing-link" href="' + id + '/">';
+      html += '<h3>' + c.name + '</h3>';
+      html += '<span>' + c.road + ' · Station: ' + c.station + '</span>';
+      html += '</a></li>';
+    }
+    list.innerHTML = html;
+  } catch(e) {
+    document.getElementById('crossingList').innerHTML = '<li><div class="empty">Failed to load crossings</div></li>';
+  }
+}
+loadCrossings();
+</script>
+<script data-goatcounter="https://richbroad29.goatcounter.com/count"
+        async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>
