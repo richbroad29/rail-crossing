@@ -86,19 +86,6 @@ if (!allConfig[CROSSING_ID]) {
 var CFG = allConfig[CROSSING_ID];
 var crossingLabel = CFG.name.replace(' Level Crossing', '');
 
-function soap(t) {
-  var m = t === 'a' ? 'GetArrBoardWithDetailsRequest' : 'GetDepBoardWithDetailsRequest';
-  var x = '<?xml version=' + Q + '1.0' + Q + '?>';
-  x += '<soap:Envelope xmlns:soap=' + Q + 'http://www.w3.org/2003/05/soap-envelope' + Q;
-  x += ' xmlns:typ=' + Q + 'http://thalesgroup.com/RTTI/2013-11-28/Token/types' + Q;
-  x += ' xmlns:ldb=' + Q + 'http://thalesgroup.com/RTTI/2021-11-01/ldb/' + Q + '>';
-  x += '<soap:Header><typ:AccessToken><typ:TokenValue>' + TOKEN + '</typ:TokenValue></typ:AccessToken></soap:Header>';
-  x += '<soap:Body><ldb:' + m + '><ldb:numRows>15</ldb:numRows>';
-  x += '<ldb:crs>' + CFG.station + '</ldb:crs><ldb:timeWindow>120</ldb:timeWindow>';
-  x += '</ldb:' + m + '></soap:Body></soap:Envelope>';
-  return x;
-}
-
 function pTime(s) {
   if (!s || s.indexOf(':') < 0) return null;
   var n = new Date();
