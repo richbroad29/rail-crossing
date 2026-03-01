@@ -392,12 +392,12 @@ function showModal(type) {
   }
   $('modalTitle').textContent = title;
   $('modalBody').innerHTML = body;
-  $('modalOverlay').classList.remove('hidden');
+  $('modalOverlay').classList.add('show');
 }
 
 function closeModal(e) {
   if (e && e.stopPropagation) e.stopPropagation();
-  $('modalOverlay').classList.add('hidden');
+  $('modalOverlay').classList.remove('show');
 }
 
 async function initCrossing(id) {
