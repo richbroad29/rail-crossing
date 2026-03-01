@@ -10,6 +10,7 @@ var apiMode = 'loading';
 var lastError = '';
 var trainHistory = [];
 var crossingId = '';
+var lastPassedTrain = null;
 
 var isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
 var isAndroid = /Android/.test(navigator.userAgent);
@@ -30,8 +31,6 @@ function getColors(st) {
     default: return {bg:'#6B7280',text:'#FFF',glow:'none'};
   }
 }
-
-
 
 function parseTimeStr(timeStr) {
   if (!timeStr || timeStr.indexOf(':') < 0) return null;
@@ -280,20 +279,31 @@ function updateStatus() {
   if (nextOpenTime) { $('nextOpenCountdown').textContent = fmtCountdown(Math.max(0, nextOpenTime.getTime() - t)); $('nextOpenCountdown').style.color = '#16A34A'; $('nextOpenTime').textContent = fmtShort(nextOpenTime); }
   else { $('nextOpenCountdown').textContent = '--'; $('nextOpenCountdown').style.color = '#475569'; $('nextOpenTime').textContent = ''; }
   renderTrains();
+
+  // Track last passed train for accurate feedback logging
+  var allForHistory = trainHistory.length > 0 ? trainHistory : trains;
+  for (var lt = 0; lt < allForHistory.length; lt++) {
+    if (allForHistory[lt].bestTime <= now) {
+      if (!lastPassedTrain || allForHistory[lt].bestTime > lastPassedTrain.bestTime) {
+        lastPassedTrain = allForHistory[lt];
+      }
+    }
+  }
 }
 
 function sendFeedback(state) {
   var now = new Date();
   var currentStatus = $('statusTitle').textContent;
-  var lastTrain = null, nextTrain = null;
+  var lastTrain = lastPassedTrain;
+  var nextTrain = null;
   var allTrains = trainHistory.length > 0 ? trainHistory : trains;
   for (var i = 0; i < allTrains.length; i++) {
-    if (allTrains[i].bestTime <= now) lastTrain = allTrains[i];
     if (allTrains[i].bestTime > now && !nextTrain) nextTrain = allTrains[i];
   }
   var payload = {
     timestamp: now.toISOString(),
     crossing: crossingId,
+    crossingName: CFG.name,
     event: state,
     predicted: currentStatus,
     lastTrainTime: lastTrain ? fmtShort(lastTrain.bestTime) : '',
@@ -324,26 +334,29 @@ function sendFeedback(state) {
 function showModal(type) {
   var title = '', body = '';
   var appUrl = BASE_URL + crossingId + '/';
+  var crossingShort = CFG.name.replace(' Level Crossing', '');
+  var shareIcon = '<svg style="display:inline-block;vertical-align:middle;margin:0 3px" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#38BDF8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14v5a2 2 0 002 2h12a2 2 0 002-2v-5"/><path d="M12 3v12"/><path d="M8 7l4-4 4 4"/></svg>';
+  var dotsIcon = '<svg style="display:inline-block;vertical-align:middle;margin:0 3px" width="16" height="16" viewBox="0 0 24 24" fill="#38BDF8"><circle cx="12" cy="5" r="2.5"/><circle cx="12" cy="12" r="2.5"/><circle cx="12" cy="19" r="2.5"/></svg>';
   if (type === 'homescreen') {
     if (isIOS) {
-      title = 'Add to Home Screen \u2014 iPhone';
+      title = 'Add App to Home Screen \u2014 iPhone';
       body = '<ol><li>Make sure you are viewing this page in <strong>Safari</strong></li>';
-      body += '<li>Tap the <strong>Share button</strong> (square with arrow) at the bottom</li>';
+      body += '<li>Tap the <strong>Share button</strong> ' + shareIcon + ' at the bottom</li>';
       body += '<li>Scroll down and tap <strong>"Add to Home Screen"</strong></li>';
-      body += '<li>Name it <strong>"Crossing"</strong> or whatever you prefer</li>';
+      body += '<li>Name it <strong>"' + crossingShort + ' Crossing"</strong> or whatever you prefer</li>';
       body += '<li>Tap <strong>Add</strong></li></ol>';
       body += '<p>The app will appear on your home screen and open full-screen.</p>';
     } else if (isAndroid) {
-      title = 'Add to Home Screen \u2014 Android';
+      title = 'Add App to Home Screen \u2014 Android';
       body = '<ol><li>Open this page in <strong>Chrome</strong></li>';
-      body += '<li>Tap the <strong>three-dot menu</strong> in the top right</li>';
+      body += '<li>Tap the <strong>three-dot menu</strong> ' + dotsIcon + ' in the top right</li>';
       body += '<li>Tap <strong>"Add to Home screen"</strong> or <strong>"Install app"</strong></li>';
-      body += '<li>Name it <strong>"Crossing"</strong></li>';
+      body += '<li>Name it <strong>"' + crossingShort + ' Crossing"</strong></li>';
       body += '<li>Tap <strong>Add</strong></li></ol>';
     } else {
-      title = 'Add to Home Screen';
-      body = '<p><strong>iPhone (Safari):</strong></p><ol><li>Tap Share button</li><li>Tap "Add to Home Screen"</li><li>Tap Add</li></ol>';
-      body += '<p><strong>Android (Chrome):</strong></p><ol><li>Tap three-dot menu</li><li>Tap "Add to Home screen"</li><li>Tap Add</li></ol>';
+      title = 'Add App to Home Screen';
+      body = '<p><strong>iPhone (Safari):</strong></p><ol><li>Tap the Share button ' + shareIcon + '</li><li>Tap "Add to Home Screen"</li><li>Tap Add</li></ol>';
+      body += '<p><strong>Android (Chrome):</strong></p><ol><li>Tap the three-dot menu ' + dotsIcon + '</li><li>Tap "Add to Home screen"</li><li>Tap Add</li></ol>';
     }
   } else if (type === 'voice') {
     if (isIOS) {
@@ -356,19 +369,20 @@ function showModal(type) {
       body += "var code = await r.loadString();<br>";
       body += "await eval('(async()=>{' + code + '})()');</div></li>";
       body += '<li>Open the <strong>Shortcuts</strong> app, create a new shortcut</li>';
-      body += '<li>Name it <strong>"Is the crossing open"</strong></li>';
+      body += '<li>Name it <strong>"Is ' + crossingShort + ' level crossing open"</strong></li>';
       body += '<li>Add action: search <strong>Scriptable</strong> &rarr; <strong>Run Script</strong> &rarr; select "Crossing Siri"</li>';
+      body += '<li>In the Scriptable action, set <strong>Parameter</strong> to <strong>"' + crossingShort + '"</strong></li>';
       body += '<li>Add action: <strong>Speak Text</strong> &rarr; set to Shortcut Input</li>';
       body += '<li>In the Scriptable action, turn off <strong>"Run In App"</strong></li></ol>';
-      body += '<p>Now say <strong>"Hey Siri, is the crossing open"</strong>!</p>';
+      body += '<p>Now say <strong>"Hey Siri, is ' + crossingShort + ' level crossing open"</strong>!</p>';
     } else if (isAndroid) {
       title = 'Add to Google Assistant \u2014 Android';
       body = '<ol><li>Open the <strong>Google app</strong></li>';
       body += '<li>Profile &rarr; <strong>Settings</strong> &rarr; <strong>Google Assistant</strong> &rarr; <strong>Routines</strong></li>';
       body += '<li>Create a new routine</li>';
-      body += '<li>Trigger: <strong>"Is the crossing open"</strong></li>';
+      body += '<li>Trigger: <strong>"Is ' + crossingShort + ' level crossing open"</strong></li>';
       body += '<li>Action: <strong>Open website</strong> &rarr; <div style="background:#0F172A;padding:8px;border-radius:6px;margin:6px 0;font-family:monospace;font-size:10px;color:#6EE7B7">' + appUrl + '</div></li></ol>';
-      body += '<p>Say <strong>"Hey Google, is the crossing open"</strong>!</p>';
+      body += '<p>Say <strong>"Hey Google, is ' + crossingShort + ' level crossing open"</strong>!</p>';
     } else {
       title = 'Voice Assistant Setup';
       body = '<p>Open this page on your phone for device-specific instructions.</p>';
