@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Crossing">
 <meta name="theme-color" content="#0F172A">
@@ -101,7 +101,7 @@
   <div class="footer">Estimates only · Not a safety system · Always obey signals & barriers</div>
 </div>
 
-<div class="modal-overlay hidden" id="modalOverlay" onclick="closeModal(event)">
+<div class="modal-overlay" id="modalOverlay" onclick="closeModal(event)">
   <div class="modal" onclick="event.stopPropagation()">
     <h3 id="modalTitle"></h3>
     <div id="modalBody"></div>
@@ -111,7 +111,6 @@
 
 <script src="../shared/crossing.js"></script>
 <script>
-document.getElementById('modalOverlay').classList.add('hidden');
 initCrossing('portslade');
 </script>
 <script data-goatcounter="https://richbroad29.goatcounter.com/count"
