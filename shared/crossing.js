@@ -31,18 +31,7 @@ function getColors(st) {
   }
 }
 
-function buildSoap(type) {
-  var method = type === 'arr' ? 'GetArrBoardWithDetailsRequest' : 'GetDepBoardWithDetailsRequest';
-  var s = '<?xml version=' + Q + '1.0' + Q + '?>';
-  s += '<soap:Envelope xmlns:soap=' + Q + 'http://www.w3.org/2003/05/soap-envelope' + Q;
-  s += ' xmlns:typ=' + Q + 'http://thalesgroup.com/RTTI/2013-11-28/Token/types' + Q;
-  s += ' xmlns:ldb=' + Q + 'http://thalesgroup.com/RTTI/2021-11-01/ldb/' + Q + '>';
-  s += '<soap:Header><typ:AccessToken><typ:TokenValue>' + NR_TOKEN + '</typ:TokenValue></typ:AccessToken></soap:Header>';
-  s += '<soap:Body><ldb:' + method + '><ldb:numRows>15</ldb:numRows>';
-  s += '<ldb:crs>' + CFG.station + '</ldb:crs><ldb:timeWindow>120</ldb:timeWindow>';
-  s += '</ldb:' + method + '></soap:Body></soap:Envelope>';
-  return s;
-}
+
 
 function parseTimeStr(timeStr) {
   if (!timeStr || timeStr.indexOf(':') < 0) return null;
@@ -121,13 +110,8 @@ async function fetchNationalRail() {
   for (var i = 0; i < 2; i++) {
     var type = types[i];
     try {
-      var soapBody = buildSoap(type);
-      var response;
-      try {
-        response = await fetch(NR_ENDPOINT, {method:'POST', headers:{'Content-Type':'application/soap+xml;charset=utf-8'}, body:soapBody});
-      } catch(e) {
-        response = await fetch(CORS_PROXY + encodeURIComponent(NR_ENDPOINT), {method:'POST', headers:{'Content-Type':'application/soap+xml;charset=utf-8'}, body:soapBody});
-      }
+      var url = API_BASE + '/?station=' + CFG.station + '&type=' + type;
+      var response = await fetch(url);
       if (!response.ok) throw new Error('HTTP ' + response.status);
       var xml = await response.text();
       var svcs = parseXml(xml, type);
