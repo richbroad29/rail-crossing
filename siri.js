@@ -1,6 +1,5 @@
 async function main() {
 
-var CROSSING_ID = 'portslade';
 var TOKEN = '314e8e0f-87f4-4b59-a04e-8abd3187d5a9';
 var WURL = 'https://lite.realtime.nationalrail.co.uk/OpenLDBWS/ldb12.asmx';
 var Q = String.fromCharCode(34);
@@ -8,13 +7,86 @@ var CONFIG_URL = 'https://richbroad29.github.io/rail-crossing/shared/crossings.j
 
 var cfgReq = new Request(CONFIG_URL);
 var allConfig = JSON.parse(await cfgReq.loadString());
-var CFG = allConfig[CROSSING_ID];
+var crossingIds = Object.keys(allConfig);
 
-if (!CFG) {
-  Script.setShortcutOutput('Sorry, crossing config not found for ' + CROSSING_ID);
+// Get input from Shortcut
+var input = args.shortcutParameter;
+var CROSSING_ID = null;
+
+if (input && typeof input === 'string' && input.trim().length > 0) {
+  var search = input.trim().toLowerCase();
+  // Try exact match first
+  if (allConfig[search]) {
+    CROSSING_ID = search;
+  } else {
+    // Try matching against crossing names and IDs
+    for (var ci = 0; ci < crossingIds.length; ci++) {
+      var id = crossingIds[ci];
+      var cfg = allConfig[id];
+      var name = cfg.name.toLowerCase();
+      if (id === search || name.indexOf(search) >= 0 || search.indexOf(id) >= 0) {
+        CROSSING_ID = id;
+        break;
+      }
+    }
+  }
+}
+
+// If no crossing identified, ask the user
+if (!CROSSING_ID) {
+  if (crossingIds.length === 1) {
+    // Only one crossing, use it
+    CROSSING_ID = crossingIds[0];
+  } else if (config.runsInApp || config.runsWithSiri) {
+    // Build a list of available crossings for the prompt
+    var names = [];
+    for (var ni = 0; ni < crossingIds.length; ni++) {
+      names.push(allConfig[crossingIds[ni]].name.replace(' Level Crossing', ''));
+    }
+    var alert = new Alert();
+    alert.title = 'Which crossing?';
+    alert.message = 'Choose a crossing:';
+    for (var ai = 0; ai < names.length; ai++) {
+      alert.addAction(names[ai]);
+    }
+    alert.addCancelAction('Cancel');
+    var choice = await alert.presentAlert();
+    if (choice >= 0 && choice < crossingIds.length) {
+      CROSSING_ID = crossingIds[choice];
+    } else {
+      Script.setShortcutOutput('No crossing selected.');
+      Script.complete();
+      return;
+    }
+  } else {
+    // Running in widget or unknown context with multiple crossings
+    CROSSING_ID = crossingIds[0];
+  }
+}
+
+// Check if crossing exists
+if (!allConfig[CROSSING_ID]) {
+  var available = [];
+  for (var av = 0; av < crossingIds.length; av++) {
+    available.push(allConfig[crossingIds[av]].name.replace(' Level Crossing', ''));
+  }
+  var speech = 'Sorry, I don\'t have information on that crossing. ';
+  speech += 'You can request it in the app. ';
+  speech += 'Currently available crossings are: ' + available.join(', ') + '.';
+  if (config.runsInApp) {
+    var errAlert = new Alert();
+    errAlert.title = 'Unknown Crossing';
+    errAlert.message = speech;
+    errAlert.addAction('OK');
+    await errAlert.present();
+  }
+  Script.setShortcutOutput(speech);
   Script.complete();
   return;
 }
+
+var CFG = allConfig[CROSSING_ID];
+var crossingLabel = CFG.name.replace(' Level Crossing', '');
 
 function soap(t) {
   var m = t === 'a' ? 'GetArrBoardWithDetailsRequest' : 'GetDepBoardWithDetailsRequest';
@@ -138,7 +210,7 @@ async function getTrains() {
   return res;
 }
 
-function closures(trains) {
+function closureCalc(trains) {
   if (!trains.length) return [];
   var per = [], cs = null, ce = null;
   for (var i = 0; i < trains.length; i++) {
@@ -156,11 +228,11 @@ var trains = [];
 try { trains = await getTrains(); } catch(e) {}
 
 var now = new Date();
-var per = closures(trains);
+var per = closureCalc(trains);
 var speech = '';
 
 if (trains.length === 0) {
-  speech = 'Sorry, I could not get live train data for ' + CFG.name + ' right now.';
+  speech = 'Sorry, I could not get live train data for ' + crossingLabel + ' right now.';
 } else {
   var cur = null, up = null;
   for (var i = 0; i < per.length; i++) {
@@ -170,7 +242,7 @@ if (trains.length === 0) {
 
   if (cur) {
     var opensIn = cd(cur.e.getTime() - now.getTime());
-    speech = 'The crossing is likely closed right now. ';
+    speech = 'The ' + crossingLabel + ' crossing is likely closed right now. ';
     speech += 'Barriers should open in about ' + opensIn + '.';
     var nextClosure = null;
     for (var nc = 0; nc < per.length; nc++) {
@@ -182,7 +254,7 @@ if (trains.length === 0) {
   } else if (up) {
     var closesIn = cd(up.s.getTime() - now.getTime());
     var duration = cd(up.e.getTime() - up.s.getTime());
-    speech = 'The crossing is open. ';
+    speech = 'The ' + crossingLabel + ' crossing is open. ';
     speech += 'It will likely close in about ' + closesIn + ' for about ' + duration + '.';
     var nextAfter = null;
     for (var na = 0; na < per.length; na++) {
@@ -192,7 +264,7 @@ if (trains.length === 0) {
       speech += ' After that it will close again about ' + cd(nextAfter.s.getTime() - up.e.getTime()) + ' later.';
     }
   } else {
-    speech = 'The crossing is open. No more closures are expected in the next couple of hours.';
+    speech = 'The ' + crossingLabel + ' crossing is open. No more closures are expected in the next couple of hours.';
   }
 }
 
