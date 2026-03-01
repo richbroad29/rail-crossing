@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Crossing">
+<meta name="theme-color" content="#0F172A">
+<title>Loading...</title>
+<link rel="stylesheet" href="../shared/crossing.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="hdr">
+    <div class="hdr-label" id="crossingName">Loading...</div>
+    <div class="hdr-sub"><span id="crossingRoad"></span> · <span id="clock">--:--:--</span></div>
+    <div id="apiStatus" class="api-status api-fallback">Loading...</div>
+  </div>
+
+  <div class="status-card" id="statusCard">
+    <div class="status-title" id="statusTitle">LOADING...</div>
+    <div class="status-msg" id="statusMsg">Fetching live train data...</div>
+    <div class="status-time hidden" id="statusTime"></div>
+  </div>
+
+  <div class="barrier-wrap">
+    <svg width="200" height="100" viewBox="0 0 200 100">
+      <rect x="15" y="20" width="8" height="80" rx="2" fill="#555"/>
+      <g id="barrierArm" style="transform-origin:19px 24px;transition:transform 1s ease">
+        <rect x="19" y="20" width="140" height="8" rx="3" id="armBar"/>
+        <rect x="35" y="20" width="14" height="8" rx="1" class="stripe" opacity=".3"/>
+        <rect x="63" y="20" width="14" height="8" rx="1" class="stripe" opacity=".3"/>
+        <rect x="91" y="20" width="14" height="8" rx="1" class="stripe" opacity=".3"/>
+        <rect x="119" y="20" width="14" height="8" rx="1" class="stripe" opacity=".3"/>
+        <rect x="147" y="20" width="14" height="8" rx="1" class="stripe" opacity=".3"/>
+      </g>
+      <circle cx="19" cy="12" r="6" id="lightA" fill="#DC2626" opacity="0"/>
+      <circle cx="170" cy="12" r="6" id="lightB" fill="#DC2626" opacity="0"/>
+      <line x1="0" y1="95" x2="200" y2="95" stroke="#888" stroke-width="3" stroke-dasharray="10,8"/>
+      <text x="100" y="92" text-anchor="middle" fill="#888" font-size="8" font-family="monospace" id="roadLabel">LOADING</text>
+    </svg>
+  </div>
+
+  <div class="cards">
+    <div class="card">
+      <div class="card-label">Next Close</div>
+      <div class="card-value" id="nextCloseCountdown" style="color:#475569">--</div>
+      <div class="card-sub" id="nextCloseTime"></div>
+    </div>
+    <div class="card">
+      <div class="card-label">Next Open</div>
+      <div class="card-value" id="nextOpenCountdown" style="color:#475569">--</div>
+      <div class="card-sub" id="nextOpenTime"></div>
+    </div>
+    <div class="card">
+      <div class="card-label">Data</div>
+      <div class="card-value" id="dataMode" style="font-size:12px;color:#94A3B8">LOADING</div>
+      <div class="card-sub" id="lastRefreshTime">--</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div style="font-size:12px;font-weight:600;margin-bottom:6px">Help improve accuracy</div>
+    <div style="font-size:11px;color:#94A3B8;margin-bottom:8px">Tap when you see the barriers move:</div>
+    <div class="feedback-btns">
+      <button class="fb-btn fb-closed" onclick="sendFeedback('closing')">Barriers Closing Now</button>
+      <button class="fb-btn fb-open" onclick="sendFeedback('opening')">Barriers Opening Now</button>
+    </div>
+    <div class="fb-msg hidden" id="fbMsg"></div>
+  </div>
+
+  <div class="section">
+    <div class="section-hdr">
+      <span>Upcoming Trains</span>
+      <button class="refresh-btn" onclick="refreshData()">Refresh</button>
+    </div>
+    <div id="trainList"><div class="empty">Fetching live data...</div></div>
+  </div>
+
+  <div class="section">
+    <div style="font-size:12px;font-weight:600;margin-bottom:6px">How This Works</div>
+    <div class="info-text">
+      Uses the National Rail Live Departure Boards API for real-time train predictions. Barriers close ~1.5 min before a train arrives and open ~45 sec after it passes. If two trains pass within 2.5 min, barriers stay closed between them.
+    </div>
+  </div>
+
+  <div class="section">
+    <div style="font-size:12px;font-weight:600;margin-bottom:8px">Get Quick Access</div>
+    <div class="setup-row">
+      <button class="setup-btn" onclick="showModal('homescreen')">Add to Home Screen</button>
+      <button class="setup-btn" onclick="showModal('voice')"><span id="voiceBtnLabel">Add to Siri</span></button>
+    </div>
+    <div class="link-row">
+      <a class="link-btn coffee-btn" href="https://buymeacoffee.com/richardbroad29" target="_blank">Buy Me a Coffee</a>
+      <a class="link-btn" href="mailto:richardbroad29@gmail.com?subject=New%20Crossing%20Request&body=I%27d%20like%20to%20request%20a%20new%20level%20crossing%20be%20added%3A%0A%0ACrossing%20name%3A%0ALocation%3A%0ANearest%20station%3A" target="_blank">Request New Crossing</a>
+    </div>
+  </div>
+
+  <div class="error hidden" id="errorBox"></div>
+  <div class="footer">Estimates only · Not a safety system · Always obey signals & barriers</div>
+</div>
+
+<div class="modal-overlay hidden" id="modalOverlay" onclick="closeModal(event)">
+  <div class="modal" onclick="event.stopPropagation()">
+    <h3 id="modalTitle"></h3>
+    <div id="modalBody"></div>
+    <button class="modal-close" onclick="closeModal()">Got it</button>
+  </div>
+</div>
+
+<script src="../shared/crossing.js"></script>
+<script>
+initCrossing('portslade');
+</script>
+<script data-goatcounter="https://richbroad29.goatcounter.com/count"
+        async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>
