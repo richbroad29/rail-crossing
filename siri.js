@@ -1,8 +1,6 @@
 async function main() {
 
-var TOKEN = '314e8e0f-87f4-4b59-a04e-8abd3187d5a9';
-var WURL = 'https://lite.realtime.nationalrail.co.uk/OpenLDBWS/ldb12.asmx';
-var Q = String.fromCharCode(34);
+var API_BASE = 'https://rail-crossing-api.richardbroad29.workers.dev';
 var CONFIG_URL = 'https://richbroad29.github.io/rail-crossing/shared/crossings.json';
 
 var cfgReq = new Request(CONFIG_URL);
@@ -181,10 +179,8 @@ async function getTrains() {
   var types = ['a', 'd'];
   for (var i = 0; i < 2; i++) {
     try {
-      var r = new Request(WURL);
-      r.method = 'POST';
-      r.headers = {'Content-Type':'application/soap+xml;charset=utf-8'};
-      r.body = soap(types[i]);
+      var typeParam = types[i] === 'a' ? 'arr' : 'dep';
+      var r = new Request(API_BASE + '/?station=' + CFG.station + '&type=' + typeParam);
       var xml = await r.loadString();
       var parsed = parseXml(xml, types[i]);
       for (var p = 0; p < parsed.length; p++) all.push(parsed[p]);
