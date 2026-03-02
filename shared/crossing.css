@@ -6,13 +6,13 @@ body{background:#0F172A;color:#E2E8F0;font-family:-apple-system,BlinkMacSystemFo
 .hdr-road{font-size:12px;color:#94A3B8}
 .status-card{border-radius:16px;padding:14px 16px;text-align:center;margin-bottom:16px;transition:all .5s}
 .status-title{font-size:22px;font-weight:700;margin-bottom:2px}
-.status-msg{font-size:13px;opacity:.9}
-.status-time{margin-top:4px;font-size:16px;font-weight:600}
+.status-msg{font-size:13px;opacity:.9;font-variant-numeric:tabular-nums}
+.status-time{margin-top:4px;font-size:16px;font-weight:600;font-variant-numeric:tabular-nums}
 .barrier-wrap{display:flex;flex-direction:column;align-items:center;margin:16px 0}
 .cards{display:flex;gap:8px;margin-bottom:16px}
 .card{flex:1;background:#1E293B;border-radius:12px;padding:12px 10px;text-align:center;display:flex;flex-direction:column;align-items:center;justify-content:space-between;min-height:76px}
 .card-label{font-size:9px;color:#94A3B8;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px}
-.card-value{font-size:18px;font-weight:700;display:flex;align-items:center;flex:1}
+.card-value{font-size:18px;font-weight:700;display:flex;align-items:center;flex:1;font-variant-numeric:tabular-nums}
 .card-sub{font-size:10px;color:#64748B;margin-top:2px}
 .section{background:#1E293B;border-radius:12px;padding:12px;margin-bottom:16px}
 .section-hdr{font-size:12px;font-weight:600;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center}
@@ -51,8 +51,8 @@ body{background:#0F172A;color:#E2E8F0;font-family:-apple-system,BlinkMacSystemFo
 .closure-card:last-child{margin-bottom:0}
 .closure-active{border:1px solid #DC2626}
 .closure-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
-.closure-time{font-size:13px;font-weight:700;font-variant-numeric:tabular-nums;flex-shrink:1;min-width:0}
-.closure-pill{font-size:10px;color:#94A3B8;background:#334155;padding:2px 8px;border-radius:4px;white-space:nowrap;width:156px;text-align:center;flex-shrink:0}
+.closure-time{font-size:13px;font-weight:700;font-variant-numeric:tabular-nums}
+.closure-pill{font-size:10px;color:#94A3B8;background:#334155;padding:2px 8px;border-radius:4px;white-space:nowrap;font-variant-numeric:tabular-nums}
 .closure-pill-active{color:#FCA5A5;background:#7F1D1D}
 .closure-train{font-size:11px;color:#CBD5E1;padding:2px 0;display:flex;align-items:center;gap:4px}
 .closure-train-route{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
