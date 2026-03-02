@@ -1,7 +1,7 @@
 *{margin:0;padding:0;box-sizing:border-box}
 body{background:#0F172A;color:#E2E8F0;font-family:-apple-system,BlinkMacSystemFont,'SF Pro',system-ui,sans-serif;min-height:100vh;min-height:100dvh;-webkit-font-smoothing:antialiased}
-.wrap{max-width:480px;margin:0 auto;padding:16px 12px;padding-top:env(safe-area-inset-top,16px)}
-.hdr{text-align:center;margin-bottom:16px}
+.wrap{max-width:480px;margin:0 auto;padding:16px 12px;padding-top:calc(16px + env(safe-area-inset-top,0px))}
+.hdr{text-align:center;margin-bottom:16px;padding-top:8px}
 .hdr-title{font-size:20px;font-weight:700;margin-bottom:2px}
 .hdr-road{font-size:12px;color:#94A3B8}
 .status-card{border-radius:16px;padding:20px 16px;text-align:center;margin-bottom:16px;transition:all .5s}
@@ -19,21 +19,10 @@ body{background:#0F172A;color:#E2E8F0;font-family:-apple-system,BlinkMacSystemFo
 .section-hdr{font-size:12px;font-weight:600;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center}
 .refresh-btn{background:none;border:1px solid #334155;border-radius:6px;color:#94A3B8;padding:4px 10px;font-size:10px;cursor:pointer;display:inline-flex;align-items:center;gap:4px;min-width:32px;justify-content:center}
 .refresh-btn:active{background:#334155}
-.refresh-btn svg{width:12px;height:12px;transition:transform .2s}
+.refresh-btn svg{width:12px;height:12px}
 @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 .refresh-btn.refreshing svg{animation:spin .6s linear infinite}
 .refresh-btn.refresh-done{border-color:#16A34A;color:#6EE7B7}
-.train-row{display:flex;align-items:center;gap:8px;padding:8px 6px;border-bottom:1px solid #334155}
-.train-row:last-child{border-bottom:none}
-.train-dir{flex-shrink:0;font-size:14px;width:20px;text-align:center}
-.train-info{flex:1;min-width:0}
-.train-route{font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.train-meta{font-size:10px;color:#64748B}
-.train-time{text-align:right;flex-shrink:0}
-.train-time-val{font-size:14px;font-weight:700;font-variant-numeric:tabular-nums}
-.train-countdown{font-size:10px}
-.live-dot{color:#22D3EE;margin-left:4px;font-size:9px}
-.delay-badge{color:#F59E0B;margin-left:4px;font-weight:600}
 .empty{text-align:center;color:#64748B;font-size:12px;padding:16px}
 .info-text{font-size:11px;color:#94A3B8;line-height:1.5}
 .error{background:#7F1D1D;border-radius:8px;padding:10px;font-size:11px;color:#FCA5A5;margin-bottom:12px}
@@ -69,14 +58,19 @@ body{background:#0F172A;color:#E2E8F0;font-family:-apple-system,BlinkMacSystemFo
 .closure-card{background:#0F172A;border-radius:8px;padding:10px;margin-bottom:8px}
 .closure-card:last-child{margin-bottom:0}
 .closure-active{border:1px solid #DC2626}
-.closure-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:2px}
+.closure-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
 .closure-time{font-size:13px;font-weight:700;font-variant-numeric:tabular-nums}
-.closure-dur{font-size:10px;color:#94A3B8;background:#334155;padding:2px 6px;border-radius:4px}
-.closure-countdown{font-size:11px;color:#94A3B8;margin-bottom:6px}
-.closure-train{font-size:11px;color:#CBD5E1;padding:2px 0;display:flex;align-items:center;gap:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.closure-train .live-dot{font-size:7px}
+.closure-pill{font-size:10px;color:#94A3B8;background:#334155;padding:2px 8px;border-radius:4px;white-space:nowrap}
+.closure-pill-active{color:#FCA5A5;background:#7F1D1D}
+.closure-train{font-size:11px;color:#CBD5E1;padding:2px 0;display:flex;align-items:center;gap:4px}
+.closure-train-route{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
+.closure-train-time{margin-left:auto;flex-shrink:0;padding-left:6px;display:flex;align-items:center;gap:4px}
+.closure-train-time .live-dot{font-size:7px;line-height:1}
+.live-dot{color:#22D3EE;margin-left:4px;font-size:9px}
+.delay-badge{color:#F59E0B;margin-left:4px;font-weight:600}
 .show-more-btn{width:100%;padding:8px;margin-top:8px;background:none;border:1px solid #334155;border-radius:6px;color:#94A3B8;font-size:11px;cursor:pointer}
 .show-more-btn:active{background:#334155}
+.show-more-btn:disabled{cursor:default}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
 .blink-a{animation:blink 1s infinite}
 .blink-b{animation:blink 1s infinite .5s}
