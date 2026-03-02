@@ -58,6 +58,15 @@ body{background:#0F172A;color:#E2E8F0;font-family:-apple-system,BlinkMacSystemFo
 .modal ol{font-size:13px;color:#CBD5E1;line-height:1.8;padding-left:20px;margin-bottom:12px}
 .modal-close{width:100%;padding:10px;border-radius:8px;border:none;background:#3B82F6;color:#FFF;font-weight:600;font-size:13px;cursor:pointer;margin-top:8px}
 .modal-close:active{background:#2563EB}
+.closure-card{background:#0F172A;border-radius:8px;padding:10px;margin-bottom:8px}
+.closure-card:last-child{margin-bottom:0}
+.closure-active{border:1px solid #DC2626}
+.closure-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.closure-time{font-size:13px;font-weight:700;font-variant-numeric:tabular-nums}
+.closure-dur{font-size:10px;color:#94A3B8;background:#334155;padding:2px 6px;border-radius:4px}
+.closure-train{font-size:11px;color:#CBD5E1;padding:2px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.show-more-btn{width:100%;padding:8px;margin-top:8px;background:none;border:1px solid #334155;border-radius:6px;color:#94A3B8;font-size:11px;cursor:pointer}
+.show-more-btn:active{background:#334155}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
 .blink-a{animation:blink 1s infinite}
 .blink-b{animation:blink 1s infinite .5s}
