@@ -170,7 +170,6 @@ function setRefreshState(state) {
   if (state === 'loading') {
     btn.classList.remove('refresh-done');
     btn.innerHTML = refreshSvgArrow;
-    // Force reflow to restart animation
     btn.classList.remove('refreshing');
     void btn.offsetWidth;
     btn.classList.add('refreshing');
@@ -245,7 +244,7 @@ function renderClosures() {
     html += '<div class="closure-hdr">';
     if (isCurrent) {
       html += '<span class="closure-time" style="color:#FCA5A5">NOW \u2014 ' + fmtShort(p.end) + '</span>';
-      html += '<span class="closure-pill closure-pill-active">Closed ~' + duration + ' min \u00B7 opens in ' + fmtCountdown(p.end.getTime() - now.getTime()) + '</span>';
+      html += '<span class="closure-pill closure-pill-active">~' + duration + ' min \u00B7 opens ' + fmtCountdown(p.end.getTime() - now.getTime()) + '</span>';
     } else {
       html += '<span class="closure-time">' + fmtShort(p.start) + ' \u2014 ' + fmtShort(p.end) + '</span>';
       var secsUntil = p.start.getTime() - now.getTime();
@@ -256,12 +255,17 @@ function renderClosures() {
       var t = p.trains[j];
       var dirColor = t.direction === 'east' ? '#38BDF8' : '#FB923C';
       var arrow = t.direction === 'east' ? '\u2192' : '\u2190';
-      var delay = t.isDelayed && t.delayMins > 0 ? '<span class="delay-badge">+' + t.delayMins + 'm</span>' : '';
-      var liveDot = t.isRealtime ? '<span class="live-dot">\u25CF LIVE</span>' : '';
+      var statusHtml;
+      if (t.isDelayed && t.delayMins > 0) {
+        statusHtml = '<span class="train-status train-status-delayed">+' + t.delayMins + 'm</span>';
+      } else {
+        statusHtml = '<span class="train-status train-status-ontime">On time</span>';
+      }
       html += '<div class="closure-train">';
       html += '<span style="color:' + dirColor + ';font-weight:700;flex-shrink:0">' + arrow + '</span>';
       html += '<span class="closure-train-route">' + t.origin + ' \u2192 ' + t.destination + '</span>';
-      html += '<span class="closure-train-time">' + fmtShort(t.bestTime) + delay + liveDot + '</span>';
+      html += '<span class="closure-train-time">' + fmtShort(t.bestTime) + '</span>';
+      html += statusHtml;
       html += '</div>';
     }
     html += '</div>';
@@ -291,8 +295,6 @@ function showMoreClosures() {
 
 function updateStatus() {
   var now = new Date();
-  var clockEl = $('clock');
-  if (clockEl) clockEl.textContent = fmtTime(now);
   var status = 'OPEN', msg = 'No upcoming closures found';
   nextCloseTime = null; nextOpenTime = null;
   var currentClosure = null, upcoming = null;
