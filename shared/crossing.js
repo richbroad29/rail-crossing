@@ -161,19 +161,27 @@ function computeClosures(trainList) {
   return periods;
 }
 
+var refreshSvgArrow = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 8a6 6 0 11-1.5-4"/><path d="M14 2v4h-4"/></svg>';
+var refreshSvgTick = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8.5l3.5 3.5 6.5-8"/></svg>';
+
 function setRefreshState(state) {
   var btn = $('refreshBtn');
   if (!btn) return;
-  btn.classList.remove('refreshing', 'refresh-done');
   if (state === 'loading') {
+    btn.classList.remove('refresh-done');
+    btn.innerHTML = refreshSvgArrow;
+    // Force reflow to restart animation
+    btn.classList.remove('refreshing');
+    void btn.offsetWidth;
     btn.classList.add('refreshing');
-    btn.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 8a6 6 0 11-1.5-4"/><path d="M14 2v4h-4"/></svg>';
   } else if (state === 'done') {
+    btn.classList.remove('refreshing');
     btn.classList.add('refresh-done');
-    btn.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8.5l3.5 3.5 6.5-8"/></svg>';
+    btn.innerHTML = refreshSvgTick;
     setTimeout(function() { setRefreshState('idle'); }, 1500);
   } else {
-    btn.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 8a6 6 0 11-1.5-4"/><path d="M14 2v4h-4"/></svg>';
+    btn.classList.remove('refreshing', 'refresh-done');
+    btn.innerHTML = refreshSvgArrow;
   }
 }
 
@@ -237,29 +245,23 @@ function renderClosures() {
     html += '<div class="closure-hdr">';
     if (isCurrent) {
       html += '<span class="closure-time" style="color:#FCA5A5">NOW \u2014 ' + fmtShort(p.end) + '</span>';
+      html += '<span class="closure-pill closure-pill-active">Closed ~' + duration + ' min \u00B7 opens in ' + fmtCountdown(p.end.getTime() - now.getTime()) + '</span>';
     } else {
       html += '<span class="closure-time">' + fmtShort(p.start) + ' \u2014 ' + fmtShort(p.end) + '</span>';
-    }
-    html += '<span class="closure-dur">~' + duration + ' min</span>';
-    html += '</div>';
-    html += '<div class="closure-countdown">';
-    if (isCurrent) {
-      html += 'Closed for ~' + duration + ' min \u00B7 Opens in ' + fmtCountdown(p.end.getTime() - now.getTime());
-    } else {
       var secsUntil = p.start.getTime() - now.getTime();
-      html += 'Closed for ~' + duration + ' min \u00B7 in ' + fmtCountdown(secsUntil);
+      html += '<span class="closure-pill">~' + duration + ' min \u00B7 in ' + fmtCountdown(secsUntil) + '</span>';
     }
     html += '</div>';
     for (var j = 0; j < p.trains.length; j++) {
       var t = p.trains[j];
       var dirColor = t.direction === 'east' ? '#38BDF8' : '#FB923C';
       var arrow = t.direction === 'east' ? '\u2192' : '\u2190';
-      var delay = t.isDelayed && t.delayMins > 0 ? ' <span class="delay-badge">+' + t.delayMins + 'm</span>' : '';
+      var delay = t.isDelayed && t.delayMins > 0 ? '<span class="delay-badge">+' + t.delayMins + 'm</span>' : '';
       var liveDot = t.isRealtime ? '<span class="live-dot">\u25CF LIVE</span>' : '';
       html += '<div class="closure-train">';
-      html += '<span style="color:' + dirColor + ';font-weight:700">' + arrow + '</span> ';
-      html += '<span style="overflow:hidden;text-overflow:ellipsis">' + t.origin + ' \u2192 ' + t.destination + '</span>';
-      html += '<span style="margin-left:auto;flex-shrink:0;padding-left:6px">' + fmtShort(t.bestTime) + delay + liveDot + '</span>';
+      html += '<span style="color:' + dirColor + ';font-weight:700;flex-shrink:0">' + arrow + '</span>';
+      html += '<span class="closure-train-route">' + t.origin + ' \u2192 ' + t.destination + '</span>';
+      html += '<span class="closure-train-time">' + fmtShort(t.bestTime) + delay + liveDot + '</span>';
       html += '</div>';
     }
     html += '</div>';
@@ -268,6 +270,9 @@ function renderClosures() {
   if (relevant.length > closuresVisible) {
     $('showMoreBtn').textContent = 'Show More';
     $('showMoreBtn').classList.remove('hidden');
+    $('showMoreBtn').disabled = false;
+    $('showMoreBtn').style.opacity = '';
+    $('showMoreBtn').style.cursor = '';
   } else if (closuresVisible >= relevant.length && relevant.length > 0) {
     $('showMoreBtn').textContent = 'Return later for further closures';
     $('showMoreBtn').classList.remove('hidden');
