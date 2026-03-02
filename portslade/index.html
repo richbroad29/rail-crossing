@@ -72,16 +72,17 @@
 
   <div class="section">
     <div class="section-hdr">
-      <span>Upcoming Trains</span>
+      <span>Upcoming Closures</span>
       <button class="refresh-btn" onclick="refreshData()">Refresh</button>
     </div>
-    <div id="trainList"><div class="empty">Fetching live data...</div></div>
+    <div id="closureList"><div class="empty">Fetching live data...</div></div>
+    <button class="show-more-btn hidden" id="showMoreBtn" onclick="showMoreClosures()">Show More</button>
   </div>
 
   <div class="section">
     <div style="font-size:12px;font-weight:600;margin-bottom:6px">How This Works</div>
     <div class="info-text">
-      Uses the National Rail Live Departure Boards API for real-time train predictions. Barriers close ~1.5 min before a train arrives and open ~45 sec after it passes. If two trains pass within 2.5 min, barriers stay closed between them.
+      Uses real-time train predictions. Barriers close ~1.5 min before a train arrives and open ~45 sec after it passes. If two trains pass within 2.5 min, barriers stay closed between them.
     </div>
   </div>
 
@@ -92,7 +93,7 @@
       <button class="setup-btn" onclick="showModal('voice')"><span id="voiceBtnLabel">Add to Siri</span></button>
     </div>
     <div class="setup-row">
-      <a class="setup-btn" href="mailto:richardbroad29@gmail.com?subject=New%20Crossing%20Request&body=I%27d%20like%20to%20request%20a%20new%20level%20crossing%20be%20added%3A%0A%0ACrossing%20name%3A%0ALocation%3A%0ANearest%20station%3A" target="_blank" style="text-decoration:none">Request Your Local Crossing</a>
+      <a class="setup-btn" href="https://forms.gle/Tv3UcPDVcLygoG1D9" target="_blank" style="text-decoration:none">Request Your Local Crossing</a>
       <a class="setup-btn coffee-btn" href="https://buymeacoffee.com/richardbroad29" target="_blank" style="text-decoration:none">Buy Me a Coffee</a>
     </div>
   </div>
