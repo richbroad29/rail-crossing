@@ -57,7 +57,7 @@ body{background:#0F172A;color:#E2E8F0;font-family:-apple-system,BlinkMacSystemFo
 .closure-train{font-size:11px;color:#CBD5E1;padding:2px 0;display:flex;align-items:center;gap:4px}
 .closure-train-route{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
 .closure-train-time{margin-left:auto;flex-shrink:0;padding-left:6px;display:flex;align-items:center;gap:4px;font-variant-numeric:tabular-nums}
-.train-status{font-size:9px;font-weight:600;min-width:32px;text-align:right}
+.train-status{font-size:9px;font-weight:600;width:42px;text-align:right;flex-shrink:0}
 .train-status-ontime{color:#6EE7B7}
 .train-status-delayed{color:#F59E0B}
 .show-more-btn{width:100%;padding:8px;margin-top:8px;background:none;border:1px solid #334155;border-radius:6px;color:#94A3B8;font-size:11px;cursor:pointer}
