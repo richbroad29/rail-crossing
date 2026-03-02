@@ -51,8 +51,8 @@ body{background:#0F172A;color:#E2E8F0;font-family:-apple-system,BlinkMacSystemFo
 .closure-card:last-child{margin-bottom:0}
 .closure-active{border:1px solid #DC2626}
 .closure-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
-.closure-time{font-size:13px;font-weight:700;font-variant-numeric:tabular-nums}
-.closure-pill{font-size:10px;color:#94A3B8;background:#334155;padding:2px 8px;border-radius:4px;white-space:nowrap}
+.closure-time{font-size:13px;font-weight:700;font-variant-numeric:tabular-nums;flex-shrink:1;min-width:0}
+.closure-pill{font-size:10px;color:#94A3B8;background:#334155;padding:2px 8px;border-radius:4px;white-space:nowrap;width:156px;text-align:center;flex-shrink:0}
 .closure-pill-active{color:#FCA5A5;background:#7F1D1D}
 .closure-train{font-size:11px;color:#CBD5E1;padding:2px 0;display:flex;align-items:center;gap:4px}
 .closure-train-route{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
