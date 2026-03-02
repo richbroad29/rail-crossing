@@ -7,21 +7,23 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Crossing">
 <meta name="theme-color" content="#0F172A">
+<link rel="apple-touch-icon" href="../shared/icon-180.png">
+<link rel="icon" type="image/svg+xml" href="../shared/icon.svg">
 <title>Loading...</title>
 <link rel="stylesheet" href="../shared/crossing.css">
 </head>
 <body>
 <div class="wrap">
   <div class="hdr">
-    <div class="hdr-label" id="crossingName">Loading...</div>
-    <div class="hdr-sub"><span id="crossingRoad"></span> · <span id="clock">--:--:--</span></div>
-    <div id="apiStatus" class="api-status api-fallback">Loading...</div>
+    <div class="hdr-title" id="crossingName">Loading...</div>
+    <div class="hdr-road" id="crossingRoad"></div>
   </div>
 
   <div class="status-card" id="statusCard">
     <div class="status-title" id="statusTitle">LOADING...</div>
     <div class="status-msg" id="statusMsg">Fetching live train data...</div>
     <div class="status-time hidden" id="statusTime"></div>
+    <div class="status-clock" id="clock">--:--:--</div>
   </div>
 
   <div class="barrier-wrap">
@@ -73,7 +75,7 @@
   <div class="section">
     <div class="section-hdr">
       <span>Upcoming Closures</span>
-      <button class="refresh-btn" onclick="refreshData()">Refresh</button>
+      <button class="refresh-btn" id="refreshBtn" onclick="refreshData()"></button>
     </div>
     <div id="closureList"><div class="empty">Fetching live data...</div></div>
     <button class="show-more-btn hidden" id="showMoreBtn" onclick="showMoreClosures()">Show More</button>
@@ -84,10 +86,11 @@
     <div class="info-text">
       Uses real-time train predictions. Barriers close ~1.5 min before a train arrives and open ~45 sec after it passes. If two trains pass within 2.5 min, barriers stay closed between them.
     </div>
+    <a class="feedback-link" href="https://forms.gle/MvEes4H9pqSVyKpS8" target="_blank">Share Feedback</a>
   </div>
 
   <div class="section">
-    <div style="font-size:12px;font-weight:600;margin-bottom:8px">Get Quick Access</div>
+    <div style="font-size:12px;font-weight:600;margin-bottom:8px">Quick Links</div>
     <div class="setup-row">
       <button class="setup-btn" onclick="showModal('homescreen')">Add App to Home Screen</button>
       <button class="setup-btn" onclick="showModal('voice')"><span id="voiceBtnLabel">Add to Siri</span></button>
