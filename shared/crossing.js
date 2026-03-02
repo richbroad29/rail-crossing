@@ -11,6 +11,7 @@ var lastError = '';
 var trainHistory = [];
 var crossingId = '';
 var lastPassedTrain = null;
+var closuresVisible = 3;
 
 var isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
 var isAndroid = /Android/.test(navigator.userAgent);
@@ -144,16 +145,19 @@ function deduplicateTrains(trainList) {
 function computeClosures(trainList) {
   if (!trainList.length) return [];
   var sorted = trainList.slice().sort(function(a,b) { return a.bestTime - b.bestTime; });
-  var periods = [], cs = null, ce = null;
+  var periods = [], cs = null, ce = null, ct = [];
   for (var i = 0; i < sorted.length; i++) {
     var t = sorted[i];
     var cl = new Date(t.bestTime.getTime() - CFG.closeBefore * 60000);
     var op = new Date(t.bestTime.getTime() + CFG.openAfter * 60000);
-    if (cs === null) { cs = cl; ce = op; }
-    else if (cl.getTime() - ce.getTime() <= CFG.consecutiveWindow * 60000) { ce = new Date(Math.max(ce.getTime(), op.getTime())); }
-    else { periods.push({start:cs, end:ce}); cs = cl; ce = op; }
+    if (cs === null) { cs = cl; ce = op; ct = [t]; }
+    else if (cl.getTime() - ce.getTime() <= CFG.consecutiveWindow * 60000) {
+      ce = new Date(Math.max(ce.getTime(), op.getTime()));
+      ct.push(t);
+    }
+    else { periods.push({start:cs, end:ce, trains:ct}); cs = cl; ce = op; ct = [t]; }
   }
-  if (cs) periods.push({start:cs, end:ce});
+  if (cs) periods.push({start:cs, end:ce, trains:ct});
   return periods;
 }
 
@@ -188,7 +192,7 @@ async function refreshData() {
     }
     closurePeriods = computeClosures(trains);
     $('lastRefreshTime').textContent = fmtShort(new Date());
-    renderTrains();
+    renderClosures();
   } catch(e) {
     console.error('Refresh error:', e);
     $('errorBox').textContent = 'Error: ' + e.message;
@@ -196,32 +200,58 @@ async function refreshData() {
   }
 }
 
-function renderTrains() {
+function renderClosures() {
   var now = new Date();
-  var upcoming = trains.filter(function(t) { return t.bestTime > new Date(now.getTime() - 60000); }).slice(0, 6);
-  if (!upcoming.length) { $('trainList').innerHTML = '<div class="empty">No upcoming trains</div>'; return; }
-  var html = '';
-  for (var i = 0; i < upcoming.length; i++) {
-    var t = upcoming[i];
-    var ms = t.bestTime.getTime() - now.getTime();
-    var isPast = ms < -30000;
-    var dirColor = t.direction === 'east' ? '#38BDF8' : '#FB923C';
-    var arrow = t.direction === 'east' ? '&rarr;' : '&larr;';
-    var delayBadge = t.isDelayed && t.delayMins > 0 ? '<span class="delay-badge">+' + t.delayMins + 'm</span>' : '';
-    var liveDot = t.isRealtime ? '<span class="live-dot">&#9679; LIVE</span>' : '';
-    var etaColor = t.etaText === 'On time' ? '#6EE7B7' : t.isDelayed ? '#FCD34D' : '#94A3B8';
-    html += '<div class="train-row" style="opacity:' + (isPast ? .35 : 1) + '">';
-    html += '<div class="train-dir" style="color:' + dirColor + ';font-weight:700">' + arrow + '</div>';
-    html += '<div class="train-info">';
-    html += '<div class="train-route">' + t.origin + ' &rarr; ' + t.destination + '</div>';
-    html += '<div class="train-meta">' + t.operator + liveDot + delayBadge + ' &middot; <span style="color:' + etaColor + '">' + t.etaText + '</span></div>';
-    html += '</div>';
-    html += '<div class="train-time">';
-    html += '<div class="train-time-val">' + fmtShort(t.bestTime) + '</div>';
-    html += '<div class="train-countdown" style="color:' + (ms > 0 ? '#94A3B8' : '#EF4444') + '">' + (ms > 0 ? fmtCountdown(ms) : 'passed') + '</div>';
-    html += '</div></div>';
+  var relevant = [];
+  for (var i = 0; i < closurePeriods.length; i++) {
+    var p = closurePeriods[i];
+    if (p.end.getTime() > now.getTime() - 60000) relevant.push(p);
   }
-  $('trainList').innerHTML = html;
+  if (!relevant.length) {
+    $('closureList').innerHTML = '<div class="empty">No upcoming closures</div>';
+    $('showMoreBtn').classList.add('hidden');
+    return;
+  }
+  var showing = Math.min(closuresVisible, relevant.length);
+  var html = '';
+  for (var i = 0; i < showing; i++) {
+    var p = relevant[i];
+    var isCurrent = now >= p.start && now <= p.end;
+    var duration = Math.round((p.end - p.start) / 60000);
+    html += '<div class="closure-card' + (isCurrent ? ' closure-active' : '') + '">';
+    html += '<div class="closure-hdr">';
+    if (isCurrent) {
+      html += '<span class="closure-time" style="color:#FCA5A5">NOW \u2014 ' + fmtShort(p.end) + '</span>';
+    } else {
+      var ms = p.start.getTime() - now.getTime();
+      var countdown = ms > 0 ? ' \u00B7 in ' + fmtCountdown(ms) : '';
+      html += '<span class="closure-time">' + fmtShort(p.start) + ' \u2014 ' + fmtShort(p.end) + '</span>';
+    }
+    html += '<span class="closure-dur">~' + duration + ' min</span>';
+    html += '</div>';
+    for (var j = 0; j < p.trains.length; j++) {
+      var t = p.trains[j];
+      var dirColor = t.direction === 'east' ? '#38BDF8' : '#FB923C';
+      var arrow = t.direction === 'east' ? '\u2192' : '\u2190';
+      var delay = t.isDelayed && t.delayMins > 0 ? ' <span class="delay-badge">+' + t.delayMins + 'm</span>' : '';
+      html += '<div class="closure-train">';
+      html += '<span style="color:' + dirColor + ';font-weight:700">' + arrow + '</span> ';
+      html += t.origin + ' \u2192 ' + t.destination + ' \u00B7 ' + fmtShort(t.bestTime) + delay;
+      html += '</div>';
+    }
+    html += '</div>';
+  }
+  $('closureList').innerHTML = html;
+  if (relevant.length > closuresVisible) {
+    $('showMoreBtn').classList.remove('hidden');
+  } else {
+    $('showMoreBtn').classList.add('hidden');
+  }
+}
+
+function showMoreClosures() {
+  closuresVisible += 5;
+  renderClosures();
 }
 
 function updateStatus() {
@@ -278,7 +308,7 @@ function updateStatus() {
   else { $('nextCloseCountdown').textContent = '--'; $('nextCloseCountdown').style.color = '#475569'; $('nextCloseTime').textContent = ''; }
   if (nextOpenTime) { $('nextOpenCountdown').textContent = fmtCountdown(Math.max(0, nextOpenTime.getTime() - t)); $('nextOpenCountdown').style.color = '#16A34A'; $('nextOpenTime').textContent = fmtShort(nextOpenTime); }
   else { $('nextOpenCountdown').textContent = '--'; $('nextOpenCountdown').style.color = '#475569'; $('nextOpenTime').textContent = ''; }
-  renderTrains();
+  renderClosures();
 
   // Track last passed train for accurate feedback logging
   var allForHistory = trainHistory.length > 0 ? trainHistory : trains;
