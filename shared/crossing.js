@@ -439,7 +439,12 @@ function sendFeedback(state) {
     predictedStatus: currentStatus,
 
     // Closure period ID (links closing + opening events for the same episode)
-    closureId: currentClosure ? currentClosure.id : (nextClosure ? nextClosure.id : ''),
+    // When in a closure: use the current closure's ID
+    // When open + "closing": barriers closing early for the next closure
+    // When open + "opening": barriers still opening from the previous closure
+    closureId: currentClosure ? currentClosure.id
+      : (state === 'closing' ? (nextClosure ? nextClosure.id : '')
+      : (previousClosure ? previousClosure.id : '')),
 
     // Current closure (if we're in one)
     currentClosureStart: currentClosure ? currentClosure.start.toISOString() : '',
