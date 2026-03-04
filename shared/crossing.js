@@ -402,25 +402,52 @@ function sendFeedback(state) {
   var now = new Date();
   var currentStatus = $('statusTitle').textContent;
 
-  // Find current, previous, and next closure periods
-  var currentClosure = null;
-  var previousClosure = null;
-  var nextClosure = null;
+  // Find which closure period this event belongs to, and the ones before/after it.
+  // "This closure" depends on context:
+  //   - If we're inside a predicted closure: that's the event closure
+  //   - If open + "closing": the next closure (barriers coming down early)
+  //   - If open + "opening": the previous closure (barriers still going up)
+  // "Previous" and "Next" are then relative to the event closure, not to now.
+
+  var eventClosure = null;
+  var eventIndex = -1;
+
+  // First pass: find where we are in time
+  var timeCurrentIndex = -1;
+  var timeNextIndex = -1;
+  var timePrevIndex = -1;
   for (var i = 0; i < closurePeriods.length; i++) {
     var p = closurePeriods[i];
     if (now >= p.start && now <= p.end) {
-      currentClosure = p;
-      if (i > 0) previousClosure = closurePeriods[i - 1];
-      if (i < closurePeriods.length - 1) nextClosure = closurePeriods[i + 1];
+      timeCurrentIndex = i;
       break;
     }
-    if (p.start > now && !nextClosure) {
-      nextClosure = p;
-      if (i > 0) previousClosure = closurePeriods[i - 1];
+    if (p.start > now && timeNextIndex < 0) {
+      timeNextIndex = i;
       break;
     }
-    previousClosure = p;
   }
+  if (timeCurrentIndex < 0 && timeNextIndex < 0 && closurePeriods.length > 0) {
+    // All closures are in the past
+    timePrevIndex = closurePeriods.length - 1;
+  } else if (timeCurrentIndex >= 0) {
+    timePrevIndex = timeCurrentIndex > 0 ? timeCurrentIndex - 1 : -1;
+  } else if (timeNextIndex >= 0) {
+    timePrevIndex = timeNextIndex > 0 ? timeNextIndex - 1 : -1;
+  }
+
+  // Determine which closure this event belongs to
+  if (timeCurrentIndex >= 0) {
+    eventIndex = timeCurrentIndex;
+  } else if (state === 'closing' && timeNextIndex >= 0) {
+    eventIndex = timeNextIndex;
+  } else if (state === 'opening' && timePrevIndex >= 0) {
+    eventIndex = timePrevIndex;
+  }
+
+  eventClosure = eventIndex >= 0 ? closurePeriods[eventIndex] : null;
+  var prevClosure = eventIndex > 0 ? closurePeriods[eventIndex - 1] : null;
+  var nextAfterEvent = (eventIndex >= 0 && eventIndex < closurePeriods.length - 1) ? closurePeriods[eventIndex + 1] : null;
 
   // Find nearest individual trains
   var lastTrain = lastPassedTrain;
@@ -439,32 +466,27 @@ function sendFeedback(state) {
     predictedStatus: currentStatus,
 
     // Closure period ID (links closing + opening events for the same episode)
-    // When in a closure: use the current closure's ID
-    // When open + "closing": barriers closing early for the next closure
-    // When open + "opening": barriers still opening from the previous closure
-    closureId: currentClosure ? currentClosure.id
-      : (state === 'closing' ? (nextClosure ? nextClosure.id : '')
-      : (previousClosure ? previousClosure.id : '')),
+    closureId: eventClosure ? eventClosure.id : '',
 
-    // Current closure (if we're in one)
-    currentClosureStart: currentClosure ? currentClosure.start.toISOString() : '',
-    currentClosureEnd: currentClosure ? currentClosure.end.toISOString() : '',
-    currentClosureTrainCount: currentClosure ? currentClosure.trainCount : '',
-    currentClosureReason: currentClosure ? currentClosure.reason : '',
-    currentClosureTrains: currentClosure ? JSON.stringify(currentClosure.trainSummaries) : '',
+    // This event's closure (the one closureId points to)
+    currentClosureStart: eventClosure ? eventClosure.start.toISOString() : '',
+    currentClosureEnd: eventClosure ? eventClosure.end.toISOString() : '',
+    currentClosureTrainCount: eventClosure ? eventClosure.trainCount : '',
+    currentClosureReason: eventClosure ? eventClosure.reason : '',
+    currentClosureTrains: eventClosure ? JSON.stringify(eventClosure.trainSummaries) : '',
 
-    // Previous closure
-    prevClosureId: previousClosure ? previousClosure.id : '',
-    prevClosureStart: previousClosure ? previousClosure.start.toISOString() : '',
-    prevClosureEnd: previousClosure ? previousClosure.end.toISOString() : '',
-    prevClosureTrainCount: previousClosure ? previousClosure.trainCount : '',
+    // Previous closure (the one before this event's closure)
+    prevClosureId: prevClosure ? prevClosure.id : '',
+    prevClosureStart: prevClosure ? prevClosure.start.toISOString() : '',
+    prevClosureEnd: prevClosure ? prevClosure.end.toISOString() : '',
+    prevClosureTrainCount: prevClosure ? prevClosure.trainCount : '',
 
-    // Next closure
-    nextClosureId: nextClosure ? nextClosure.id : '',
-    nextClosureStart: nextClosure ? nextClosure.start.toISOString() : '',
-    nextClosureEnd: nextClosure ? nextClosure.end.toISOString() : '',
-    nextClosureTrainCount: nextClosure ? nextClosure.trainCount : '',
-    nextClosureTrains: nextClosure ? JSON.stringify(nextClosure.trainSummaries) : '',
+    // Next closure (the one after this event's closure)
+    nextClosureId: nextAfterEvent ? nextAfterEvent.id : '',
+    nextClosureStart: nextAfterEvent ? nextAfterEvent.start.toISOString() : '',
+    nextClosureEnd: nextAfterEvent ? nextAfterEvent.end.toISOString() : '',
+    nextClosureTrainCount: nextAfterEvent ? nextAfterEvent.trainCount : '',
+    nextClosureTrains: nextAfterEvent ? JSON.stringify(nextAfterEvent.trainSummaries) : '',
 
     // Nearest individual trains
     lastTrainTime: lastTrain ? lastTrain.bestTime.toISOString() : '',
