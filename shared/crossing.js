@@ -142,6 +142,28 @@ function deduplicateTrains(trainList) {
   return results;
 }
 
+function makeClosureId(train) {
+  if (!train || !train.bestTime) return 'CL-unknown';
+  var h = String(train.bestTime.getHours());
+  if (h.length < 2) h = '0' + h;
+  var m = String(train.bestTime.getMinutes());
+  if (m.length < 2) m = '0' + m;
+  return 'CL-' + h + m;
+}
+
+function summariseTrain(t) {
+  return {
+    scheduledTime: t.scheduledTime ? t.scheduledTime.toISOString() : null,
+    predictedTime: t.bestTime ? t.bestTime.toISOString() : null,
+    origin: t.origin || '?',
+    destination: t.destination || '?',
+    direction: t.direction || '?',
+    isDelayed: t.isDelayed || false,
+    delayMins: t.delayMins || 0,
+    etaText: t.etaText || ''
+  };
+}
+
 function computeClosures(trainList) {
   if (!trainList.length) return [];
   var sorted = trainList.slice().sort(function(a,b) { return a.bestTime - b.bestTime; });
@@ -155,9 +177,26 @@ function computeClosures(trainList) {
       ce = new Date(Math.max(ce.getTime(), op.getTime()));
       ct.push(t);
     }
-    else { periods.push({start:cs, end:ce, trains:ct}); cs = cl; ce = op; ct = [t]; }
+    else {
+      periods.push({
+        id: makeClosureId(ct[0]),
+        start: cs, end: ce, trains: ct,
+        trainCount: ct.length,
+        trainSummaries: ct.map(summariseTrain),
+        reason: ct.length > 1 ? 'merged_consecutive' : 'single_train'
+      });
+      cs = cl; ce = op; ct = [t];
+    }
   }
-  if (cs) periods.push({start:cs, end:ce, trains:ct});
+  if (cs) {
+    periods.push({
+      id: makeClosureId(ct[0]),
+      start: cs, end: ce, trains: ct,
+      trainCount: ct.length,
+      trainSummaries: ct.map(summariseTrain),
+      reason: ct.length > 1 ? 'merged_consecutive' : 'single_train'
+    });
+  }
   return periods;
 }
 
@@ -362,27 +401,82 @@ function updateStatus() {
 function sendFeedback(state) {
   var now = new Date();
   var currentStatus = $('statusTitle').textContent;
+
+  // Find current, previous, and next closure periods
+  var currentClosure = null;
+  var previousClosure = null;
+  var nextClosure = null;
+  for (var i = 0; i < closurePeriods.length; i++) {
+    var p = closurePeriods[i];
+    if (now >= p.start && now <= p.end) {
+      currentClosure = p;
+      if (i > 0) previousClosure = closurePeriods[i - 1];
+      if (i < closurePeriods.length - 1) nextClosure = closurePeriods[i + 1];
+      break;
+    }
+    if (p.start > now && !nextClosure) {
+      nextClosure = p;
+      if (i > 0) previousClosure = closurePeriods[i - 1];
+      break;
+    }
+    previousClosure = p;
+  }
+
+  // Find nearest individual trains
   var lastTrain = lastPassedTrain;
   var nextTrain = null;
   var allTrains = trainHistory.length > 0 ? trainHistory : trains;
-  for (var i = 0; i < allTrains.length; i++) {
-    if (allTrains[i].bestTime > now && !nextTrain) nextTrain = allTrains[i];
+  for (var j = 0; j < allTrains.length; j++) {
+    if (allTrains[j].bestTime > now && !nextTrain) nextTrain = allTrains[j];
   }
+
   var payload = {
+    // Core feedback
     timestamp: now.toISOString(),
     crossing: crossingId,
     crossingName: CFG.name,
     event: state,
-    predicted: currentStatus,
-    lastTrainTime: lastTrain ? fmtShort(lastTrain.bestTime) : '',
+    predictedStatus: currentStatus,
+
+    // Closure period ID (links closing + opening events for the same episode)
+    closureId: currentClosure ? currentClosure.id : (nextClosure ? nextClosure.id : ''),
+
+    // Current closure (if we're in one)
+    currentClosureStart: currentClosure ? currentClosure.start.toISOString() : '',
+    currentClosureEnd: currentClosure ? currentClosure.end.toISOString() : '',
+    currentClosureTrainCount: currentClosure ? currentClosure.trainCount : '',
+    currentClosureReason: currentClosure ? currentClosure.reason : '',
+    currentClosureTrains: currentClosure ? JSON.stringify(currentClosure.trainSummaries) : '',
+
+    // Previous closure
+    prevClosureId: previousClosure ? previousClosure.id : '',
+    prevClosureStart: previousClosure ? previousClosure.start.toISOString() : '',
+    prevClosureEnd: previousClosure ? previousClosure.end.toISOString() : '',
+    prevClosureTrainCount: previousClosure ? previousClosure.trainCount : '',
+
+    // Next closure
+    nextClosureId: nextClosure ? nextClosure.id : '',
+    nextClosureStart: nextClosure ? nextClosure.start.toISOString() : '',
+    nextClosureEnd: nextClosure ? nextClosure.end.toISOString() : '',
+    nextClosureTrainCount: nextClosure ? nextClosure.trainCount : '',
+    nextClosureTrains: nextClosure ? JSON.stringify(nextClosure.trainSummaries) : '',
+
+    // Nearest individual trains
+    lastTrainTime: lastTrain ? lastTrain.bestTime.toISOString() : '',
     lastTrainDirection: lastTrain ? lastTrain.direction : '',
     lastTrainRoute: lastTrain ? (lastTrain.origin + ' > ' + lastTrain.destination) : '',
     lastTrainSecsAgo: lastTrain ? Math.round((now - lastTrain.bestTime) / 1000) : '',
-    nextTrainTime: nextTrain ? fmtShort(nextTrain.bestTime) : '',
+    nextTrainTime: nextTrain ? nextTrain.bestTime.toISOString() : '',
     nextTrainDirection: nextTrain ? nextTrain.direction : '',
     nextTrainRoute: nextTrain ? (nextTrain.origin + ' > ' + nextTrain.destination) : '',
-    nextTrainSecsAway: nextTrain ? Math.round((nextTrain.bestTime - now) / 1000) : ''
+    nextTrainSecsAway: nextTrain ? Math.round((nextTrain.bestTime - now) / 1000) : '',
+
+    // Model parameters (so you know what settings produced this prediction)
+    paramCloseBeforeMins: CFG.closeBefore,
+    paramOpenAfterMins: CFG.openAfter,
+    paramConsecutiveWindowMins: CFG.consecutiveWindow
   };
+
   $('fbMsg').textContent = 'Sending...';
   $('fbMsg').classList.remove('hidden');
   fetch(CFG.feedbackUrl, {
