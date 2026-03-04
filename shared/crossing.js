@@ -402,6 +402,14 @@ function sendFeedback(state) {
   var now = new Date();
   var currentStatus = $('statusTitle').textContent;
 
+  // Compute closures from trainHistory (not closurePeriods) for feedback.
+  // trainHistory keeps trains for up to 1 hour after they pass, so recent
+  // past closures are available for "opening" taps. closurePeriods only
+  // contains what the last API refresh returned, which may have dropped
+  // past trains already.
+  var feedbackTrains = trainHistory.length > 0 ? trainHistory : trains;
+  var feedbackClosures = computeClosures(feedbackTrains);
+
   // Find which closure period this event belongs to, and the ones before/after it.
   // "This closure" depends on context:
   //   - If we're inside a predicted closure: that's the event closure
@@ -416,8 +424,8 @@ function sendFeedback(state) {
   var timeCurrentIndex = -1;
   var timeNextIndex = -1;
   var timePrevIndex = -1;
-  for (var i = 0; i < closurePeriods.length; i++) {
-    var p = closurePeriods[i];
+  for (var i = 0; i < feedbackClosures.length; i++) {
+    var p = feedbackClosures[i];
     if (now >= p.start && now <= p.end) {
       timeCurrentIndex = i;
       break;
@@ -427,9 +435,9 @@ function sendFeedback(state) {
       break;
     }
   }
-  if (timeCurrentIndex < 0 && timeNextIndex < 0 && closurePeriods.length > 0) {
+  if (timeCurrentIndex < 0 && timeNextIndex < 0 && feedbackClosures.length > 0) {
     // All closures are in the past
-    timePrevIndex = closurePeriods.length - 1;
+    timePrevIndex = feedbackClosures.length - 1;
   } else if (timeCurrentIndex >= 0) {
     timePrevIndex = timeCurrentIndex > 0 ? timeCurrentIndex - 1 : -1;
   } else if (timeNextIndex >= 0) {
@@ -445,9 +453,9 @@ function sendFeedback(state) {
     eventIndex = timePrevIndex;
   }
 
-  eventClosure = eventIndex >= 0 ? closurePeriods[eventIndex] : null;
-  var prevClosure = eventIndex > 0 ? closurePeriods[eventIndex - 1] : null;
-  var nextAfterEvent = (eventIndex >= 0 && eventIndex < closurePeriods.length - 1) ? closurePeriods[eventIndex + 1] : null;
+  eventClosure = eventIndex >= 0 ? feedbackClosures[eventIndex] : null;
+  var prevClosure = eventIndex > 0 ? feedbackClosures[eventIndex - 1] : null;
+  var nextAfterEvent = (eventIndex >= 0 && eventIndex < feedbackClosures.length - 1) ? feedbackClosures[eventIndex + 1] : null;
 
   // Find nearest individual trains
   var lastTrain = lastPassedTrain;
