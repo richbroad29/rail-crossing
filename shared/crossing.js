@@ -72,23 +72,17 @@ function isEastOrigin(str) {
 }
 
 // Parse combined GetArrDepBoardWithDetails XML response
-// Only parses trainServices (filters out busServices automatically)
+// Filters out bus services using serviceType tag
 function parseTrains(xml) {
-  // Extract trainServices section only — ignore busServices
-  var tsIdx = xml.indexOf('trainServices>');
-  if (tsIdx < 0) return [];
-  var tsStart = xml.lastIndexOf('<', tsIdx);
-  var tsEndTag = xml.indexOf('/trainServices>', tsIdx);
-  if (tsEndTag < 0) return [];
-  var trainXml = xml.substring(tsStart, tsEndTag);
-
   var results = [];
-  var parts = trainXml.split('service>');
+  var parts = xml.split('service>');
   for (var i = 0; i < parts.length; i++) {
     var sv = parts[i];
     if (sv.indexOf(':sta>') < 0 && sv.indexOf(':std>') < 0 &&
         sv.indexOf('<sta>') < 0 && sv.indexOf('<std>') < 0) continue;
     if (sv.toLowerCase().indexOf('iscancelled>true') >= 0) continue;
+    // Skip bus services
+    if (sv.indexOf('serviceType>bus') >= 0) continue;
 
     var sta = getVal(sv, 'sta');
     var eta = getVal(sv, 'eta');
