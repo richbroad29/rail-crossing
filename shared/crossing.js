@@ -11,10 +11,7 @@ var lastError = '';
 var trainHistory = [];
 var crossingId = '';
 var lastPassedTrain = null;
-var lastPassedTrain = null;
 var closuresVisible = 3;
-var lastFeedbackTime = null;
-var lastFeedbackType = null;
 
 var isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
 var isAndroid = /Android/.test(navigator.userAgent);
@@ -34,6 +31,16 @@ function getColors(st) {
     case 'OPEN': return {bg:'#16A34A',text:'#FFF',glow:'0 0 30px rgba(22,163,74,.5)'};
     default: return {bg:'#6B7280',text:'#FFF',glow:'none'};
   }
+}
+
+// Direction-dependent config helpers — supports both old flat values and new {east, west} objects
+function getCloseBefore(direction) {
+  if (CFG.closeBefore && typeof CFG.closeBefore === 'object') return CFG.closeBefore[direction] || 1.5;
+  return CFG.closeBefore || 1.5;
+}
+function getOpenAfter(direction) {
+  if (CFG.openAfter && typeof CFG.openAfter === 'object') return CFG.openAfter[direction] || 0.75;
+  return CFG.openAfter || 0.75;
 }
 
 function parseTimeStr(timeStr) {
@@ -64,7 +71,84 @@ function isEastOrigin(str) {
     lower.indexOf('croydon') >= 0 || lower.indexOf('haywards') >= 0;
 }
 
-function parseXml(xml, type) {
+// Parse combined GetArrDepBoardWithDetails XML response
+// Only parses trainServices (filters out busServices automatically)
+function parseTrains(xml) {
+  // Extract trainServices section only — ignore busServices
+  var tsIdx = xml.indexOf('trainServices>');
+  if (tsIdx < 0) return [];
+  var tsStart = xml.lastIndexOf('<', tsIdx);
+  var tsEndTag = xml.indexOf('/trainServices>', tsIdx);
+  if (tsEndTag < 0) return [];
+  var trainXml = xml.substring(tsStart, tsEndTag);
+
+  var results = [];
+  var parts = trainXml.split('service>');
+  for (var i = 0; i < parts.length; i++) {
+    var sv = parts[i];
+    if (sv.indexOf(':sta>') < 0 && sv.indexOf(':std>') < 0 &&
+        sv.indexOf('<sta>') < 0 && sv.indexOf('<std>') < 0) continue;
+    if (sv.toLowerCase().indexOf('iscancelled>true') >= 0) continue;
+
+    var sta = getVal(sv, 'sta');
+    var eta = getVal(sv, 'eta');
+    var std = getVal(sv, 'std');
+    var etd = getVal(sv, 'etd');
+
+    // Parse origin/destination
+    var origBlock = sv.indexOf(':origin>');
+    if (origBlock < 0) origBlock = sv.indexOf('<origin>');
+    var destBlock = sv.indexOf(':destination>');
+    if (destBlock < 0) destBlock = sv.indexOf('<destination>');
+    var origin = '?', dest = '?';
+    if (origBlock >= 0) { origin = getVal(sv.substring(origBlock, origBlock + 200), 'locationName') || '?'; }
+    if (destBlock >= 0) { dest = getVal(sv.substring(destBlock, destBlock + 200), 'locationName') || '?'; }
+
+    var operMatch = sv.indexOf(':operator>');
+    if (operMatch < 0) operMatch = sv.indexOf('<operator>');
+    var operator = '?';
+    if (operMatch >= 0) { operator = getVal(sv.substring(Math.max(0, operMatch - 5), operMatch + 100), 'operator') || '?'; }
+
+    // Direction: if origin is an east station (Brighton, London etc), train is heading west
+    var direction = isEastOrigin(origin) ? 'west' : 'east';
+
+    // Pick reference time based on direction and crossing geometry:
+    // Eastbound trains approach from west, cross THEN arrive at platform → use arrival time
+    // Westbound trains depart platform, THEN cross heading west → use departure time
+    var sch, et;
+    if (direction === 'east') {
+      sch = sta || std;
+      et = eta || etd;
+    } else {
+      sch = std || sta;
+      et = etd || eta;
+    }
+
+    var bt = sch;
+    if (et && et !== 'On time' && et !== 'Delayed' && et.indexOf(':') >= 0) bt = et;
+    var bestTime = parseTimeStr(bt);
+    if (!bestTime) continue;
+
+    var delayMins = 0;
+    if (et && et.indexOf(':') >= 0 && sch) {
+      var e2 = parseTimeStr(et), s2 = parseTimeStr(sch);
+      if (e2 && s2) delayMins = Math.round((e2 - s2) / 60000);
+    }
+
+    results.push({
+      origin: origin, destination: dest, scheduledTime: parseTimeStr(sch),
+      bestTime: bestTime, isRealtime: true, isDelayed: delayMins > 0,
+      delayMins: delayMins, etaText: et || 'On time', direction: direction,
+      operator: operator, dedupKey: (sch || '') + (dest || '')
+    });
+  }
+
+  results.sort(function(a, b) { return a.bestTime - b.bestTime; });
+  return results;
+}
+
+// Legacy parser for old arr/dep endpoints (used by fallback)
+function parseXmlLegacy(xml, type) {
   var results = [];
   var parts = xml.split('service>');
   for (var i = 0; i < parts.length; i++) {
@@ -101,25 +185,8 @@ function parseXml(xml, type) {
       origin:origin, destination:dest, scheduledTime:parseTimeStr(sch),
       bestTime:bestTime, isRealtime:true, isDelayed:delayMins>0,
       delayMins:delayMins, etaText:et||'On time', direction:direction,
-      operator:operator, type:type, dedupKey:(sch||'')+(dest||'')
+      operator:operator, dedupKey:(sch||'')+(dest||'')
     });
-  }
-  return results;
-}
-
-async function fetchNationalRail() {
-  var results = [];
-  var types = ['arr', 'dep'];
-  for (var i = 0; i < 2; i++) {
-    var type = types[i];
-    try {
-      var url = API_BASE + '/?station=' + CFG.station + '&type=' + type;
-      var response = await fetch(url);
-      if (!response.ok) throw new Error('HTTP ' + response.status);
-      var xml = await response.text();
-      var svcs = parseXml(xml, type);
-      for (var j = 0; j < svcs.length; j++) results.push(svcs[j]);
-    } catch(e) { console.warn('NR API (' + type + ') error:', e); lastError = e.message; }
   }
   return results;
 }
@@ -133,8 +200,6 @@ function deduplicateTrains(trainList) {
     for (var j = 0; j < results.length; j++) {
       var r = results[j];
       if (r.destination === t.destination && Math.abs(r.bestTime.getTime() - t.bestTime.getTime()) <= 120000) {
-        if (r.direction === 'east' && t.type === 'arr') results[j] = t;
-        else if (r.direction === 'west' && t.type === 'dep') results[j] = t;
         isDupe = true;
         break;
       }
@@ -145,26 +210,36 @@ function deduplicateTrains(trainList) {
   return results;
 }
 
-function makeClosureId(train) {
-  if (!train || !train.bestTime) return 'CL-unknown';
-  var h = String(train.bestTime.getHours());
-  if (h.length < 2) h = '0' + h;
-  var m = String(train.bestTime.getMinutes());
-  if (m.length < 2) m = '0' + m;
-  return 'CL-' + h + m;
-}
+async function fetchNationalRail() {
+  try {
+    // Primary: single combined call (requires updated worker)
+    var url = API_BASE + '/?station=' + CFG.station;
+    var response = await fetch(url);
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    var xml = await response.text();
+    var svcs = parseTrains(xml);
+    if (svcs.length > 0) return svcs;
+    // If parseTrains found nothing, the response might be from old worker — fall through
+  } catch(e) {
+    console.warn('NR API (combined) error:', e);
+  }
 
-function summariseTrain(t) {
-  return {
-    scheduledTime: t.scheduledTime ? t.scheduledTime.toISOString() : null,
-    predictedTime: t.bestTime ? t.bestTime.toISOString() : null,
-    origin: t.origin || '?',
-    destination: t.destination || '?',
-    direction: t.direction || '?',
-    isDelayed: t.isDelayed || false,
-    delayMins: t.delayMins || 0,
-    etaText: t.etaText || ''
-  };
+  // Fallback: legacy dual-call for old worker that doesn't support combined endpoint
+  console.log('Falling back to legacy arr/dep calls');
+  var results = [];
+  var types = ['arr', 'dep'];
+  for (var i = 0; i < 2; i++) {
+    var type = types[i];
+    try {
+      var url2 = API_BASE + '/?station=' + CFG.station + '&type=' + type;
+      var response2 = await fetch(url2);
+      if (!response2.ok) throw new Error('HTTP ' + response2.status);
+      var xml2 = await response2.text();
+      var svcs2 = parseXmlLegacy(xml2, type);
+      for (var j = 0; j < svcs2.length; j++) results.push(svcs2[j]);
+    } catch(e) { console.warn('NR API (' + type + ') error:', e); lastError = e.message; }
+  }
+  return deduplicateTrains(results);
 }
 
 function computeClosures(trainList) {
@@ -173,33 +248,18 @@ function computeClosures(trainList) {
   var periods = [], cs = null, ce = null, ct = [];
   for (var i = 0; i < sorted.length; i++) {
     var t = sorted[i];
-    var cl = new Date(t.bestTime.getTime() - CFG.closeBefore * 60000);
-    var op = new Date(t.bestTime.getTime() + CFG.openAfter * 60000);
+    var cb = getCloseBefore(t.direction);
+    var oa = getOpenAfter(t.direction);
+    var cl = new Date(t.bestTime.getTime() - cb * 60000);
+    var op = new Date(t.bestTime.getTime() + oa * 60000);
     if (cs === null) { cs = cl; ce = op; ct = [t]; }
     else if (cl.getTime() - ce.getTime() <= CFG.consecutiveWindow * 60000) {
       ce = new Date(Math.max(ce.getTime(), op.getTime()));
       ct.push(t);
     }
-    else {
-      periods.push({
-        id: makeClosureId(ct[0]),
-        start: cs, end: ce, trains: ct,
-        trainCount: ct.length,
-        trainSummaries: ct.map(summariseTrain),
-        reason: ct.length > 1 ? 'merged_consecutive' : 'single_train'
-      });
-      cs = cl; ce = op; ct = [t];
-    }
+    else { periods.push({start:cs, end:ce, trains:ct}); cs = cl; ce = op; ct = [t]; }
   }
-  if (cs) {
-    periods.push({
-      id: makeClosureId(ct[0]),
-      start: cs, end: ce, trains: ct,
-      trainCount: ct.length,
-      trainSummaries: ct.map(summariseTrain),
-      reason: ct.length > 1 ? 'merged_consecutive' : 'single_train'
-    });
-  }
+  if (cs) periods.push({start:cs, end:ce, trains:ct});
   return periods;
 }
 
@@ -232,7 +292,7 @@ async function refreshData() {
     $('errorBox').classList.add('hidden');
     var liveTrains = await fetchNationalRail();
     if (liveTrains.length > 0) {
-      trains = deduplicateTrains(liveTrains);
+      trains = liveTrains;
       for (var th = 0; th < trains.length; th++) {
         var t = trains[th];
         var found = false;
@@ -390,7 +450,6 @@ function updateStatus() {
   else { $('nextOpenCountdown').textContent = '--'; $('nextOpenCountdown').style.color = '#475569'; $('nextOpenTime').textContent = ''; }
   renderClosures();
 
-  // Track last passed train for accurate feedback logging
   var allForHistory = trainHistory.length > 0 ? trainHistory : trains;
   for (var lt = 0; lt < allForHistory.length; lt++) {
     if (allForHistory[lt].bestTime <= now) {
@@ -403,103 +462,28 @@ function updateStatus() {
 
 function sendFeedback(state) {
   var now = new Date();
-  
-  // Debounce: ignore duplicate events within 30 seconds
-  if (lastFeedbackTime && lastFeedbackType === state) {
-    var timeSinceLastFeedback = now.getTime() - lastFeedbackTime.getTime();
-    if (timeSinceLastFeedback < 30000) {
-      $('fbMsg').textContent = 'Already recorded ' + state + ' at ' + fmtShort(lastFeedbackTime);
-      $('fbMsg').classList.remove('hidden');
-      setTimeout(function() { $('fbMsg').classList.add('hidden'); }, 3000);
-      return;
-    }
-  }
-  
   var currentStatus = $('statusTitle').textContent;
-  
-  // ... rest of function ...
-  
-  // At the end, after successful send:
-  lastFeedbackTime = now;
-  lastFeedbackType = state;
-
-  // Compute closures from trainHistory (not closurePeriods) for feedback.
-  // trainHistory keeps trains for up to 1 hour after they pass, so recent
-  // past closures are available for "opening" taps. closurePeriods only
-  // contains what the last API refresh returned, which may have dropped
-  // past trains already.
-  var feedbackTrains = trainHistory.length > 0 ? trainHistory : trains;
-  var feedbackClosures = computeClosures(feedbackTrains);
-
-  // Find which closure period this event belongs to, and the ones before/after it.
-  // "This closure" depends on context:
-  //   - If we're inside a predicted closure: that's the event closure
-  //   - If open + "closing": the next closure (barriers coming down early)
-  //   - If open + "opening": the previous closure (barriers still going up)
-  // "Previous" and "Next" are then relative to the event closure, not to now.
-
-  var eventClosure = null;
-  var eventIndex = -1;
-
-  // First pass: find where we are in time
-  var timeCurrentIndex = -1;
-  var timeNextIndex = -1;
-  var timePrevIndex = -1;
-  for (var i = 0; i < feedbackClosures.length; i++) {
-    var p = feedbackClosures[i];
-    if (now >= p.start && now <= p.end) {
-      timeCurrentIndex = i;
-      break;
-    }
-    if (p.start > now && timeNextIndex < 0) {
-      timeNextIndex = i;
-      break;
-    }
-  }
-  if (timeCurrentIndex < 0 && timeNextIndex < 0 && feedbackClosures.length > 0) {
-    // All closures are in the past
-    timePrevIndex = feedbackClosures.length - 1;
-  } else if (timeCurrentIndex >= 0) {
-    timePrevIndex = timeCurrentIndex > 0 ? timeCurrentIndex - 1 : -1;
-  } else if (timeNextIndex >= 0) {
-    timePrevIndex = timeNextIndex > 0 ? timeNextIndex - 1 : -1;
-  }
-
-  // Determine which closure this event belongs to
-  if (timeCurrentIndex >= 0) {
-    eventIndex = timeCurrentIndex;
-  } else if (state === 'closing' && timeNextIndex >= 0) {
-    eventIndex = timeNextIndex;
-  } else if (state === 'opening' && timePrevIndex >= 0) {
-    eventIndex = timePrevIndex;
-  }
-
-  eventClosure = eventIndex >= 0 ? feedbackClosures[eventIndex] : null;
-  var prevClosure = eventIndex > 0 ? feedbackClosures[eventIndex - 1] : null;
-  var nextAfterEvent = (eventIndex >= 0 && eventIndex < feedbackClosures.length - 1) ? feedbackClosures[eventIndex + 1] : null;
-
-  // Find nearest individual trains
   var lastTrain = lastPassedTrain;
   var nextTrain = null;
   var allTrains = trainHistory.length > 0 ? trainHistory : trains;
-  for (var j = 0; j < allTrains.length; j++) {
-    if (allTrains[j].bestTime > now && !nextTrain) nextTrain = allTrains[j];
+  for (var i = 0; i < allTrains.length; i++) {
+    if (allTrains[i].bestTime > now && !nextTrain) nextTrain = allTrains[i];
   }
-
-var payload = {
-  timestamp: now.toISOString(),
-  crossing: crossingId,
-  // ... existing fields ...
-  paramConsecutiveWindowMins: CFG.consecutiveWindow,
-  
-  // New: track all trains in history window
-  allRecentTrainsJson: JSON.stringify(trainHistory.slice(-10).map(summariseTrain)),
-  trainHistoryCount: trainHistory.length,
-  
-  // New: user agent for debugging device-specific issues
-  userAgent: navigator.userAgent.substring(0, 100)
-};
-
+  var payload = {
+    timestamp: now.toISOString(),
+    crossing: crossingId,
+    crossingName: CFG.name,
+    event: state,
+    predicted: currentStatus,
+    lastTrainTime: lastTrain ? fmtShort(lastTrain.bestTime) : '',
+    lastTrainDirection: lastTrain ? lastTrain.direction : '',
+    lastTrainRoute: lastTrain ? (lastTrain.origin + ' > ' + lastTrain.destination) : '',
+    lastTrainSecsAgo: lastTrain ? Math.round((now - lastTrain.bestTime) / 1000) : '',
+    nextTrainTime: nextTrain ? fmtShort(nextTrain.bestTime) : '',
+    nextTrainDirection: nextTrain ? nextTrain.direction : '',
+    nextTrainRoute: nextTrain ? (nextTrain.origin + ' > ' + nextTrain.destination) : '',
+    nextTrainSecsAway: nextTrain ? Math.round((nextTrain.bestTime - now) / 1000) : ''
+  };
   $('fbMsg').textContent = 'Sending...';
   $('fbMsg').classList.remove('hidden');
   fetch(CFG.feedbackUrl, {
