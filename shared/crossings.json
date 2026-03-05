@@ -3,9 +3,15 @@
     "name": "Portslade Level Crossing",
     "road": "Boundary Road",
     "station": "PLD",
-    "closeBefore": 1.5,
-    "openAfter": 0.25,
-    "consecutiveWindow": 1.25,
+    "signalBox": "Lancing",
+    "crossingType": "MCB-CCTV",
+    "autoLower": false,
+    "autoRaise": true,
+    "closeBefore": {"east": 1.5, "west": 2.5},
+    "openAfter": {"east": 0.5, "west": 0.5},
+    "consecutiveWindow": 1.5,
+    "signals": {"east": "LG 4", "west": "LG 5"},
+    "berths": {"east": "LA0004", "west": "LA0005"},
     "feedbackUrl": "https://script.google.com/macros/s/AKfycbysyTa8ic8nSz2_-_wBKnrzss2DsNAnlIrFKYa9H_We1QrxRVXl1iKh6MvWSNdE7XjbAw/exec"
   }
 }
