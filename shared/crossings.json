@@ -4,7 +4,7 @@
     "road": "Boundary Road",
     "station": "PLD",
     "closeBefore": 1.5,
-    "openAfter": 0.75,
+    "openAfter": 0.25,
     "consecutiveWindow": 2.5,
     "feedbackUrl": "https://script.google.com/macros/s/AKfycbysyTa8ic8nSz2_-_wBKnrzss2DsNAnlIrFKYa9H_We1QrxRVXl1iKh6MvWSNdE7XjbAw/exec"
   }
