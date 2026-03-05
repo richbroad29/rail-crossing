@@ -11,7 +11,10 @@ var lastError = '';
 var trainHistory = [];
 var crossingId = '';
 var lastPassedTrain = null;
+var lastPassedTrain = null;
 var closuresVisible = 3;
+var lastFeedbackTime = null;
+var lastFeedbackType = null;
 
 var isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
 var isAndroid = /Android/.test(navigator.userAgent);
@@ -400,7 +403,25 @@ function updateStatus() {
 
 function sendFeedback(state) {
   var now = new Date();
+  
+  // Debounce: ignore duplicate events within 30 seconds
+  if (lastFeedbackTime && lastFeedbackType === state) {
+    var timeSinceLastFeedback = now.getTime() - lastFeedbackTime.getTime();
+    if (timeSinceLastFeedback < 30000) {
+      $('fbMsg').textContent = 'Already recorded ' + state + ' at ' + fmtShort(lastFeedbackTime);
+      $('fbMsg').classList.remove('hidden');
+      setTimeout(function() { $('fbMsg').classList.add('hidden'); }, 3000);
+      return;
+    }
+  }
+  
   var currentStatus = $('statusTitle').textContent;
+  
+  // ... rest of function ...
+  
+  // At the end, after successful send:
+  lastFeedbackTime = now;
+  lastFeedbackType = state;
 
   // Compute closures from trainHistory (not closurePeriods) for feedback.
   // trainHistory keeps trains for up to 1 hour after they pass, so recent
@@ -465,52 +486,19 @@ function sendFeedback(state) {
     if (allTrains[j].bestTime > now && !nextTrain) nextTrain = allTrains[j];
   }
 
-  var payload = {
-    // Core feedback
-    timestamp: now.toISOString(),
-    crossing: crossingId,
-    crossingName: CFG.name,
-    event: state,
-    predictedStatus: currentStatus,
-
-    // Closure period ID (links closing + opening events for the same episode)
-    closureId: eventClosure ? eventClosure.id : '',
-
-    // This event's closure (the one closureId points to)
-    currentClosureStart: eventClosure ? eventClosure.start.toISOString() : '',
-    currentClosureEnd: eventClosure ? eventClosure.end.toISOString() : '',
-    currentClosureTrainCount: eventClosure ? eventClosure.trainCount : '',
-    currentClosureReason: eventClosure ? eventClosure.reason : '',
-    currentClosureTrains: eventClosure ? JSON.stringify(eventClosure.trainSummaries) : '',
-
-    // Previous closure (the one before this event's closure)
-    prevClosureId: prevClosure ? prevClosure.id : '',
-    prevClosureStart: prevClosure ? prevClosure.start.toISOString() : '',
-    prevClosureEnd: prevClosure ? prevClosure.end.toISOString() : '',
-    prevClosureTrainCount: prevClosure ? prevClosure.trainCount : '',
-
-    // Next closure (the one after this event's closure)
-    nextClosureId: nextAfterEvent ? nextAfterEvent.id : '',
-    nextClosureStart: nextAfterEvent ? nextAfterEvent.start.toISOString() : '',
-    nextClosureEnd: nextAfterEvent ? nextAfterEvent.end.toISOString() : '',
-    nextClosureTrainCount: nextAfterEvent ? nextAfterEvent.trainCount : '',
-    nextClosureTrains: nextAfterEvent ? JSON.stringify(nextAfterEvent.trainSummaries) : '',
-
-    // Nearest individual trains
-    lastTrainTime: lastTrain ? lastTrain.bestTime.toISOString() : '',
-    lastTrainDirection: lastTrain ? lastTrain.direction : '',
-    lastTrainRoute: lastTrain ? (lastTrain.origin + ' > ' + lastTrain.destination) : '',
-    lastTrainSecsAgo: lastTrain ? Math.round((now - lastTrain.bestTime) / 1000) : '',
-    nextTrainTime: nextTrain ? nextTrain.bestTime.toISOString() : '',
-    nextTrainDirection: nextTrain ? nextTrain.direction : '',
-    nextTrainRoute: nextTrain ? (nextTrain.origin + ' > ' + nextTrain.destination) : '',
-    nextTrainSecsAway: nextTrain ? Math.round((nextTrain.bestTime - now) / 1000) : '',
-
-    // Model parameters (so you know what settings produced this prediction)
-    paramCloseBeforeMins: CFG.closeBefore,
-    paramOpenAfterMins: CFG.openAfter,
-    paramConsecutiveWindowMins: CFG.consecutiveWindow
-  };
+var payload = {
+  timestamp: now.toISOString(),
+  crossing: crossingId,
+  // ... existing fields ...
+  paramConsecutiveWindowMins: CFG.consecutiveWindow,
+  
+  // New: track all trains in history window
+  allRecentTrainsJson: JSON.stringify(trainHistory.slice(-10).map(summariseTrain)),
+  trainHistoryCount: trainHistory.length,
+  
+  // New: user agent for debugging device-specific issues
+  userAgent: navigator.userAgent.substring(0, 100)
+};
 
   $('fbMsg').textContent = 'Sending...';
   $('fbMsg').classList.remove('hidden');
