@@ -13,11 +13,9 @@ var CROSSING_ID = null;
 
 if (input && typeof input === 'string' && input.trim().length > 0) {
   var search = input.trim().toLowerCase();
-  // Try exact match first
   if (allConfig[search]) {
     CROSSING_ID = search;
   } else {
-    // Try matching against crossing names and IDs
     for (var ci = 0; ci < crossingIds.length; ci++) {
       var id = crossingIds[ci];
       var cfg = allConfig[id];
@@ -30,13 +28,10 @@ if (input && typeof input === 'string' && input.trim().length > 0) {
   }
 }
 
-// If no crossing identified, ask the user
 if (!CROSSING_ID) {
   if (crossingIds.length === 1) {
-    // Only one crossing, use it
     CROSSING_ID = crossingIds[0];
   } else if (config.runsInApp || config.runsWithSiri) {
-    // Build a list of available crossings for the prompt
     var names = [];
     for (var ni = 0; ni < crossingIds.length; ni++) {
       names.push(allConfig[crossingIds[ni]].name.replace(' Level Crossing', ''));
@@ -57,12 +52,10 @@ if (!CROSSING_ID) {
       return;
     }
   } else {
-    // Running in widget or unknown context with multiple crossings
     CROSSING_ID = crossingIds[0];
   }
 }
 
-// Check if crossing exists
 if (!allConfig[CROSSING_ID]) {
   var available = [];
   for (var av = 0; av < crossingIds.length; av++) {
@@ -85,6 +78,16 @@ if (!allConfig[CROSSING_ID]) {
 
 var CFG = allConfig[CROSSING_ID];
 var crossingLabel = CFG.name.replace(' Level Crossing', '');
+
+// Direction-dependent config helpers
+function getCloseBefore(dir) {
+  if (CFG.closeBefore && typeof CFG.closeBefore === 'object') return CFG.closeBefore[dir] || 1.5;
+  return CFG.closeBefore || 1.5;
+}
+function getOpenAfter(dir) {
+  if (CFG.openAfter && typeof CFG.openAfter === 'object') return CFG.openAfter[dir] || 0.75;
+  return CFG.openAfter || 0.75;
+}
 
 function pTime(s) {
   if (!s || s.indexOf(':') < 0) return null;
@@ -197,8 +200,10 @@ function closureCalc(trains) {
   if (!trains.length) return [];
   var per = [], cs = null, ce = null;
   for (var i = 0; i < trains.length; i++) {
-    var cl = new Date(trains[i].tm.getTime() - CFG.closeBefore * 60000);
-    var op = new Date(trains[i].tm.getTime() + CFG.openAfter * 60000);
+    var cb = getCloseBefore(trains[i].dir);
+    var oa = getOpenAfter(trains[i].dir);
+    var cl = new Date(trains[i].tm.getTime() - cb * 60000);
+    var op = new Date(trains[i].tm.getTime() + oa * 60000);
     if (cs === null) { cs = cl; ce = op; }
     else if (cl.getTime() - ce.getTime() <= CFG.consecutiveWindow * 60000) { ce = new Date(Math.max(ce.getTime(), op.getTime())); }
     else { per.push({s:cs, e:ce}); cs = cl; ce = op; }
