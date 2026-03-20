@@ -589,5 +589,5 @@ async function initCrossing(id) {
   setRefreshState('idle');
   refreshData();
   setInterval(updateStatus, 1000);
-  setInterval(refreshData, 60000);
+  setInterval(refreshData, 30000);
 }
