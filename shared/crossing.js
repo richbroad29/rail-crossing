@@ -119,7 +119,12 @@ function parseTrains(xml) {
     }
 
     var bt = sch;
-    if (et && et !== 'On time' && et !== 'Delayed' && et.indexOf(':') >= 0) bt = et;
+    var isUncertain = false;
+    if (et && et !== 'On time' && et !== 'Delayed' && et.indexOf(':') >= 0) {
+      bt = et;
+    } else if (et === 'Delayed') {
+      isUncertain = true;
+    }
     var bestTime = parseTimeStr(bt);
     if (!bestTime) continue;
 
@@ -132,6 +137,7 @@ function parseTrains(xml) {
     results.push({
       origin: origin, destination: dest, scheduledTime: parseTimeStr(sch),
       bestTime: bestTime, isRealtime: true, isDelayed: delayMins > 0,
+      isUncertain: isUncertain,
       delayMins: delayMins, etaText: et || 'On time', direction: direction,
       operator: operator, dedupKey: (sch || '') + (dest || '')
     });
@@ -156,7 +162,12 @@ function parseXmlLegacy(xml, type) {
     var sch = sta || std;
     var et = eta || etd;
     var bt = sch;
-    if (et && et !== 'On time' && et !== 'Delayed' && et.indexOf(':') >= 0) bt = et;
+    var isUncertain = false;
+    if (et && et !== 'On time' && et !== 'Delayed' && et.indexOf(':') >= 0) {
+      bt = et;
+    } else if (et === 'Delayed') {
+      isUncertain = true;
+    }
     var bestTime = parseTimeStr(bt);
     if (!bestTime) continue;
     var origBlock = sv.indexOf(':origin>');
@@ -178,6 +189,7 @@ function parseXmlLegacy(xml, type) {
     results.push({
       origin:origin, destination:dest, scheduledTime:parseTimeStr(sch),
       bestTime:bestTime, isRealtime:true, isDelayed:delayMins>0,
+      isUncertain:isUncertain,
       delayMins:delayMins, etaText:et||'On time', direction:direction,
       operator:operator, dedupKey:(sch||'')+(dest||'')
     });
@@ -347,12 +359,21 @@ function renderClosures() {
       html += '<span class="closure-pill">~' + duration + ' min \u00B7 in ' + fmtCountdown(secsUntil) + '</span>';
     }
     html += '</div>';
+    var hasUncertain = false;
+    for (var j = 0; j < p.trains.length; j++) {
+      if (p.trains[j].isUncertain) hasUncertain = true;
+    }
+    if (hasUncertain) {
+      html += '<div style="font-size:9px;color:#F59E0B;margin-bottom:4px">\u26A0 Timing uncertain \u2014 train delayed with no estimate</div>';
+    }
     for (var j = 0; j < p.trains.length; j++) {
       var t = p.trains[j];
       var dirColor = t.direction === 'east' ? '#38BDF8' : '#FB923C';
       var arrow = t.direction === 'east' ? '\u2192' : '\u2190';
       var statusHtml;
-      if (t.isDelayed && t.delayMins > 0) {
+      if (t.isUncertain) {
+        statusHtml = '<span class="train-status train-status-delayed">Delayed</span>';
+      } else if (t.isDelayed && t.delayMins > 0) {
         statusHtml = '<span class="train-status train-status-delayed">+' + t.delayMins + 'm</span>';
       } else {
         statusHtml = '<span class="train-status train-status-ontime">On time</span>';
