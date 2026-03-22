@@ -1,81 +1,70 @@
 const https = require('https');
 const logger = require('./logger');
 
-// LDBSVWS (Staff Version) endpoint — shows non-stopping + ECS trains
-const LDBSVWS_URL = 'https://lite.realtime.nationalrail.co.uk/OpenLDBSVWS/ldbsv12.asmx';
-const LDBSVWS_NS = 'http://thalesgroup.com/RTTI/2021-11-01/ldbsv/';
-const LDBSVWS_TYPES_NS = 'http://thalesgroup.com/RTTI/2017-10-01/ldbsv/types';
+/**
+ * LDB Poller — queries departure board data for crossing predictions.
+ *
+ * Supports two modes:
+ *   1. RDM REST API (x-apikey header, returns JSON) — primary
+ *   2. Direct SOAP (AccessToken header, returns XML) — fallback
+ */
 
-// Fallback: public LDB (same as current Cloudflare Worker)
-const LDB_URL = 'https://lite.realtime.nationalrail.co.uk/OpenLDBWS/ldb12.asmx';
-const LDB_NS = 'http://thalesgroup.com/RTTI/2021-11-01/ldb/';
+// RDM REST endpoints
+const RDM_BASE = 'https://api1.raildata.org.uk';
+const RDM_LDB_PATH = '/1010-live-arrival-and-departure-board/LDBWS/api/20220120/GetArrDepBoardWithDetails';
+const RDM_LDBSV_PATH = '/1010-live-arrival-and-departure-board-staff-arr-dep/LDBSVWS/api/20220120/GetArrDepBoardWithDetails';
 
-function buildSoapRequest(station, token, useStaffVersion) {
-  const ns = useStaffVersion ? LDBSVWS_NS : LDB_NS;
-  return `<?xml version="1.0" encoding="utf-8"?>
-<soap12:Envelope xmlns:soap12="http://www.w3.org/2003/05/soap-envelope"
-  xmlns:ldb="${ns}">
-  <soap12:Header>
-    <AccessToken xmlns="http://thalesgroup.com/RTTI/2013-11-28/Token/types">
-      <TokenValue>${token}</TokenValue>
-    </AccessToken>
-  </soap12:Header>
-  <soap12:Body>
-    <ldb:GetArrDepBoardWithDetailsRequest>
-      <ldb:numRows>30</ldb:numRows>
-      <ldb:crs>${station}</ldb:crs>
-      <ldb:time>${new Date().toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit'})}</ldb:time>
-      <ldb:timeWindow>120</ldb:timeWindow>
-    </ldb:GetArrDepBoardWithDetailsRequest>
-  </soap12:Body>
-</soap12:Envelope>`;
+// Direct SOAP endpoints (fallback)
+const SOAP_LDB_URL = 'https://lite.realtime.nationalrail.co.uk/OpenLDBWS/ldb12.asmx';
+const SOAP_LDBSV_URL = 'https://lite.realtime.nationalrail.co.uk/OpenLDBSVWS/ldbsv12.asmx';
+const SOAP_NS = 'http://thalesgroup.com/RTTI/2021-11-01/ldb/';
+const SOAP_SV_NS = 'http://thalesgroup.com/RTTI/2021-11-01/ldbsv/';
+
+// ---- HTTP helpers ----
+
+function httpGet(url, headers = {}) {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const options = {
+      hostname: parsed.hostname,
+      path: parsed.pathname + parsed.search,
+      method: 'GET',
+      headers
+    };
+    const req = https.request(options, res => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => resolve({ status: res.statusCode, body: data, headers: res.headers }));
+    });
+    req.on('error', reject);
+    req.setTimeout(15000, () => { req.destroy(); reject(new Error('HTTP timeout')); });
+    req.end();
+  });
 }
 
-function soapFetch(url, body) {
+function httpPost(url, body, headers = {}) {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url);
     const options = {
       hostname: parsed.hostname,
       path: parsed.pathname,
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/soap+xml; charset=utf-8',
-        'Content-Length': Buffer.byteLength(body)
-      }
+      headers: { ...headers, 'Content-Length': Buffer.byteLength(body) }
     };
     const req = https.request(options, res => {
       let data = '';
       res.on('data', chunk => data += chunk);
-      res.on('end', () => {
-        if (res.statusCode !== 200) {
-          reject(new Error(`SOAP HTTP ${res.statusCode}: ${data.slice(0, 200)}`));
-        } else {
-          resolve(data);
-        }
-      });
+      res.on('end', () => resolve({ status: res.statusCode, body: data }));
     });
     req.on('error', reject);
-    req.setTimeout(15000, () => { req.destroy(); reject(new Error('SOAP timeout')); });
+    req.setTimeout(15000, () => { req.destroy(); reject(new Error('HTTP timeout')); });
     req.write(body);
     req.end();
   });
 }
 
-// Extract text content between XML tags (handles namespace prefixes)
-function getVal(xml, tag) {
-  // Match with or without namespace prefix
-  const patterns = [
-    new RegExp(`<[^>]*:${tag}>([^<]*)<`, 'i'),
-    new RegExp(`<${tag}>([^<]*)<`, 'i')
-  ];
-  for (const p of patterns) {
-    const m = xml.match(p);
-    if (m) return m[1].trim();
-  }
-  return null;
-}
+// ---- Direction detection ----
 
-// Determine direction from origin station name
 function isEastOrigin(name) {
   if (!name) return false;
   const l = name.toLowerCase();
@@ -88,107 +77,174 @@ function isEastOrigin(name) {
     l.includes('horsham');
 }
 
-// Parse time string "HH:MM" into a Date for today
+// ---- Time parsing ----
+
 function parseTime(timeStr) {
   if (!timeStr || !timeStr.includes(':')) return null;
   const [h, m] = timeStr.split(':').map(Number);
   const now = new Date();
   const d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m, 0);
-  // Handle overnight wrap
   if (d.getTime() < now.getTime() - 6 * 3600000) d.setDate(d.getDate() + 1);
   return d;
 }
 
-// Parse the SOAP XML response into an array of train objects
-function parseTrains(xml) {
+// ---- Common train extraction logic ----
+
+function extractTrain(sta, eta, std, etd, origin, dest, operator, trainid) {
+  const direction = isEastOrigin(origin) ? 'west' : 'east';
+
+  let sch, et;
+  if (direction === 'east') {
+    sch = sta || std; et = eta || etd;
+  } else {
+    sch = std || sta; et = etd || eta;
+  }
+
+  let bestTimeStr = sch;
+  let isUncertain = false;
+  if (et && et !== 'On time' && et !== 'Delayed' && et.includes(':')) {
+    bestTimeStr = et;
+  } else if (et === 'Delayed') {
+    isUncertain = true;
+  }
+
+  const bestTime = parseTime(bestTimeStr);
+  if (!bestTime) return null;
+  const scheduledTime = parseTime(sch);
+
+  let delayMins = 0;
+  if (et && et.includes(':') && sch) {
+    const e2 = parseTime(et), s2 = parseTime(sch);
+    if (e2 && s2) delayMins = Math.round((e2 - s2) / 60000);
+  }
+
+  let trainType = 'passenger';
+  if (trainid) {
+    const fc = trainid.charAt(0);
+    if ('67'.includes(fc)) trainType = 'freight';
+    else if (fc === '5') trainType = 'ecs';
+    else if (fc === '3') trainType = 'test';
+  }
+
+  return {
+    origin, destination: dest, operator,
+    scheduledTime: scheduledTime?.toISOString(),
+    bestTime: bestTime.toISOString(),
+    direction, delayMins, isUncertain,
+    etaText: et || 'On time',
+    headcode: trainid,
+    trainType,
+    source: 'ldb',
+    dedupKey: `${sch || ''}|${dest}`
+  };
+}
+
+// ---- RDM REST JSON parsing ----
+
+function parseRdmJson(body) {
   const results = [];
-  const services = xml.split(/service>/i);
+  let data;
+  try {
+    data = typeof body === 'string' ? JSON.parse(body) : body;
+  } catch (e) {
+    console.error('Failed to parse RDM JSON:', e.message, body.slice(0, 200));
+    return results;
+  }
 
-  for (const sv of services) {
-    // Must have scheduled arrival or departure
-    if (!sv.match(/:?sta>/) && !sv.match(/:?std>/)) continue;
-    // Skip cancelled
-    if (/isCancelled>true/i.test(sv)) continue;
-    // Skip bus
-    if (/serviceType>bus/i.test(sv)) continue;
+  // Navigate the RDM response structure
+  const trainServices = data?.trainServices ||
+    data?.GetArrDepBoardWithDetailsResult?.trainServices?.service ||
+    data?.GetStationBoardResult?.trainServices?.service ||
+    [];
+  const serviceList = Array.isArray(trainServices) ? trainServices : [trainServices].filter(Boolean);
 
-    const sta = getVal(sv, 'sta');
-    const eta = getVal(sv, 'eta');
-    const std = getVal(sv, 'std');
-    const etd = getVal(sv, 'etd');
+  for (const svc of serviceList) {
+    if (!svc) continue;
+    if (svc.isCancelled) continue;
+    if (svc.serviceType === 'bus') continue;
 
-    // Extract origin and destination
-    let origin = '?', dest = '?';
-    const origBlock = sv.match(/origin>[\s\S]*?<\/.*?origin>/i);
-    if (origBlock) origin = getVal(origBlock[0], 'locationName') || '?';
-    const destBlock = sv.match(/destination>[\s\S]*?<\/.*?destination>/i);
-    if (destBlock) dest = getVal(destBlock[0], 'locationName') || '?';
+    const origin = svc.origin?.location?.[0]?.locationName ||
+                   svc.origin?.[0]?.locationName || '?';
+    const dest = svc.destination?.location?.[0]?.locationName ||
+                 svc.destination?.[0]?.locationName || '?';
 
-    // Operator
-    const operator = getVal(sv, 'operator') || '?';
-
-    // Headcode / train ID (Staff Version provides this)
-    const trainid = getVal(sv, 'trainid') || getVal(sv, 'rid') || null;
-    const rsid = getVal(sv, 'rsid') || null;
-
-    // Direction
-    const direction = isEastOrigin(origin) ? 'west' : 'east';
-
-    // Pick reference time based on direction and crossing geometry
-    let sch, et;
-    if (direction === 'east') {
-      sch = sta || std;
-      et = eta || etd;
-    } else {
-      sch = std || sta;
-      et = etd || eta;
-    }
-
-    let bestTimeStr = sch;
-    let isUncertain = false;
-    if (et && et !== 'On time' && et !== 'Delayed' && et.includes(':')) {
-      bestTimeStr = et;
-    } else if (et === 'Delayed') {
-      isUncertain = true;
-    }
-
-    const bestTime = parseTime(bestTimeStr);
-    if (!bestTime) continue;
-    const scheduledTime = parseTime(sch);
-
-    let delayMins = 0;
-    if (et && et.includes(':') && sch) {
-      const e2 = parseTime(et), s2 = parseTime(sch);
-      if (e2 && s2) delayMins = Math.round((e2 - s2) / 60000);
-    }
-
-    // Determine train type from headcode
-    let trainType = 'passenger';
-    if (trainid) {
-      const firstChar = trainid.charAt(0);
-      if ('34567'.includes(firstChar)) trainType = 'non-passenger';
-      if ('67'.includes(firstChar)) trainType = 'freight';
-      if (firstChar === '5') trainType = 'ecs';
-    }
-
-    results.push({
-      origin, destination: dest, operator,
-      scheduledTime: scheduledTime?.toISOString(),
-      bestTime: bestTime.toISOString(),
-      direction, delayMins, isUncertain,
-      etaText: et || 'On time',
-      headcode: trainid,
-      trainType,
-      source: 'ldb',
-      dedupKey: `${sch || ''}|${dest}`
-    });
+    const train = extractTrain(
+      svc.sta, svc.eta, svc.std, svc.etd,
+      origin, dest,
+      svc.operator || '?',
+      svc.trainid || svc.rid || svc.serviceID || null
+    );
+    if (train) results.push(train);
   }
 
   results.sort((a, b) => new Date(a.bestTime) - new Date(b.bestTime));
   return results;
 }
 
-// Deduplicate trains (same destination within 2 min window)
+// ---- SOAP XML parsing ----
+
+function getVal(xml, tag) {
+  const patterns = [
+    new RegExp(`<[^>]*:${tag}>([^<]*)`, 'i'),
+    new RegExp(`<${tag}>([^<]*)`, 'i')
+  ];
+  for (const p of patterns) {
+    const m = xml.match(p);
+    if (m) return m[1].trim();
+  }
+  return null;
+}
+
+function parseSoapXml(xml) {
+  const results = [];
+  const services = xml.split(/service>/i);
+
+  for (const sv of services) {
+    if (!sv.match(/:?sta>/) && !sv.match(/:?std>/)) continue;
+    if (/isCancelled>true/i.test(sv)) continue;
+    if (/serviceType>bus/i.test(sv)) continue;
+
+    let origin = '?', dest = '?';
+    const origBlock = sv.match(/origin>[\s\S]*?<\/.*?origin>/i);
+    if (origBlock) origin = getVal(origBlock[0], 'locationName') || '?';
+    const destBlock = sv.match(/destination>[\s\S]*?<\/.*?destination>/i);
+    if (destBlock) dest = getVal(destBlock[0], 'locationName') || '?';
+
+    const train = extractTrain(
+      getVal(sv, 'sta'), getVal(sv, 'eta'),
+      getVal(sv, 'std'), getVal(sv, 'etd'),
+      origin, dest,
+      getVal(sv, 'operator') || '?',
+      getVal(sv, 'trainid') || getVal(sv, 'rid') || null
+    );
+    if (train) results.push(train);
+  }
+
+  results.sort((a, b) => new Date(a.bestTime) - new Date(b.bestTime));
+  return results;
+}
+
+function buildSoapRequest(station, token, staffVersion) {
+  const ns = staffVersion ? SOAP_SV_NS : SOAP_NS;
+  return `<?xml version="1.0" encoding="utf-8"?>
+<soap12:Envelope xmlns:soap12="http://www.w3.org/2003/05/soap-envelope" xmlns:ldb="${ns}">
+  <soap12:Header>
+    <AccessToken xmlns="http://thalesgroup.com/RTTI/2013-11-28/Token/types">
+      <TokenValue>${token}</TokenValue>
+    </AccessToken>
+  </soap12:Header>
+  <soap12:Body>
+    <ldb:GetArrDepBoardWithDetailsRequest>
+      <ldb:numRows>30</ldb:numRows>
+      <ldb:crs>${station}</ldb:crs>
+      <ldb:timeWindow>120</ldb:timeWindow>
+    </ldb:GetArrDepBoardWithDetailsRequest>
+  </soap12:Body>
+</soap12:Envelope>`;
+}
+
+// ---- Deduplication ----
+
 function deduplicateTrains(trains) {
   const sorted = trains.slice().sort((a, b) => new Date(a.bestTime) - new Date(b.bestTime));
   const results = [];
@@ -202,33 +258,75 @@ function deduplicateTrains(trains) {
   return results;
 }
 
-// Poll LDBSVWS for a single station, return parsed trains
-async function pollStation(station, token, useStaffVersion = true) {
-  const url = useStaffVersion ? LDBSVWS_URL : LDB_URL;
-  const body = buildSoapRequest(station, token, useStaffVersion);
-  const xml = await soapFetch(url, body);
-  return parseTrains(xml);
+// ---- Station polling ----
+
+async function pollStationRdm(station, apiKey, staffVersion = false) {
+  const basePath = staffVersion ? RDM_LDBSV_PATH : RDM_LDB_PATH;
+  const url = `${RDM_BASE}${basePath}/${station}?numRows=30&timeWindow=120`;
+  const resp = await httpGet(url, { 'x-apikey': apiKey });
+
+  if (resp.status !== 200) {
+    throw new Error(`RDM HTTP ${resp.status}: ${resp.body.slice(0, 300)}`);
+  }
+
+  return parseRdmJson(resp.body);
 }
 
-// Poll all stations for a crossing, deduplicate, return combined list
-async function pollCrossing(crossingId, config, token) {
-  const stations = [config.ldb.station, ...(config.ldb.adjacentStations || [])];
+async function pollStationSoap(station, token, staffVersion = false) {
+  const url = staffVersion ? SOAP_LDBSV_URL : SOAP_LDB_URL;
+  const body = buildSoapRequest(station, token, staffVersion);
+  const resp = await httpPost(url, body, { 'Content-Type': 'application/soap+xml; charset=utf-8' });
+
+  if (resp.status !== 200) {
+    throw new Error(`SOAP HTTP ${resp.status}: ${resp.body.slice(0, 300)}`);
+  }
+
+  return parseSoapXml(resp.body);
+}
+
+// ---- Main polling function ----
+
+/**
+ * Poll for a crossing. Returns deduplicated train list.
+ *
+ * auth = { mode: 'rdm', apiKey: '...' }     — RDM REST API
+ *    or { mode: 'soap', token: '...' }       — Direct SOAP endpoint
+ */
+async function pollCrossing(crossingId, config, auth) {
+  const station = config.ldb.station;
   const allTrains = [];
 
-  for (const station of stations) {
-    try {
-      // Try Staff Version first, fall back to public LDB
-      let trains;
+  try {
+    let trains;
+    if (auth.mode === 'rdm') {
+      // Try Staff Version on RDM first
       try {
-        trains = await pollStation(station, token, true);
+        trains = await pollStationRdm(station, auth.apiKey, true);
+        if (trains.length > 0) {
+          console.log(`  ${station}: ${trains.length} trains (RDM Staff Version)`);
+        } else {
+          throw new Error('No trains returned from Staff Version');
+        }
       } catch (svErr) {
-        console.warn(`LDBSVWS failed for ${station}, falling back to public LDB:`, svErr.message);
-        trains = await pollStation(station, token, false);
+        console.warn(`  RDM Staff Version failed for ${station}: ${svErr.message}`);
+        console.log(`  Trying RDM public LDB...`);
+        trains = await pollStationRdm(station, auth.apiKey, false);
+        console.log(`  ${station}: ${trains.length} trains (RDM public LDB)`);
       }
-      allTrains.push(...trains);
-    } catch (err) {
-      console.error(`LDB poll failed for ${station}:`, err.message);
+    } else {
+      // SOAP mode
+      try {
+        trains = await pollStationSoap(station, auth.token, true);
+        console.log(`  ${station}: ${trains.length} trains (SOAP Staff Version)`);
+      } catch (svErr) {
+        console.warn(`  SOAP Staff Version failed: ${svErr.message}`);
+        trains = await pollStationSoap(station, auth.token, false);
+        console.log(`  ${station}: ${trains.length} trains (SOAP public LDB)`);
+      }
     }
+    allTrains.push(...trains);
+  } catch (err) {
+    console.error(`  LDB poll failed for ${station}:`, err.message);
   }
 
   const deduped = deduplicateTrains(allTrains);
@@ -236,4 +334,4 @@ async function pollCrossing(crossingId, config, token) {
   return deduped;
 }
 
-module.exports = { pollCrossing, pollStation, parseTrains };
+module.exports = { pollCrossing, pollStationRdm, pollStationSoap, parseRdmJson, parseSoapXml };

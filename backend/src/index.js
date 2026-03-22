@@ -11,15 +11,22 @@ const CONFIG_PATH = path.join(__dirname, '..', 'config', 'crossings.json');
 const crossingsConfig = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
 
 // Environment
-const NR_TOKEN_SV = process.env.NR_TOKEN_SV;
+const RDM_API_KEY = process.env.RDM_API_KEY;       // RDM consumer key (preferred)
+const NR_TOKEN_SV = process.env.NR_TOKEN_SV;       // Direct SOAP token (alternative)
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const SCHEDULE_FILE = process.env.SCHEDULE_FILE || '';
 const POLL_INTERVAL_MS = 30000; // 30 seconds
 
-// Validate
-if (!NR_TOKEN_SV) {
-  console.error('ERROR: NR_TOKEN_SV environment variable is required');
-  console.error('Set it to your LDBSVWS (Staff Version) API token');
+// Build auth config — RDM takes priority
+let auth;
+if (RDM_API_KEY) {
+  auth = { mode: 'rdm', apiKey: RDM_API_KEY };
+} else if (NR_TOKEN_SV) {
+  auth = { mode: 'soap', token: NR_TOKEN_SV };
+} else {
+  console.error('ERROR: Set either RDM_API_KEY (RDM consumer key) or NR_TOKEN_SV (SOAP token)');
+  console.error('  RDM_API_KEY = your consumer key from raildata.org.uk');
+  console.error('  NR_TOKEN_SV = your SOAP token from realtime.nationalrail.co.uk');
   process.exit(1);
 }
 
@@ -34,7 +41,7 @@ for (const [id, config] of Object.entries(crossingsConfig)) {
 async function pollAll() {
   for (const [id, config] of Object.entries(crossingsConfig)) {
     try {
-      const trains = await pollCrossing(id, config, NR_TOKEN_SV);
+      const trains = await pollCrossing(id, config, auth);
       crossingStates[id].updateLdbTrains(trains);
       console.log(`LDB ${id}: ${trains.length} trains, state=${crossingStates[id].state}`);
     } catch (err) {
@@ -72,7 +79,8 @@ async function main() {
   console.log('=== Rail Crossing Backend v2 ===');
   console.log(`Crossings: ${Object.keys(crossingsConfig).join(', ')}`);
   console.log(`Port: ${PORT}`);
-  console.log(`Staff Version token: ${NR_TOKEN_SV ? '****' + NR_TOKEN_SV.slice(-4) : 'NOT SET'}`);
+  console.log(`Auth mode: ${auth.mode === 'rdm' ? 'RDM REST API' : 'Direct SOAP'}`);
+  console.log(`API key: ****${(auth.apiKey || auth.token || '').slice(-4)}`);
   console.log(`Schedule file: ${SCHEDULE_FILE || '(none)'}`);
   console.log();
 
