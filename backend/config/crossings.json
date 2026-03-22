@@ -1,0 +1,57 @@
+{
+  "portslade": {
+    "name": "Portslade Level Crossing",
+    "road": "Boundary Road",
+    "crossingType": "MCB-CCTV",
+    "signalBox": "Lancing",
+
+    "ldb": {
+      "station": "PLD",
+      "adjacentStations": ["FSG", "HOV"]
+    },
+
+    "td": {
+      "area": "LA",
+      "eastbound": {
+        "approach": { "from": "0006", "to": "0004" },
+        "clear":    { "from": "0004", "to": "0002" }
+      },
+      "westbound": {
+        "approach": { "from": "0003", "to": "0005" },
+        "clear":    { "from": "0005", "to": "0007" }
+      },
+      "earlyWarning": {
+        "eastbound": { "from": "0008", "to": "0006" },
+        "westbound": { "from": "0001", "to": "0003" }
+      }
+    },
+
+    "schedule": {
+      "tiplocs_west": [
+        "FSHRSGT", "STHWICK", "SHRHMBS", "LNCG",
+        "WORTHNG", "WWRTHNG", "WWRTMS", "EWRTHNG", "DRNGTOS",
+        "GORNGBS", "ANGMRNG", "ARUNDLJ", "LTLHMJN", "LTLHMPT",
+        "FORD", "BRHM", "CHCHSTR", "PSEA", "PHBR",
+        "HAVANT", "FAREHAM", "COSHAM", "SOTON",
+        "BOSHAM", "NUTBORN", "SBOURNE", "EMSWTH"
+      ],
+      "tiplocs_east": [
+        "ALDTON", "HOVE", "HOVEY36", "BRGHTN", "LOVRSWS", "BRGHWS",
+        "BRGHRC", "BRGHTTY", "BRGH280", "BRGHLRD",
+        "PRSP", "PRSPSDG"
+      ],
+      "interpolation": {
+        "eastbound": { "from": "SHRHMBS", "to": "HOVE", "fraction": 0.7 },
+        "westbound": { "from": "HOVE", "to": "SHRHMBS", "fraction": 0.3 }
+      }
+    },
+
+    "timing": {
+      "closeBefore": { "east": 1.5, "west": 2.5 },
+      "openAfter":   { "east": 0.5, "west": 0.5 },
+      "consecutiveWindow": 1.5
+    },
+
+    "feedbackUrl": "https://script.google.com/macros/s/AKfycbysyTa8ic8nSz2_-_wBKnrzss2DsNAnlIrFKYa9H_We1QrxRVXl1iKh6MvWSNdE7XjbAw/exec"
+  }
+}

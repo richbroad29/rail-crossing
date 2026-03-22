@@ -1,0 +1,14 @@
+{
+  "name": "rail-crossing-backend",
+  "version": "2.0.0",
+  "description": "Level crossing barrier prediction backend — LDBSVWS + Schedule + TD",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {}
+}

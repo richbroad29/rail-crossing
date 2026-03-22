@@ -1,0 +1,278 @@
+const logger = require('./logger');
+
+// States: OPEN, CLOSING_SOON, CLOSED, OPENING_SOON
+const CLOSING_SOON_WINDOW_MS = 5 * 60 * 1000; // Show "closing soon" 5 min before
+
+class CrossingState {
+  constructor(crossingId, config) {
+    this.id = crossingId;
+    this.config = config;
+    this.timing = config.timing;
+
+    // Data sources
+    this.ldbTrains = [];           // From LDBSVWS polling
+    this.scheduleTrains = [];      // From CIF schedule file
+    this.tdEvents = [];            // Phase 2: from TD berth steps
+
+    // Computed state
+    this.closurePeriods = [];
+    this.state = 'OPEN';
+    this.lastStateChange = new Date();
+
+    // Train history (for feedback correlation)
+    this.trainHistory = [];
+    this.lastPassedTrain = null;
+  }
+
+  // Update LDB trains (called every 30s from poller)
+  updateLdbTrains(trains) {
+    this.ldbTrains = trains;
+    this._updateTrainHistory(trains);
+    this._recompute();
+  }
+
+  // Update schedule trains (called once at startup / daily)
+  updateScheduleTrains(trains) {
+    this.scheduleTrains = trains;
+    this._recompute();
+  }
+
+  // Phase 2: Record a TD berth event
+  recordTdEvent(event) {
+    this.tdEvents.push({ ...event, timestamp: new Date() });
+    // Keep only last hour
+    const cutoff = Date.now() - 3600000;
+    this.tdEvents = this.tdEvents.filter(e => e.timestamp.getTime() > cutoff);
+    logger.logTd(this.id, event);
+    this._recompute();
+  }
+
+  // Merge and deduplicate trains from all sources
+  _mergeTrains() {
+    const now = new Date();
+    const merged = [];
+    const seen = new Set();
+
+    // LDB trains take priority (real-time, highest accuracy)
+    for (const t of this.ldbTrains) {
+      const key = `${t.destination}|${Math.round(new Date(t.bestTime).getTime() / 60000)}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        merged.push({
+          ...t,
+          bestTime: new Date(t.bestTime),
+          scheduledTime: t.scheduledTime ? new Date(t.scheduledTime) : null,
+          confidence: 'high'
+        });
+      }
+    }
+
+    // Schedule trains fill gaps (freight, ECS not in Darwin)
+    for (const t of this.scheduleTrains) {
+      const estTime = this._scheduleTimeToDate(t.estimatedCrossingMins);
+      if (!estTime || estTime < new Date(now.getTime() - 600000)) continue; // Skip past trains
+
+      // Check if this train is already covered by LDB
+      const isLdbCovered = merged.some(m =>
+        m.direction === t.direction &&
+        Math.abs(m.bestTime.getTime() - estTime.getTime()) <= 180000 // 3 min window
+      );
+
+      if (!isLdbCovered) {
+        merged.push({
+          origin: t.origin,
+          destination: t.destination,
+          operator: t.operator,
+          direction: t.direction,
+          bestTime: estTime,
+          scheduledTime: estTime,
+          headcode: t.headcode,
+          trainType: t.trainType,
+          delayMins: 0,
+          isUncertain: true,  // Schedule-only = less certain
+          etaText: 'Timetabled',
+          source: 'schedule',
+          confidence: t.trainType === 'freight' ? 'low' : 'medium',
+          dedupKey: `sch|${t.uid}`
+        });
+      }
+    }
+
+    merged.sort((a, b) => a.bestTime - b.bestTime);
+    return merged;
+  }
+
+  // Convert schedule minutes-since-midnight to Date for today
+  _scheduleTimeToDate(mins) {
+    if (mins === null || mins === undefined) return null;
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate(),
+      Math.floor(mins / 60) % 24, Math.round(mins % 60), 0);
+  }
+
+  // Compute closure periods from merged train list
+  _computeClosures(trains) {
+    if (!trains.length) return [];
+
+    const periods = [];
+    let start = null, end = null, currentTrains = [];
+
+    for (const t of trains) {
+      const cb = this._getCloseBefore(t.direction);
+      const oa = this._getOpenAfter(t.direction);
+
+      const closeTime = new Date(t.bestTime.getTime() - cb * 60000);
+      const openTime = new Date(t.bestTime.getTime() + oa * 60000);
+
+      if (start === null) {
+        start = closeTime;
+        end = openTime;
+        currentTrains = [t];
+      } else if (closeTime.getTime() - end.getTime() <= this.timing.consecutiveWindow * 60000) {
+        // Merge with current period
+        end = new Date(Math.max(end.getTime(), openTime.getTime()));
+        currentTrains.push(t);
+      } else {
+        // New period
+        periods.push(this._makePeriod(start, end, currentTrains));
+        start = closeTime;
+        end = openTime;
+        currentTrains = [t];
+      }
+    }
+
+    if (start) {
+      periods.push(this._makePeriod(start, end, currentTrains));
+    }
+
+    return periods;
+  }
+
+  _makePeriod(start, end, trains) {
+    // Determine reason
+    let reason = 'single_train';
+    if (trains.length > 1) reason = 'merged_consecutive';
+
+    // Count sources
+    const sources = new Set(trains.map(t => t.source));
+    const hasFreight = trains.some(t => t.trainType === 'freight');
+    const hasEcs = trains.some(t => t.trainType === 'ecs');
+
+    return {
+      start: start.toISOString(),
+      end: end.toISOString(),
+      durationMins: Math.round((end - start) / 60000),
+      reason,
+      trainCount: trains.length,
+      hasFreight,
+      hasEcs,
+      sources: [...sources],
+      trains: trains.map(t => ({
+        direction: t.direction,
+        origin: t.origin,
+        destination: t.destination,
+        operator: t.operator,
+        bestTime: t.bestTime.toISOString(),
+        scheduledTime: t.scheduledTime?.toISOString(),
+        headcode: t.headcode,
+        trainType: t.trainType,
+        delayMins: t.delayMins || 0,
+        etaText: t.etaText,
+        confidence: t.confidence,
+        source: t.source
+      }))
+    };
+  }
+
+  _getCloseBefore(direction) {
+    const cb = this.timing.closeBefore;
+    if (typeof cb === 'object') return cb[direction] || 1.5;
+    return cb || 1.5;
+  }
+
+  _getOpenAfter(direction) {
+    const oa = this.timing.openAfter;
+    if (typeof oa === 'object') return oa[direction] || 0.5;
+    return oa || 0.5;
+  }
+
+  // Recompute everything
+  _recompute() {
+    const merged = this._mergeTrains();
+    this.closurePeriods = this._computeClosures(merged);
+
+    const now = new Date();
+    const oldState = this.state;
+
+    // Determine current state
+    const currentClosure = this.closurePeriods.find(p =>
+      now >= new Date(p.start) && now <= new Date(p.end)
+    );
+
+    if (currentClosure) {
+      this.state = 'CLOSED';
+    } else {
+      // Check if closing soon
+      const nextClosure = this.closurePeriods.find(p => new Date(p.start) > now);
+      if (nextClosure && (new Date(nextClosure.start) - now) <= CLOSING_SOON_WINDOW_MS) {
+        this.state = 'CLOSING_SOON';
+      } else {
+        this.state = 'OPEN';
+      }
+    }
+
+    if (this.state !== oldState) {
+      this.lastStateChange = now;
+      logger.logState(this.id, oldState, this.state, 'recompute');
+    }
+  }
+
+  // Update train history (for feedback)
+  _updateTrainHistory(newTrains) {
+    for (const t of newTrains) {
+      const key = t.dedupKey;
+      const idx = this.trainHistory.findIndex(h => h.dedupKey === key);
+      if (idx >= 0) {
+        this.trainHistory[idx] = t;
+      } else {
+        this.trainHistory.push(t);
+      }
+    }
+    // Prune history older than 1 hour
+    const cutoff = new Date(Date.now() - 3600000);
+    this.trainHistory = this.trainHistory.filter(t =>
+      new Date(t.bestTime) > cutoff
+    );
+  }
+
+  // Get the full state for the API
+  getApiState() {
+    const now = new Date();
+    const upcoming = this.closurePeriods.filter(p => new Date(p.end) > now);
+    const current = upcoming.find(p => now >= new Date(p.start) && now <= new Date(p.end));
+    const next = upcoming.find(p => new Date(p.start) > now);
+
+    return {
+      crossingId: this.id,
+      name: this.config.name,
+      road: this.config.road,
+      state: this.state,
+      lastStateChange: this.lastStateChange.toISOString(),
+      currentClosure: current || null,
+      nextClosure: next || null,
+      upcomingClosures: upcoming.slice(0, 10),
+      nextCloseTime: next ? next.start : null,
+      nextOpenTime: current ? current.end : (next ? next.end : null),
+      trainSources: {
+        ldb: this.ldbTrains.length,
+        schedule: this.scheduleTrains.filter(t => {
+          const est = this._scheduleTimeToDate(t.estimatedCrossingMins);
+          return est && est > now;
+        }).length
+      },
+      lastRefresh: new Date().toISOString()
+    };
+  }
+}
+
+module.exports = CrossingState;
