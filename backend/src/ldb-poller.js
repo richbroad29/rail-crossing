@@ -11,8 +11,7 @@ const logger = require('./logger');
 
 // RDM REST endpoints
 const RDM_BASE = 'https://api1.raildata.org.uk';
-const RDM_LDB_PATH = '/1010-live-arrival-and-departure-board/LDBWS/api/20220120/GetArrDepBoardWithDetails';
-const RDM_LDBSV_PATH = '/1010-live-arrival-and-departure-board-staff-arr-dep/LDBSVWS/api/20220120/GetArrDepBoardWithDetails';
+const RDM_LDBSV_PATH = '/1010-live-arrival-and-departure-boards---staff-version1_0/LDBSVWS/api/20220120/GetArrDepBoardWithDetails';
 
 // Direct SOAP endpoints (fallback)
 const SOAP_LDB_URL = 'https://lite.realtime.nationalrail.co.uk/OpenLDBWS/ldb12.asmx';
@@ -260,9 +259,10 @@ function deduplicateTrains(trains) {
 
 // ---- Station polling ----
 
-async function pollStationRdm(station, apiKey, staffVersion = false) {
-  const basePath = staffVersion ? RDM_LDBSV_PATH : RDM_LDB_PATH;
-  const url = `${RDM_BASE}${basePath}/${station}?numRows=30&timeWindow=120`;
+async function pollStationRdm(station, apiKey) {
+  const now = new Date();
+  const time = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
+  const url = `${RDM_BASE}${RDM_LDBSV_PATH}/${station}/${time}`;
   const resp = await httpGet(url, { 'x-apikey': apiKey });
 
   if (resp.status !== 200) {
@@ -299,20 +299,8 @@ async function pollCrossing(crossingId, config, auth) {
   try {
     let trains;
     if (auth.mode === 'rdm') {
-      // Try Staff Version on RDM first
-      try {
-        trains = await pollStationRdm(station, auth.apiKey, true);
-        if (trains.length > 0) {
-          console.log(`  ${station}: ${trains.length} trains (RDM Staff Version)`);
-        } else {
-          throw new Error('No trains returned from Staff Version');
-        }
-      } catch (svErr) {
-        console.warn(`  RDM Staff Version failed for ${station}: ${svErr.message}`);
-        console.log(`  Trying RDM public LDB...`);
-        trains = await pollStationRdm(station, auth.apiKey, false);
-        console.log(`  ${station}: ${trains.length} trains (RDM public LDB)`);
-      }
+      trains = await pollStationRdm(station, auth.apiKey);
+      console.log(`  ${station}: ${trains.length} trains (RDM Staff Version)`);
     } else {
       // SOAP mode
       try {
