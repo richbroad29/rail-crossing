@@ -261,7 +261,15 @@ function deduplicateTrains(trains) {
 
 async function pollStationRdm(station, apiKey) {
   const now = new Date();
-  const time = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
+  const p = Object.fromEntries(
+    new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Europe/London',
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+      hour12: false
+    }).formatToParts(now).map(({ type, value }) => [type, value])
+  );
+  const time = `${p.year}${p.month}${p.day}T${p.hour}${p.minute}${p.second}`;
   const url = `${RDM_BASE}${RDM_LDBSV_PATH}/${station}/${time}`;
   const resp = await httpGet(url, { 'x-apikey': apiKey });
 
