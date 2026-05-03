@@ -79,7 +79,14 @@ function isEastOrigin(name) {
 // ---- Time parsing ----
 
 function parseTime(timeStr) {
-  if (!timeStr || !timeStr.includes(':')) return null;
+  if (!timeStr) return null;
+  // ISO 8601 datetime (RDM REST returns e.g. "2026-05-03T21:56:00")
+  if (timeStr.includes('T') && timeStr.includes('-')) {
+    const d = new Date(timeStr);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  // HH:MM fallback (SOAP path)
+  if (!timeStr.includes(':')) return null;
   const [h, m] = timeStr.split(':').map(Number);
   const now = new Date();
   const d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m, 0);
@@ -161,6 +168,7 @@ function parseRdmJson(body) {
     if (!svc) continue;
     if (svc.isCancelled) continue;
     if (svc.serviceType === 'bus') continue;
+    if (svc.category === 'BR' || svc.category === 'BS') continue;
 
     const origin = svc.origin?.location?.[0]?.locationName ||
                    svc.origin?.[0]?.locationName || '?';
