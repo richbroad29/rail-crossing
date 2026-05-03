@@ -136,7 +136,7 @@ function parseTrains(xml) {
 
     results.push({
       origin: origin, destination: dest, scheduledTime: parseTimeStr(sch),
-      bestTime: bestTime, isRealtime: true, isDelayed: delayMins > 0,
+      bestTime: bestTime, isRealtime: !!(et && et !== 'On time' && et.indexOf(':') >= 0), isDelayed: delayMins > 0,
       isUncertain: isUncertain,
       delayMins: delayMins, etaText: et || 'On time', direction: direction,
       operator: operator, dedupKey: (sch || '') + (dest || '')
@@ -177,7 +177,7 @@ function parseXmlLegacy(xml, type) {
     if (destBlock >= 0) { dest = getVal(sv.substring(destBlock, destBlock + 200), 'locationName') || '?'; }
     var operMatch = sv.indexOf(':operator>');
     var operator = '?';
-    if (operMatch >= 0) { operator = getVal(sv.substring(operMatch - 5, operMatch + 100), 'operator') || '?'; }
+    if (operMatch >= 0) { operator = getVal(sv.substring(Math.max(0, operMatch - 5), operMatch + 100), 'operator') || '?'; }
     var direction = 'east';
     if (type === 'arr') { if (isEastOrigin(origin)) direction = 'west'; }
     else { if (isEastOrigin(dest)) direction = 'east'; else direction = 'west'; }
@@ -217,6 +217,7 @@ function deduplicateTrains(trainList) {
 }
 
 async function fetchNationalRail() {
+  lastError = '';
   try {
     // Primary: single combined call (requires updated worker)
     var url = API_BASE + '/?station=' + CFG.station;
@@ -228,6 +229,7 @@ async function fetchNationalRail() {
     // If parseTrains found nothing, the response might be from old worker — fall through
   } catch(e) {
     console.warn('NR API (combined) error:', e);
+    lastError = e.message;
   }
 
   // Fallback: legacy dual-call for old worker that doesn't support combined endpoint
@@ -245,6 +247,7 @@ async function fetchNationalRail() {
       for (var j = 0; j < svcs2.length; j++) results.push(svcs2[j]);
     } catch(e) { console.warn('NR API (' + type + ') error:', e); lastError = e.message; }
   }
+  if (!results.length && !lastError) lastError = 'No train data returned';
   return deduplicateTrains(results);
 }
 
@@ -314,9 +317,17 @@ async function refreshData() {
       $('dataMode').style.color = '#22D3EE';
     } else {
       trains = [];
-      apiMode = 'offline';
-      $('dataMode').textContent = 'OFFLINE';
-      $('dataMode').style.color = '#FCA5A5';
+      if (lastError) {
+        apiMode = 'error';
+        $('dataMode').textContent = 'ERROR';
+        $('dataMode').style.color = '#FCA5A5';
+        $('errorBox').textContent = 'Error: ' + lastError;
+        $('errorBox').classList.remove('hidden');
+      } else {
+        apiMode = 'offline';
+        $('dataMode').textContent = 'OFFLINE';
+        $('dataMode').style.color = '#FCA5A5';
+      }
     }
     closurePeriods = computeClosures(trains);
     $('lastRefreshTime').textContent = fmtShort(new Date());
@@ -394,7 +405,7 @@ function renderClosures() {
     $('showMoreBtn').disabled = false;
     $('showMoreBtn').style.opacity = '';
     $('showMoreBtn').style.cursor = '';
-  } else if (closuresVisible >= relevant.length && relevant.length > 0) {
+  } else if (closuresVisible > 3 && closuresVisible >= relevant.length && relevant.length > 0) {
     $('showMoreBtn').textContent = 'Return later for further closures';
     $('showMoreBtn').classList.remove('hidden');
     $('showMoreBtn').disabled = true;
