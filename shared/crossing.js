@@ -15,6 +15,7 @@ var closuresVisible = 3;
 
 var isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
 var isAndroid = /Android/.test(navigator.userAgent);
+var lastRefreshTs = null;
 
 function $(id) { return document.getElementById(id); }
 function fmtTime(d) { if (!d) return '--:--'; return d.toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit',second:'2-digit'}); }
@@ -313,6 +314,7 @@ async function refreshData() {
       var cutoff = new Date(new Date().getTime() - 3600000);
       trainHistory = trainHistory.filter(function(t) { return t.bestTime > cutoff; });
       apiMode = 'live';
+      lastRefreshTs = new Date();
       $('dataMode').textContent = 'LIVE';
       $('dataMode').style.color = '#22D3EE';
     } else {
@@ -332,6 +334,7 @@ async function refreshData() {
     closurePeriods = computeClosures(trains);
     $('lastRefreshTime').textContent = fmtShort(new Date());
     renderClosures();
+    renderDebugPanel();
     setRefreshState('done');
   } catch(e) {
     console.error('Refresh error:', e);
@@ -484,6 +487,44 @@ function updateStatus() {
       }
     }
   }
+}
+
+function renderDebugPanel() {
+  var panel = $('debugPanel');
+  if (!panel) return;
+  if (window.location.search.indexOf('debug=1') < 0) { panel.classList.add('hidden'); return; }
+  panel.classList.remove('hidden');
+
+  var html = '<div class="dbg-hdr">DEBUG</div>';
+  html += '<div class="dbg-row">Last refresh: ' + (lastRefreshTs ? fmtTime(lastRefreshTs) : '—') + '</div>';
+  html += '<div class="dbg-row">Trains in last refresh: ' + trains.length + '</div>';
+
+  if (CFG) {
+    var cb = CFG.closeBefore, oa = CFG.openAfter;
+    var cbStr = (typeof cb === 'object') ? 'E:' + cb.east + 'm W:' + cb.west + 'm' : cb + 'm';
+    var oaStr = (typeof oa === 'object') ? 'E:' + oa.east + 'm W:' + oa.west + 'm' : oa + 'm';
+    html += '<div class="dbg-row">closeBefore: ' + cbStr + ' · openAfter: ' + oaStr + '</div>';
+  }
+
+  html += '<div class="dbg-divider"></div>';
+
+  if (!trains.length) {
+    html += '<div class="dbg-row dbg-muted">No trains</div>';
+  } else {
+    for (var i = 0; i < trains.length; i++) {
+      var t = trains[i];
+      var cl = new Date(t.bestTime.getTime() - getCloseBefore(t.direction) * 60000);
+      var op = new Date(t.bestTime.getTime() + getOpenAfter(t.direction) * 60000);
+      var arrow = t.direction === 'east' ? '→' : '←';
+      html += '<div class="dbg-row">' +
+        fmtShort(t.scheduledTime || t.bestTime) + ' ' + arrow + ' ' +
+        t.origin + ' → ' + t.destination +
+        ' &nbsp;[' + fmtShort(cl) + '–' + fmtShort(op) + ']' +
+        '</div>';
+    }
+  }
+
+  panel.innerHTML = html;
 }
 
 function sendFeedback(state) {

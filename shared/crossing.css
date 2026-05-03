@@ -76,3 +76,8 @@ body{background:#0F172A;color:#E2E8F0;font-family:-apple-system,BlinkMacSystemFo
 .crossing-link:active{background:#334155}
 .crossing-link h3{font-size:15px;font-weight:600;margin-bottom:4px}
 .crossing-link span{font-size:11px;color:#94A3B8}
+.debug-panel{background:#0A1120;border:1px solid #1E293B;border-radius:8px;padding:10px 12px;margin-bottom:16px;font-family:monospace;font-size:10px;color:#475569;line-height:1.8}
+.dbg-hdr{color:#334155;font-size:9px;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:4px}
+.dbg-row{color:#475569;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dbg-muted{color:#334155}
+.dbg-divider{border-top:1px solid #1E293B;margin:6px 0}
