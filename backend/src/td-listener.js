@@ -2,6 +2,8 @@ const stompit = require('stompit');
 const fs = require('fs');
 const path = require('path');
 
+// NROD's public feed is plain STOMP — they do not expose a TLS endpoint.
+// Credentials travel in the clear; this is the documented NROD design.
 const HOST = 'publicdatafeeds.networkrail.co.uk';
 const PORT = 61618;
 const TOPIC = '/topic/TD_ALL_SIG_AREA';
@@ -69,7 +71,6 @@ function connect() {
   const connectOptions = {
     host: HOST,
     port: PORT,
-    ssl: true,
     connectHeaders: {
       'host': '/',
       'login': process.env.NR_FEED_USER,
