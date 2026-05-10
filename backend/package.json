@@ -10,5 +10,7 @@
   "engines": {
     "node": ">=20.0.0"
   },
-  "dependencies": {}
+  "dependencies": {
+    "stompit": "^1.0.0"
+  }
 }

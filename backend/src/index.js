@@ -5,6 +5,8 @@ const { parseScheduleFile } = require('./schedule-parser');
 const CrossingState = require('./crossing-state');
 const { createApi } = require('./api');
 const logger = require('./logger');
+const tdListener = require('./td-listener');
+const tdRotation = require('./td-rotation');
 
 // Load config
 const CONFIG_PATH = path.join(__dirname, '..', 'config', 'crossings.json');
@@ -91,6 +93,10 @@ async function main() {
 
   // Start API server
   createApi(crossingStates, PORT);
+
+  // Start TD feed listener and daily log rotation (additive — does not affect LDB/state path)
+  tdListener.start();
+  tdRotation.start();
 
   // Initial LDB poll
   await pollAll();
