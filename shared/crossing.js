@@ -29,6 +29,10 @@ function fmtUncertainty(secs) {
   if (secs % 60 === 0) return (secs / 60) + ' min';
   return secs + 's';
 }
+function fmtCountdownRough(ms) {
+  var m = Math.round(ms / 60000);
+  return m <= 0 ? 'now' : '~' + m + ' min';
+}
 function getColors(st) {
   switch(st) {
     case 'CLOSED': return {bg:'#DC2626',text:'#FFF',glow:'0 0 30px rgba(220,38,38,.5)'};
@@ -396,10 +400,12 @@ function renderClosures() {
       var secsUntil = p.start.getTime() - now.getTime();
       if (w.imminent) {
         html += '<div class="closure-time-group"><span class="closure-time closure-imminent">Any moment now</span></div>';
+        html += '<span class="closure-pill">~' + duration + ' min</span>';
       } else {
         html += '<div class="closure-time-group"><span class="closure-time">' + fmtShort(p.start) + '</span><span class="closure-uncertainty">\u00B1' + fmtUncertainty(w.halfWidthSecs) + '</span></div>';
+        var countdownStr = w.halfWidthSecs >= 60 ? fmtCountdownRough(secsUntil) : fmtCountdown(secsUntil);
+        html += '<span class="closure-pill">~' + duration + ' min \u00B7 in ' + countdownStr + '</span>';
       }
-      html += '<span class="closure-pill">~' + duration + ' min \u00B7 in ' + fmtCountdown(secsUntil) + '</span>';
     }
     html += '</div>';
     var hasUncertain = false;
