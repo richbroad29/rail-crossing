@@ -12,6 +12,14 @@
     "consecutiveWindow": 1.5,
     "signals": {"east": "LG 4", "west": "LG 5"},
     "berths": {"east": "LA0004", "west": "LA0005"},
-    "feedbackUrl": "https://script.google.com/macros/s/AKfycbysyTa8ic8nSz2_-_wBKnrzss2DsNAnlIrFKYa9H_We1QrxRVXl1iKh6MvWSNdE7XjbAw/exec"
+    "feedbackUrl": "https://script.google.com/macros/s/AKfycbysyTa8ic8nSz2_-_wBKnrzss2DsNAnlIrFKYa9H_We1QrxRVXl1iKh6MvWSNdE7XjbAw/exec",
+
+    "_comment_confidenceWindows": "Heuristic defaults — to be calibrated against empirical TD event logs once sufficient data is collected",
+    "confidenceWindows": {
+      "schedule_secs": 120,
+      "ldb_near_secs": 90,
+      "td_approach_secs": 60,
+      "td_protecting_secs": 30
+    }
   }
 }

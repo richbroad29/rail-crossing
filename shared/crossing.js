@@ -25,6 +25,10 @@ function fmtCountdown(ms) {
   var s = Math.floor(ms / 1000), m = Math.floor(s / 60), sec = s % 60;
   return m > 0 ? m + 'm ' + sec + 's' : sec + 's';
 }
+function fmtUncertainty(secs) {
+  if (secs % 60 === 0) return (secs / 60) + ' min';
+  return secs + 's';
+}
 function getColors(st) {
   switch(st) {
     case 'CLOSED': return {bg:'#DC2626',text:'#FFF',glow:'0 0 30px rgba(220,38,38,.5)'};
@@ -267,10 +271,30 @@ function computeClosures(trainList) {
       ce = new Date(Math.max(ce.getTime(), op.getTime()));
       ct.push(t);
     }
-    else { periods.push({start:cs, end:ce, trains:ct}); cs = cl; ce = op; ct = [t]; }
+    else { var pb = {start:cs, end:ce, trains:ct}; pb.window = getWindowTier(pb); periods.push(pb); cs = cl; ce = op; ct = [t]; }
   }
-  if (cs) periods.push({start:cs, end:ce, trains:ct});
+  if (cs) { var pf = {start:cs, end:ce, trains:ct}; pf.window = getWindowTier(pf); periods.push(pf); }
   return periods;
+}
+
+function getWindowTier(closure) {
+  var cfg = CFG || {};
+  var cw = cfg.confidenceWindows || {};
+  var now = new Date();
+  var secsToStart = (closure.start.getTime() - now.getTime()) / 1000;
+
+  for (var i = 0; i < closure.trains.length; i++) {
+    var t = closure.trains[i];
+    if (t.tdBerth === 'imminent')   return { imminent: true,  tier: 'td_imminent',   halfWidthSecs: 0 };
+    if (t.tdBerth === 'protecting') return { imminent: false, tier: 'td_protecting', halfWidthSecs: cw.td_protecting_secs || 30 };
+    if (t.tdBerth === 'approach')   return { imminent: false, tier: 'td_approach',   halfWidthSecs: cw.td_approach_secs  || 60 };
+  }
+
+  var hasLdb = closure.trains.some(function(t) { return !t.source || t.source === 'ldb'; });
+  if (hasLdb && secsToStart <= 300) {
+    return { imminent: false, tier: 'ldb', halfWidthSecs: cw.ldb_near_secs || 90 };
+  }
+  return { imminent: false, tier: 'schedule', halfWidthSecs: cw.schedule_secs || 120 };
 }
 
 var refreshSvgArrow = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 8a6 6 0 11-1.5-4"/><path d="M14 2v4h-4"/></svg>';
@@ -368,8 +392,13 @@ function renderClosures() {
       html += '<span class="closure-time" style="color:#FCA5A5">NOW \u2014 ' + fmtShort(p.end) + '</span>';
       html += '<span class="closure-pill closure-pill-active">~' + duration + ' min \u00B7 opens ' + fmtCountdown(p.end.getTime() - now.getTime()) + '</span>';
     } else {
-      html += '<span class="closure-time">' + fmtShort(p.start) + ' \u2014 ' + fmtShort(p.end) + '</span>';
+      var w = p.window || { imminent: false, halfWidthSecs: 120 };
       var secsUntil = p.start.getTime() - now.getTime();
+      if (w.imminent) {
+        html += '<div class="closure-time-group"><span class="closure-time closure-imminent">Any moment now</span></div>';
+      } else {
+        html += '<div class="closure-time-group"><span class="closure-time">' + fmtShort(p.start) + '</span><span class="closure-uncertainty">\u00B1' + fmtUncertainty(w.halfWidthSecs) + '</span></div>';
+      }
       html += '<span class="closure-pill">~' + duration + ' min \u00B7 in ' + fmtCountdown(secsUntil) + '</span>';
     }
     html += '</div>';
@@ -594,35 +623,6 @@ function showModal(type) {
       body = '<p><strong>iPhone (Safari):</strong></p><ol><li>Tap the Share button ' + shareIcon + '</li><li>Tap "Add to Home Screen"</li><li>Tap Add</li></ol>';
       body += '<p><strong>Android (Chrome):</strong></p><ol><li>Tap the three-dot menu ' + dotsIcon + '</li><li>Tap "Add to Home screen"</li><li>Tap Add</li></ol>';
     }
-  } else if (type === 'voice') {
-    if (isIOS) {
-      title = 'Add to Siri \u2014 iPhone';
-      body = '<p>Ask the crossing status hands-free:</p><ol>';
-      body += '<li>Install <strong><a href="https://apps.apple.com/app/scriptable/id1405459188" target="_blank" style="color:#38BDF8">Scriptable</a></strong> from the App Store (free)</li>';
-      body += '<li>Open Scriptable, create a new script called <strong>"Crossing Siri"</strong></li>';
-      body += '<li>Paste these 3 lines:<div style="background:#0F172A;padding:8px;border-radius:6px;margin:6px 0;font-family:monospace;font-size:10px;word-break:break-all;color:#6EE7B7">';
-      body += "var r = new Request('https://raw.githubusercontent.com/richbroad29/rail-crossing/main/siri.js');<br>";
-      body += "var code = await r.loadString();<br>";
-      body += "await eval('(async()=>{' + code + '})()');</div></li>";
-      body += '<li>Open the <strong>Shortcuts</strong> app, create a new shortcut</li>';
-      body += '<li>Name it <strong>"Is ' + crossingShort + ' level crossing open"</strong></li>';
-      body += '<li>Add action: search <strong>Scriptable</strong> &rarr; <strong>Run Script</strong> &rarr; select "Crossing Siri"</li>';
-      body += '<li>In the Scriptable action, set <strong>Parameter</strong> to <strong>"' + crossingShort + '"</strong></li>';
-      body += '<li>Add action: <strong>Speak Text</strong> &rarr; set to Shortcut Input</li>';
-      body += '<li>In the Scriptable action, turn off <strong>"Run In App"</strong></li></ol>';
-      body += '<p>Now say <strong>"Hey Siri, is ' + crossingShort + ' level crossing open"</strong>!</p>';
-    } else if (isAndroid) {
-      title = 'Add to Google Assistant \u2014 Android';
-      body = '<ol><li>Open the <strong>Google app</strong></li>';
-      body += '<li>Profile &rarr; <strong>Settings</strong> &rarr; <strong>Google Assistant</strong> &rarr; <strong>Routines</strong></li>';
-      body += '<li>Create a new routine</li>';
-      body += '<li>Trigger: <strong>"Is ' + crossingShort + ' level crossing open"</strong></li>';
-      body += '<li>Action: <strong>Open website</strong> &rarr; <div style="background:#0F172A;padding:8px;border-radius:6px;margin:6px 0;font-family:monospace;font-size:10px;color:#6EE7B7">' + appUrl + '</div></li></ol>';
-      body += '<p>Say <strong>"Hey Google, is ' + crossingShort + ' level crossing open"</strong>!</p>';
-    } else {
-      title = 'Voice Assistant Setup';
-      body = '<p>Open this page on your phone for device-specific instructions.</p>';
-    }
   }
   $('modalTitle').textContent = title;
   $('modalBody').innerHTML = body;
@@ -653,11 +653,6 @@ async function initCrossing(id) {
 
   var roadLabel = $('roadLabel');
   if (roadLabel) roadLabel.textContent = CFG.road.toUpperCase();
-
-  if (!isIOS) {
-    var vbl = $('voiceBtnLabel');
-    if (vbl) vbl.textContent = 'Add to Google Assistant';
-  }
 
   setRefreshState('idle');
   refreshData();

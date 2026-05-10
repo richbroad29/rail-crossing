@@ -63,6 +63,9 @@ body{background:#0F172A;color:#E2E8F0;font-family:-apple-system,BlinkMacSystemFo
 .show-more-btn{width:100%;padding:8px;margin-top:8px;background:none;border:1px solid #334155;border-radius:6px;color:#94A3B8;font-size:11px;cursor:pointer}
 .show-more-btn:active{background:#334155}
 .show-more-btn:disabled{cursor:default}
+.closure-time-group{display:flex;align-items:baseline;gap:2px}
+.closure-uncertainty{font-size:10px;color:#64748B;margin-left:3px;font-variant-numeric:tabular-nums}
+.closure-imminent{color:#F59E0B}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
 .blink-a{animation:blink 1s infinite}
 .blink-b{animation:blink 1s infinite .5s}
