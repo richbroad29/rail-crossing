@@ -250,8 +250,9 @@ function parseVpsResponse(data) {
     var ts = closures[i].trains || [];
     for (var j = 0; j < ts.length; j++) {
       var t = ts[j];
-      if (seen[t.dedupKey]) continue;
-      seen[t.dedupKey] = true;
+      var key = t.dedupKey || ((t.headcode || '') + '|' + t.bestTime + '|' + t.destination);
+      if (seen[key]) continue;
+      seen[key] = true;
       var delayMins = t.delayMins || 0;
       results.push({
         origin: t.origin,
@@ -265,7 +266,7 @@ function parseVpsResponse(data) {
         isUncertain: !!t.isUncertain,
         isRealtime: true,
         etaText: t.etaText,
-        dedupKey: t.dedupKey,
+        dedupKey: key,
         source: t.source,
         headcode: t.headcode,
         trainType: t.trainType,
