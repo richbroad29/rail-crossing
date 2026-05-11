@@ -32,20 +32,29 @@ The **frontend has no build step** — edit files, push to `main`, GitHub Pages 
 
 ## Branches
 
-- **`main`** — what's live. Frontend-only, calls a Cloudflare Worker for data.
-- **`backend-v2`** — Node.js backend (`/backend` directory) running on Oracle Cloud VPS (`130.162.167.237`). Implements a three-layer data architecture: NWR CIF schedule baseline → LDBSVWS near-term refinement → NWR Train Describer Kafka feed for berth-step confirmation. **Deployed; TD logging active.** LDBSVWS integration pending `NR_TOKEN_SV` secret. Don't merge or deploy backend-v2 without explicit instruction from Rich.
+- **`main`** — what's live. Frontend-only, calls the VPS backend (see Architecture).
+- **`backend-v2`** — Node.js backend (`/backend` directory) running on Oracle Cloud VPS (`130.162.167.237`). Implements a three-layer data architecture: NWR CIF schedule baseline → LDBSVWS near-term refinement → NWR Train Describer feed for berth-step confirmation. **Deployed and serving the live frontend.** See Architecture for prediction-pipeline status of each source. Don't merge or deploy backend-v2 without explicit instruction from Rich.
 
 ## Architecture (current — `main`)
 
 ```
 Browser (portslade/index.html + shared/crossing.js)
-  ↓ HTTPS
-Cloudflare Worker (rail-crossing-api.richardbroad29.workers.dev)
-  ↓ SOAP 1.2
-National Rail OpenLDBWS (live arrival/departure board)
+  ↓ HTTPS (CORS allowlist)
+Caddy on Oracle VPS (railcrossing.duckdns.org)
+  ↓ reverse proxy → localhost:3000
+backend-v2 Node service
+  ├─ LDBSVWS via RDM REST   (active in predictions)
+  ├─ TD STOMP feed          (logged to JSONL, NOT joined into predictions)
+  └─ CIF schedule           (parser wired up, no SCHEDULE_FILE set, NOT joined into predictions)
 ```
 
-The frontend polls the worker, parses the SOAP/XML response, deduplicates trains, computes closure windows from scheduled times, and renders a state (`OPEN`, `CLOSING_SOON`, `CLOSED`).
+The frontend polls `GET /crossing/portslade`, receives JSON with the backend's pre-computed upcoming closures, then runs its own client-side closure logic over the train list (so `closeBefore`/`openAfter`/`consecutiveWindow` stay tunable via `crossings.json` without a backend deploy). Renders a state (`OPEN`, `CLOSING_SOON`, `CLOSED`).
+
+**TLS** is auto-provisioned by Caddy via Let's Encrypt (HTTP-01 challenge). The DuckDNS subdomain (`railcrossing.duckdns.org`) is kept alive by a cron on the VPS that hits the DuckDNS update endpoint every 5 minutes. The DuckDNS token lives in that crontab.
+
+**Cloudflare Worker** (`rail-crossing-api.richardbroad29.workers.dev`) is still deployed but **no longer in the request path**. It exists as a one-week fallback (~12 May 2026 onward) — retirement decision after the observation window.
+
+**Prediction-pipeline status:** LDBSVWS is the only source currently feeding into the JSON response. TD events accumulate to `~/rail-crossing/backend/data/logs/td/*.jsonl` but the listener doesn't yet update `crossing-state.tdEvents` in a way that flows into the API output, so no `tdBerth` field on trains and no confidence-tier narrowing. CIF schedule parser exists in `schedule-parser.js` and `index.js` will load it on startup if `SCHEDULE_FILE` env var points to a CIF JSON file — currently unset, so no freight or ECS in predictions.
 
 Feedback flow: when the user reports a wrong prediction, the frontend POSTs to a Google Apps Script URL (in `crossings.json` → `feedbackUrl`), which appends a row to a Google Sheet.
 
@@ -96,13 +105,14 @@ Verified from SMART data:
 ## External services and credentials
 
 - **GitHub Pages** — auto-deploys `main` to `richbroad29.github.io/rail-crossing/`
-- **Cloudflare Worker** (`rail-crossing-api.richardbroad29.workers.dev`) — proxies SOAP to OpenLDBWS/LDBSVWS. Worker source is in `./worker/`; deploy with `cd worker && npx wrangler deploy`.
-- **OpenLDBWS** (public) — currently in use
-- **LDBSVWS** (Rail Data Marketplace, Staff Version) — token (`NR_TOKEN_SV`) must be set as a Cloudflare secret; worker accepts `?sv=1` to activate it.
-- **NWR Train Describer (Kafka)** — Rich is subscribed via RDM. Used by backend-v2 only.
-- **NWR CIF schedule files** — used by backend-v2 only.
+- **Oracle Cloud VPS** (`130.162.167.237`, Ubuntu, Node 20) — runs backend-v2 under systemd (`rail-crossing.service`) and Caddy (reverse proxy + Let's Encrypt). **Note:** Ubuntu image has host-level iptables that REJECT inbound besides 22 — opening a port needs BOTH the OCI Security List and `iptables -I INPUT <pos> ... -j ACCEPT` before the REJECT, persisted with `netfilter-persistent save`.
+- **DuckDNS** — free dynamic-DNS subdomain `railcrossing.duckdns.org` → VPS IP. Kept alive by cron on VPS (`crontab -l` shows the update URL with token).
+- **Caddy** on VPS — `/etc/caddy/Caddyfile`, systemd-managed, auto-renewing Let's Encrypt cert.
+- **Cloudflare Worker** (`rail-crossing-api.richardbroad29.workers.dev`) — deployed but no longer in the request path. Source in `./worker/`. Retirement decision after the one-week observation window starting 11 May 2026.
+- **LDBSVWS** (Rail Data Marketplace, Staff Version) — backend-v2 calls the RDM REST endpoint with `x-apikey` (the `RDM_API_KEY` in backend `.env`). This is the active LDB data source.
+- **NWR Train Describer (STOMP)** — Rich is subscribed via NROD. Backend-v2 `td-listener.js` subscribes via plain STOMP (no TLS) to `publicdatafeeds.networkrail.co.uk:61618`, filters area LA, writes JSONL to `backend/data/logs/td/`. Not yet joined into prediction output.
+- **NWR CIF schedule files** — backend-v2 has a parser ready but no schedule file is currently loaded.
 - **Google Apps Script + Sheets** — feedback collection. URL is in `crossings.json`.
-- **Oracle Cloud VPS** (`130.162.167.237`, Ubuntu, Node 20) — backend-v2 deployment target.
 - **GoatCounter** — analytics
 - **Buy Me a Coffee** — donations
 
@@ -151,7 +161,8 @@ External services should be free unless the value clearly justifies a paid tier.
 
 ## Active work / pending items
 
-- Deploy `backend-v2` to Oracle VPS (service deployed, TD logging running; LDBSVWS integration pending token)
-- Set `NR_TOKEN_SV` secret in Cloudflare Worker (`cd worker && npx wrangler secret put NR_TOKEN_SV`), then update frontend to pass `?sv=1`
+- **Join TD events into the prediction pipeline** — events are flowing to JSONL on disk but `crossing-state` doesn't yet use them to set `tdBerth` on trains. Wiring this up is what unlocks confidence-tier narrowing (±90s → ±60s → ±30s → "imminent") on the frontend. Planned follow-up prompt once the migration has been observed clean.
+- **Wire CIF schedule into predictions** — load a CIF JSON file and set `SCHEDULE_FILE` env var on the VPS (the loader runs at startup). This is what surfaces freight (1Fxx, 6Mxx) and ECS (5xxx) headcodes. Planned follow-up prompt once the migration has been observed clean.
+- **Retire the Cloudflare Worker** — one-week observation window started 11 May 2026. After that, decide whether to leave it as a permanent fallback or tear down the Workers project.
 - Ongoing calibration of `closeBefore` / `openAfter` / `consecutiveWindow` from feedback data
 - Potential expansion to more crossings once Portslade architecture is validated
