@@ -1,4 +1,4 @@
-var API_BASE = 'https://rail-crossing-api.richardbroad29.workers.dev';
+var API_BASE = 'https://railcrossing.duckdns.org';
 var BASE_URL = 'https://richbroad29.github.io/rail-crossing/';
 
 var CFG = null;
@@ -228,36 +228,53 @@ function deduplicateTrains(trainList) {
 async function fetchNationalRail() {
   lastError = '';
   try {
-    // Primary: single combined call (requires updated worker)
-    var url = API_BASE + '/?station=' + CFG.station;
+    var url = API_BASE + '/crossing/' + crossingId;
     var response = await fetch(url);
     if (!response.ok) throw new Error('HTTP ' + response.status);
-    var xml = await response.text();
-    var svcs = parseTrains(xml);
-    if (svcs.length > 0) return svcs;
-    // If parseTrains found nothing, the response might be from old worker — fall through
+    var data = await response.json();
+    return parseVpsResponse(data);
   } catch(e) {
-    console.warn('NR API (combined) error:', e);
+    console.error('VPS API error:', e);
     lastError = e.message;
+    return [];
   }
+}
 
-  // Fallback: legacy dual-call for old worker that doesn't support combined endpoint
-  console.log('Falling back to legacy arr/dep calls');
+// Convert the VPS /crossing/<id> JSON into the train-array shape the rest of the app expects.
+// Pulls trains from upcomingClosures (backend already deduped + sorted).
+function parseVpsResponse(data) {
   var results = [];
-  var types = ['arr', 'dep'];
-  for (var i = 0; i < 2; i++) {
-    var type = types[i];
-    try {
-      var url2 = API_BASE + '/?station=' + CFG.station + '&type=' + type;
-      var response2 = await fetch(url2);
-      if (!response2.ok) throw new Error('HTTP ' + response2.status);
-      var xml2 = await response2.text();
-      var svcs2 = parseXmlLegacy(xml2, type);
-      for (var j = 0; j < svcs2.length; j++) results.push(svcs2[j]);
-    } catch(e) { console.warn('NR API (' + type + ') error:', e); lastError = e.message; }
+  var seen = {};
+  var closures = data.upcomingClosures || [];
+  for (var i = 0; i < closures.length; i++) {
+    var ts = closures[i].trains || [];
+    for (var j = 0; j < ts.length; j++) {
+      var t = ts[j];
+      if (seen[t.dedupKey]) continue;
+      seen[t.dedupKey] = true;
+      var delayMins = t.delayMins || 0;
+      results.push({
+        origin: t.origin,
+        destination: t.destination,
+        operator: t.operator,
+        direction: t.direction,
+        bestTime: new Date(t.bestTime),
+        scheduledTime: t.scheduledTime ? new Date(t.scheduledTime) : null,
+        delayMins: delayMins,
+        isDelayed: delayMins > 0,
+        isUncertain: !!t.isUncertain,
+        isRealtime: true,
+        etaText: t.etaText,
+        dedupKey: t.dedupKey,
+        source: t.source,
+        headcode: t.headcode,
+        trainType: t.trainType,
+        tdBerth: t.tdBerth
+      });
+    }
   }
-  if (!results.length && !lastError) lastError = 'No train data returned';
-  return deduplicateTrains(results);
+  results.sort(function(a, b) { return a.bestTime - b.bestTime; });
+  return results;
 }
 
 function computeClosures(trainList) {
@@ -294,7 +311,7 @@ function getWindowTier(closure) {
     if (t.tdBerth === 'approach')   return { imminent: false, tier: 'td_approach',   halfWidthSecs: cw.td_approach_secs  || 60 };
   }
 
-  var hasLdb = closure.trains.some(function(t) { return !t.source || t.source === 'ldb'; });
+  var hasLdb = closure.trains.some(function(t) { return !t.source || t.source === 'ldb' || t.source === 'ldbsv'; });
   if (hasLdb && secsToStart <= 300) {
     return { imminent: false, tier: 'ldb', halfWidthSecs: cw.ldb_near_secs || 90 };
   }
