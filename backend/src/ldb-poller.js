@@ -96,7 +96,7 @@ function parseTime(timeStr) {
 
 // ---- Common train extraction logic ----
 
-function extractTrain(sta, eta, std, etd, origin, dest, operator, trainid) {
+function extractTrain(sta, eta, std, etd, origin, dest, operator, trainid, source = 'ldbsv') {
   const direction = isEastOrigin(origin) ? 'west' : 'east';
 
   let sch, et;
@@ -140,7 +140,7 @@ function extractTrain(sta, eta, std, etd, origin, dest, operator, trainid) {
     etaText: et || 'On time',
     headcode: trainid,
     trainType,
-    source: 'ldb',
+    source,
     dedupKey: `${sch || ''}|${dest}`
   };
 }
@@ -202,7 +202,7 @@ function getVal(xml, tag) {
   return null;
 }
 
-function parseSoapXml(xml) {
+function parseSoapXml(xml, source = 'ldbsv') {
   const results = [];
   const services = xml.split(/service>/i);
 
@@ -222,7 +222,8 @@ function parseSoapXml(xml) {
       getVal(sv, 'std'), getVal(sv, 'etd'),
       origin, dest,
       getVal(sv, 'operator') || '?',
-      getVal(sv, 'trainid') || getVal(sv, 'rid') || null
+      getVal(sv, 'trainid') || getVal(sv, 'rid') || null,
+      source
     );
     if (train) results.push(train);
   }
@@ -297,7 +298,7 @@ async function pollStationSoap(station, token, staffVersion = false) {
     throw new Error(`SOAP HTTP ${resp.status}: ${resp.body.slice(0, 300)}`);
   }
 
-  return parseSoapXml(resp.body);
+  return parseSoapXml(resp.body, staffVersion ? 'ldbsv' : 'ldb');
 }
 
 // ---- Main polling function ----
