@@ -25,14 +25,15 @@ shared/icon-180.png, icon.svg    Icons
 siri.js                          Scriptable iOS integration (separate, mirrors the worker calls)
 feedback-update-instructions.md  Notes on the feedback system
 README.md                        Almost empty
+worker/                          Cloudflare Worker source (wrangler.jsonc + src/worker.js)
 ```
 
-There is **no build step**. Edit files, push to `main`, GitHub Pages deploys within ~1 minute.
+The **frontend has no build step** — edit files, push to `main`, GitHub Pages deploys within ~1 minute. The **worker requires a separate deploy step**: `cd worker && npx wrangler deploy`.
 
 ## Branches
 
 - **`main`** — what's live. Frontend-only, calls a Cloudflare Worker for data.
-- **`backend-v2`** — in-progress Node.js backend (`/backend` directory) intended to deploy to an Oracle Cloud VPS. Implements a three-layer data architecture: NWR CIF schedule baseline → LDBSVWS near-term refinement → NWR Train Describer Kafka feed for berth-step confirmation. **Not yet deployed.** Currently blocked on (a) an RDM API 404 from the LDBSVWS endpoint, (b) SSH access to the VPS from Rich's current laptop. Don't merge or deploy backend-v2 without explicit instruction from Rich.
+- **`backend-v2`** — Node.js backend (`/backend` directory) running on Oracle Cloud VPS (`130.162.167.237`). Implements a three-layer data architecture: NWR CIF schedule baseline → LDBSVWS near-term refinement → NWR Train Describer Kafka feed for berth-step confirmation. **Deployed; TD logging active.** LDBSVWS integration pending `NR_TOKEN_SV` secret. Don't merge or deploy backend-v2 without explicit instruction from Rich.
 
 ## Architecture (current — `main`)
 
@@ -45,8 +46,6 @@ National Rail OpenLDBWS (live arrival/departure board)
 ```
 
 The frontend polls the worker, parses the SOAP/XML response, deduplicates trains, computes closure windows from scheduled times, and renders a state (`OPEN`, `CLOSING_SOON`, `CLOSED`).
-
-The **worker source is not in this repo** — it lives in a separate Cloudflare Workers project. If a change needs to touch the worker, tell Rich; don't try to edit it from here.
 
 Feedback flow: when the user reports a wrong prediction, the frontend POSTs to a Google Apps Script URL (in `crossings.json` → `feedbackUrl`), which appends a row to a Google Sheet.
 
@@ -82,6 +81,8 @@ Reading from `closurePeriods` for feedback would be wrong — it forgets past tr
 
 The Cloudflare Worker uses **SOAP 1.2** for OpenLDBWS, not 1.1. Required: `xmlns:soap="http://www.w3.org/2003/05/soap-envelope"`, namespace `http://thalesgroup.com/RTTI/2021-11-01/ldb/`, endpoint `ldb12.asmx`, `Content-Type: application/soap+xml`, **no SOAPAction header**. Deviating from any of this causes silent failures.
 
+LDBSVWS (staff version) uses the same SOAP 1.2 structure but with namespace `http://thalesgroup.com/RTTI/2021-11-01/ldbsv/` and endpoint `ldbsv12.asmx` (not `ldb12.asmx`).
+
 ### Freight matters
 
 ~2–3 aggregate stone trains per weekday pass through Portslade. They don't appear in OpenLDBWS (passenger-only). This is the core motivation for backend-v2 (which adds CIF schedule and TD Kafka feed). On `main` today, freight closures are missed — known limitation.
@@ -95,9 +96,9 @@ Verified from SMART data:
 ## External services and credentials
 
 - **GitHub Pages** — auto-deploys `main` to `richbroad29.github.io/rail-crossing/`
-- **Cloudflare Worker** (`rail-crossing-api.richardbroad29.workers.dev`) — proxies SOAP to OpenLDBWS. Worker code is in a separate Wrangler project, not in this repo.
+- **Cloudflare Worker** (`rail-crossing-api.richardbroad29.workers.dev`) — proxies SOAP to OpenLDBWS/LDBSVWS. Worker source is in `./worker/`; deploy with `cd worker && npx wrangler deploy`.
 - **OpenLDBWS** (public) — currently in use
-- **LDBSVWS** (Rail Data Marketplace, Staff Version) — pending. Worker already accepts a `?sv=1` flag; integration is blocked until token (`NR_TOKEN_SV`) is added as a Cloudflare secret. Action item is calendared for after **25 March 2026**.
+- **LDBSVWS** (Rail Data Marketplace, Staff Version) — token (`NR_TOKEN_SV`) must be set as a Cloudflare secret; worker accepts `?sv=1` to activate it.
 - **NWR Train Describer (Kafka)** — Rich is subscribed via RDM. Used by backend-v2 only.
 - **NWR CIF schedule files** — used by backend-v2 only.
 - **Google Apps Script + Sheets** — feedback collection. URL is in `crossings.json`.
@@ -150,7 +151,7 @@ External services should be free unless the value clearly justifies a paid tier.
 
 ## Active work / pending items
 
-- Deploy `backend-v2` to Oracle VPS (blocked on RDM API 404 + SSH key access)
-- Integrate LDBSVWS token (`NR_TOKEN_SV`) into Cloudflare Worker after RDM review (post 25 March 2026)
+- Deploy `backend-v2` to Oracle VPS (service deployed, TD logging running; LDBSVWS integration pending token)
+- Set `NR_TOKEN_SV` secret in Cloudflare Worker (`cd worker && npx wrangler secret put NR_TOKEN_SV`), then update frontend to pass `?sv=1`
 - Ongoing calibration of `closeBefore` / `openAfter` / `consecutiveWindow` from feedback data
 - Potential expansion to more crossings once Portslade architecture is validated
