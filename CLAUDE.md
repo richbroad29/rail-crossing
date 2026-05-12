@@ -43,9 +43,9 @@ Browser (portslade/index.html + shared/crossing.js)
 Caddy on Oracle VPS (railcrossing.duckdns.org)
   ↓ reverse proxy → localhost:3000
 backend-v2 Node service
-  ├─ LDBSVWS via RDM REST   (active in predictions)
-  ├─ TD STOMP feed          (logged to JSONL, NOT joined into predictions)
-  └─ CIF schedule           (parser wired up, no SCHEDULE_FILE set, NOT joined into predictions)
+  ├─ LDBSVWS via RDM REST   (active — near-term passenger + non-stopping fasts)
+  ├─ CIF schedule           (active — freight, ECS, full-day passenger coverage)
+  └─ TD STOMP feed          (logged to JSONL, NOT yet joined into predictions)
 ```
 
 The frontend polls `GET /crossing/portslade`, receives JSON with the backend's pre-computed upcoming closures, then runs its own client-side closure logic over the train list (so `closeBefore`/`openAfter`/`consecutiveWindow` stay tunable via `crossings.json` without a backend deploy). Renders a state (`OPEN`, `CLOSING_SOON`, `CLOSED`).
@@ -54,7 +54,17 @@ The frontend polls `GET /crossing/portslade`, receives JSON with the backend's p
 
 **Cloudflare Worker** (`rail-crossing-api.richardbroad29.workers.dev`) is still deployed but **no longer in the request path**. It exists as a one-week fallback (~12 May 2026 onward) — retirement decision after the observation window.
 
-**Prediction-pipeline status:** LDBSVWS is the only source currently feeding into the JSON response. TD events accumulate to `~/rail-crossing/backend/data/logs/td/*.jsonl` but the listener doesn't yet update `crossing-state.tdEvents` in a way that flows into the API output, so no `tdBerth` field on trains and no confidence-tier narrowing. CIF schedule parser exists in `schedule-parser.js` and `index.js` will load it on startup if `SCHEDULE_FILE` env var points to a CIF JSON file — currently unset, so no freight or ECS in predictions.
+**Prediction-pipeline status:**
+
+*LDBSVWS* — active. Near-term passenger services (up to ~2h ahead) with real-time estimates. Source label `"ldbsv"`.
+
+*CIF schedule* — active. Auto-downloaded from NROD (`CIF_ALL_FULL_DAILY`, same basic-auth credentials as STOMP) to `~/rail-crossing/backend/data/schedule/cif-latest.json.gz` at startup and refreshed daily at 04:00 Europe/London. Parsed in memory only. Provides full-day coverage including freight, ECS, and all services beyond LDBSVWS's 2h window. Source label `"cif"`.
+
+Dedup: UID-first (CIF `CIF_train_uid` vs LDBSVWS `svc.uid`), then headcode + time ±5 min, then direction + time ±3 min as last resort. LDBSVWS wins on any match.
+
+**Known CIF limitation — midnight-crossing trains:** CIF times past 24:00 (e.g., `2510` = 01:10 next morning) are mapped modulo-24 by `londonMinsToDate`. A train timetabled at `2510` will be placed at 01:10 *today* instead of 01:10 *tomorrow*, appearing stale or absent. Affects overnight freight and ECS only; daytime services are unaffected. Phase 2 fix.
+
+*TD* — STOMP listener active, writing JSONL to `~/rail-crossing/backend/data/logs/td/`. Not yet joined into predictions. No `tdBerth` field on trains, no confidence-tier narrowing yet.
 
 Feedback flow: when the user reports a wrong prediction, the frontend POSTs to a Google Apps Script URL (in `crossings.json` → `feedbackUrl`), which appends a row to a Google Sheet.
 
@@ -94,7 +104,7 @@ LDBSVWS (staff version) uses the same SOAP 1.2 structure but with namespace `htt
 
 ### Freight matters
 
-~2–3 aggregate stone trains per weekday pass through Portslade. They don't appear in OpenLDBWS (passenger-only). This is the core motivation for backend-v2 (which adds CIF schedule and TD Kafka feed). On `main` today, freight closures are missed — known limitation.
+~2–3 aggregate stone trains per weekday pass through Portslade (headcodes 6Vxx, 6Oxx). They don't appear in LDBSVWS (passenger-only) but are now visible via CIF schedule, tagged `source:"cif"` and `trainType:"freight"` in the API response. The CIF source also surfaces ECS movements (5xxx headcodes). Full-day coverage; not real-time.
 
 ### TD berth mappings (for backend-v2)
 
@@ -114,7 +124,7 @@ These are also the values in `crossings.json` → `berths.east/west.approach/pro
 - **Cloudflare Worker** (`rail-crossing-api.richardbroad29.workers.dev`) — deployed but no longer in the request path. Source in `./worker/`. Retirement decision after the one-week observation window starting 11 May 2026.
 - **LDBSVWS** (Rail Data Marketplace, Staff Version) — backend-v2 calls the RDM REST endpoint with `x-apikey` (the `RDM_API_KEY` in backend `.env`). This is the active LDB data source.
 - **NWR Train Describer (STOMP)** — Rich is subscribed via NROD. Backend-v2 `td-listener.js` subscribes via plain STOMP (no TLS) to `publicdatafeeds.networkrail.co.uk:61618`, filters area LA, writes JSONL to `backend/data/logs/td/`. Not yet joined into prediction output.
-- **NWR CIF schedule files** — backend-v2 has a parser ready but no schedule file is currently loaded.
+- **NWR SCHEDULE (CIF)** — downloaded automatically from NROD `CifFileAuthenticate` endpoint using the same basic-auth credentials as STOMP (`NR_FEED_USER`/`NR_FEED_PASS` in backend `.env`). No separate NROD subscription needed — the portal grants global access to all feeds. Daily full extract, ~120 MB gzipped; stored at `~/rail-crossing/backend/data/schedule/cif-latest.json.gz`. **Credential testing gotcha:** `source .env` in bash expands `$` in the password (e.g., `p$i$d…` → `p`) — use `awk -F= '/^NR_FEED_PASS=/{sub(/^NR_FEED_PASS=/,"");print}' .env` to read the literal value.
 - **Google Apps Script + Sheets** — feedback collection. URL is in `crossings.json`.
 - **GoatCounter** — analytics
 - **Buy Me a Coffee** — donations
@@ -164,8 +174,9 @@ External services should be free unless the value clearly justifies a paid tier.
 
 ## Active work / pending items
 
-- **Join TD events into the prediction pipeline** — events are flowing to JSONL on disk but `crossing-state` doesn't yet use them to set `tdBerth` on trains. Wiring this up is what unlocks confidence-tier narrowing (±90s → ±60s → ±30s → "imminent") on the frontend. Planned follow-up prompt once the migration has been observed clean.
-- **Wire CIF schedule into predictions** — load a CIF JSON file and set `SCHEDULE_FILE` env var on the VPS (the loader runs at startup). This is what surfaces freight (1Fxx, 6Mxx) and ECS (5xxx) headcodes. Planned follow-up prompt once the migration has been observed clean.
+- **Join TD events into the prediction pipeline** — events are flowing to JSONL on disk but `crossing-state` doesn't yet use them to set `tdBerth` on trains. Wiring this up is what unlocks confidence-tier narrowing (±90s → ±60s → ±30s → "imminent") on the frontend.
+- **Fix midnight-crossing bug in CIF** — CIF times past 24:00 (e.g., `2510` = 01:10 next day) are placed on today rather than tomorrow. Affects overnight freight/ECS only.
+- **Handle CIF cancellations (STP C)** — cancelled trains will appear in predictions until the next daily refresh at 04:00. Low priority.
 - **Retire the Cloudflare Worker** — one-week observation window started 11 May 2026. After that, decide whether to leave it as a permanent fallback or tear down the Workers project.
 - Ongoing calibration of `closeBefore` / `openAfter` / `consecutiveWindow` from feedback data
 - Potential expansion to more crossings once Portslade architecture is validated
