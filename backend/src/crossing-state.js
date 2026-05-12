@@ -283,7 +283,7 @@ class CrossingState {
       lastStateChange: this.lastStateChange.toISOString(),
       currentClosure: current || null,
       nextClosure: next || null,
-      upcomingClosures: upcoming.slice(0, 50),
+      upcomingClosures: upcoming.slice(0, 200),
       nextCloseTime: next ? next.start : null,
       nextOpenTime: current ? current.end : (next ? next.end : null),
       trainSources: {
