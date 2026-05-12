@@ -7,6 +7,8 @@ const { createApi } = require('./api');
 const logger = require('./logger');
 const tdListener = require('./td-listener');
 const tdRotation = require('./td-rotation');
+const cifFetcher = require('./cif-fetcher');
+const { parseLondonWallClock, londonDateStamp } = require('./time-utils');
 
 // Load config
 const CONFIG_PATH = path.join(__dirname, '..', 'config', 'crossings.json');
@@ -52,28 +54,66 @@ async function pollAll() {
   }
 }
 
-// Load schedule data
+// Load schedule data — prefers env SCHEDULE_FILE (for testing); else auto-managed CIF
 async function loadSchedule() {
-  if (!SCHEDULE_FILE) {
-    console.log('No SCHEDULE_FILE set — skipping schedule data');
-    console.log('Set SCHEDULE_FILE env var to path of CIF JSON file to enable freight/ECS predictions');
-    return;
+  let file = SCHEDULE_FILE;
+  if (!file) file = cifFetcher.latestFilePath();
+
+  if (!fs.existsSync(file)) {
+    console.log(`No CIF file on disk yet at ${file} — triggering initial download`);
+    try {
+      const res = await cifFetcher.downloadCif();
+      console.log(`CIF downloaded: ${res.bytes} bytes`);
+    } catch (err) {
+      console.error('Initial CIF download failed:', err.message);
+      console.error('Will retry at next 04:00 BST. Predictions run without freight/ECS until then.');
+      return;
+    }
   }
 
-  if (!fs.existsSync(SCHEDULE_FILE)) {
-    console.warn(`Schedule file not found: ${SCHEDULE_FILE}`);
-    return;
-  }
-
-  console.log(`Loading schedule from: ${SCHEDULE_FILE}`);
+  console.log(`Loading schedule from: ${file}`);
   try {
-    const scheduleTrains = await parseScheduleFile(SCHEDULE_FILE, crossingsConfig);
+    const scheduleTrains = await parseScheduleFile(file, crossingsConfig);
     for (const [id, trains] of Object.entries(scheduleTrains)) {
       crossingStates[id].updateScheduleTrains(trains);
     }
   } catch (err) {
-    console.error('Failed to load schedule:', err);
+    console.error('Failed to load schedule:', err.message);
   }
+}
+
+// Daily CIF refresh — fires at 04:00 Europe/London. On failure, keeps in-memory data.
+function scheduleDailyCifRefresh() {
+  const next = nextFireAt(4, 0);
+  const ms = next.getTime() - Date.now();
+  console.log(`CIF refresh: next fire at ${next.toISOString()} (in ${Math.round(ms/60000)} min)`);
+  setTimeout(async function tick() {
+    try {
+      console.log('CIF refresh: starting daily fetch');
+      const res = await cifFetcher.downloadCif();
+      console.log(`CIF refresh: downloaded ${res.bytes} bytes`);
+      const trains = await parseScheduleFile(cifFetcher.latestFilePath(), crossingsConfig);
+      for (const [id, t] of Object.entries(trains)) {
+        crossingStates[id].updateScheduleTrains(t);
+      }
+      console.log('CIF refresh: in-memory schedules updated');
+    } catch (err) {
+      console.error('CIF refresh failed (keeping previous data):', err.message);
+    }
+    // Schedule next 24h out
+    setTimeout(tick, 24 * 3600 * 1000);
+  }, ms);
+}
+
+function nextFireAt(hour, minute) {
+  const today = londonDateStamp();
+  const hh = String(hour).padStart(2, '0');
+  const mm = String(minute).padStart(2, '0');
+  let target = parseLondonWallClock(`${today}T${hh}:${mm}:00`);
+  if (target.getTime() <= Date.now()) {
+    target = new Date(target.getTime() + 24 * 3600 * 1000);
+  }
+  return target;
 }
 
 // Startup
@@ -90,6 +130,9 @@ async function main() {
 
   // Load schedule (non-blocking — LDB starts immediately)
   loadSchedule().catch(err => console.error('Schedule load error:', err));
+
+  // Daily CIF refresh at 04:00 Europe/London
+  scheduleDailyCifRefresh();
 
   // Start API server
   createApi(crossingStates, PORT);

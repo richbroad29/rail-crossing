@@ -105,7 +105,7 @@ function parseTime(timeStr) {
 
 // ---- Common train extraction logic ----
 
-function extractTrain(sta, eta, std, etd, origin, dest, operator, trainid, source = 'ldbsv') {
+function extractTrain(sta, eta, std, etd, origin, dest, operator, trainid, source = 'ldbsv', uid = null) {
   const direction = isEastOrigin(origin) ? 'west' : 'east';
 
   let sch, et;
@@ -148,6 +148,7 @@ function extractTrain(sta, eta, std, etd, origin, dest, operator, trainid, sourc
     direction, delayMins, isUncertain,
     etaText: et || 'On time',
     headcode: trainid,
+    uid,
     trainType,
     source,
     dedupKey: `${sch || ''}|${dest}`
@@ -188,7 +189,9 @@ function parseRdmJson(body) {
       svc.sta, svc.eta, svc.std, svc.etd,
       origin, dest,
       svc.operator || '?',
-      svc.trainid || svc.rid || svc.serviceID || null
+      svc.trainid || svc.rid || svc.serviceID || null,
+      'ldbsv',
+      svc.uid || null
     );
     if (train) results.push(train);
   }
@@ -232,7 +235,8 @@ function parseSoapXml(xml, source = 'ldbsv') {
       origin, dest,
       getVal(sv, 'operator') || '?',
       getVal(sv, 'trainid') || getVal(sv, 'rid') || null,
-      source
+      source,
+      getVal(sv, 'uid') || null
     );
     if (train) results.push(train);
   }

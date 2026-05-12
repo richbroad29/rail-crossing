@@ -49,54 +49,78 @@ class CrossingState {
   }
 
   // Merge and deduplicate trains from all sources
+  // Dedup strategy: LDB (LDBSVWS) takes priority. For each CIF train:
+  //   1. If LDB has same UID → drop CIF (UID is canonical, globally unique)
+  //   2. Else if LDB has same headcode within ±5 min → drop CIF
+  //   3. Else include CIF as source:"cif"
+  // Fallback to direction+time only when both UID and headcode missing.
   _mergeTrains() {
     const now = new Date();
     const merged = [];
-    const seen = new Set();
 
-    // LDB trains take priority (real-time, highest accuracy)
+    const ldbByUid = new Map();
+    const ldbByHeadcode = new Map(); // headcode -> [trains]
+
     for (const t of this.ldbTrains) {
-      const key = `${t.destination}|${Math.round(new Date(t.bestTime).getTime() / 60000)}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        merged.push({
-          ...t,
-          bestTime: new Date(t.bestTime),
-          scheduledTime: t.scheduledTime ? new Date(t.scheduledTime) : null,
-          confidence: 'high'
-        });
+      const train = {
+        ...t,
+        bestTime: new Date(t.bestTime),
+        scheduledTime: t.scheduledTime ? new Date(t.scheduledTime) : null,
+        confidence: 'high'
+      };
+      merged.push(train);
+      if (t.uid) ldbByUid.set(t.uid, train);
+      if (t.headcode) {
+        if (!ldbByHeadcode.has(t.headcode)) ldbByHeadcode.set(t.headcode, []);
+        ldbByHeadcode.get(t.headcode).push(train);
       }
     }
 
-    // Schedule trains fill gaps (freight, ECS not in Darwin)
     for (const t of this.scheduleTrains) {
       const estTime = this._scheduleTimeToDate(t.estimatedCrossingMins);
-      if (!estTime || estTime < new Date(now.getTime() - 600000)) continue; // Skip past trains
+      if (!estTime || estTime < new Date(now.getTime() - 600000)) continue;
 
-      // Check if this train is already covered by LDB
-      const isLdbCovered = merged.some(m =>
-        m.direction === t.direction &&
-        Math.abs(m.bestTime.getTime() - estTime.getTime()) <= 180000 // 3 min window
-      );
+      // 1. UID match (canonical, both sides expose CIF train UID)
+      if (t.uid && ldbByUid.has(t.uid)) continue;
 
-      if (!isLdbCovered) {
-        merged.push({
-          origin: t.origin,
-          destination: t.destination,
-          operator: t.operator,
-          direction: t.direction,
-          bestTime: estTime,
-          scheduledTime: estTime,
-          headcode: t.headcode,
-          trainType: t.trainType,
-          delayMins: 0,
-          isUncertain: true,  // Schedule-only = less certain
-          etaText: 'Timetabled',
-          source: 'schedule',
-          confidence: t.trainType === 'freight' ? 'low' : 'medium',
-          dedupKey: `sch|${t.uid}`
-        });
+      // 2. Headcode + time match (fallback when UID missing on either side)
+      let covered = false;
+      if (t.headcode && ldbByHeadcode.has(t.headcode)) {
+        for (const m of ldbByHeadcode.get(t.headcode)) {
+          if (Math.abs(m.bestTime.getTime() - estTime.getTime()) <= 300000) {
+            covered = true;
+            break;
+          }
+        }
       }
+      if (covered) continue;
+
+      // 3. Last-resort direction+time match (loose, for headcode-less services)
+      if (!t.headcode) {
+        const looseHit = merged.some(m =>
+          m.direction === t.direction &&
+          Math.abs(m.bestTime.getTime() - estTime.getTime()) <= 180000
+        );
+        if (looseHit) continue;
+      }
+
+      merged.push({
+        origin: t.origin,
+        destination: t.destination,
+        operator: t.operator,
+        direction: t.direction,
+        bestTime: estTime,
+        scheduledTime: estTime,
+        headcode: t.headcode,
+        uid: t.uid,
+        trainType: t.trainType,
+        delayMins: 0,
+        isUncertain: true,
+        etaText: 'Timetabled',
+        source: 'cif',
+        confidence: t.trainType === 'freight' ? 'low' : 'medium',
+        dedupKey: `cif|${t.uid || t.headcode || ''}|${t.estimatedCrossingMins}`
+      });
     }
 
     merged.sort((a, b) => a.bestTime - b.bestTime);
