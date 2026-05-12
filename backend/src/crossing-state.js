@@ -197,6 +197,7 @@ class CrossingState {
         bestTime: t.bestTime.toISOString(),
         scheduledTime: t.scheduledTime?.toISOString(),
         headcode: t.headcode,
+        uid: t.uid || null,
         trainType: t.trainType,
         delayMins: t.delayMins || 0,
         etaText: t.etaText,
@@ -282,12 +283,12 @@ class CrossingState {
       lastStateChange: this.lastStateChange.toISOString(),
       currentClosure: current || null,
       nextClosure: next || null,
-      upcomingClosures: upcoming.slice(0, 10),
+      upcomingClosures: upcoming.slice(0, 50),
       nextCloseTime: next ? next.start : null,
       nextOpenTime: current ? current.end : (next ? next.end : null),
       trainSources: {
         ldb: this.ldbTrains.length,
-        schedule: this.scheduleTrains.filter(t => {
+        cif: this.scheduleTrains.filter(t => {
           const est = this._scheduleTimeToDate(t.estimatedCrossingMins);
           return est && est > now;
         }).length
