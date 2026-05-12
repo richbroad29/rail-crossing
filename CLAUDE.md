@@ -98,9 +98,12 @@ LDBSVWS (staff version) uses the same SOAP 1.2 structure but with namespace `htt
 
 ### TD berth mappings (for backend-v2)
 
-Verified from SMART data:
-- Eastbound approach: `LA 0006→0004`, clear: `LA 0004→0002`
-- Westbound approach: `LA 0003→0005`, clear: `LA 0005→0007`
+Verified from SMART data. Berths are stored in TD events **without** the area prefix — the area code is "LA" but `from`/`to` fields in the JSONL carry the 4-digit code only.
+
+- Eastbound: approach `0006` → protecting `0004` → clear `0002`
+- Westbound: approach `0003` → protecting `0005` → clear `0007`
+
+These are also the values in `crossings.json` → `berths.east/west.approach/protecting/clear`.
 
 ## External services and credentials
 

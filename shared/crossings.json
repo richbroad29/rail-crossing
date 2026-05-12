@@ -11,7 +11,10 @@
     "openAfter": {"east": 0.5, "west": 0.5},
     "consecutiveWindow": 1.5,
     "signals": {"east": "LG 4", "west": "LG 5"},
-    "berths": {"east": "LA0004", "west": "LA0005"},
+    "berths": {
+      "east": { "approach": "0006", "protecting": "0004", "clear": "0002" },
+      "west": { "approach": "0003", "protecting": "0005", "clear": "0007" }
+    },
     "feedbackUrl": "https://script.google.com/macros/s/AKfycbysyTa8ic8nSz2_-_wBKnrzss2DsNAnlIrFKYa9H_We1QrxRVXl1iKh6MvWSNdE7XjbAw/exec",
 
     "_comment_confidenceWindows": "Heuristic defaults — to be calibrated against empirical TD event logs once sufficient data is collected",
