@@ -82,8 +82,16 @@ function parseTime(timeStr) {
   if (!timeStr) return null;
   // ISO 8601 datetime (RDM REST returns e.g. "2026-05-03T21:56:00")
   if (timeStr.includes('T') && timeStr.includes('-')) {
-    const d = new Date(timeStr);
-    return isNaN(d.getTime()) ? null : d;
+    // If the string already carries a timezone (Z or ±HH:MM), trust it.
+    if (/[zZ]$|[+\-]\d{2}:?\d{2}$/.test(timeStr)) {
+      const d = new Date(timeStr);
+      return isNaN(d.getTime()) ? null : d;
+    }
+    // Europe/London wall-clock without offset (RDM REST shape).
+    // Parsing as new Date() interprets it as VPS-local (UTC), causing
+    // +60min drift during BST. Probe GMT vs BST and pick the candidate
+    // that round-trips to the input.
+    return parseLondonWallClock(timeStr);
   }
   // HH:MM fallback (SOAP path)
   if (!timeStr.includes(':')) return null;
@@ -92,6 +100,27 @@ function parseTime(timeStr) {
   const d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m, 0);
   if (d.getTime() < now.getTime() - 6 * 3600000) d.setDate(d.getDate() + 1);
   return d;
+}
+
+function parseLondonWallClock(iso) {
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/);
+  if (!m) return null;
+  const y = +m[1], mo = +m[2], d = +m[3], h = +m[4], mi = +m[5], s = +(m[6] || 0);
+  const naiveUtcMs = Date.UTC(y, mo - 1, d, h, mi, s);
+  const fmt = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/London', hour12: false,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit'
+  });
+  for (const shiftMs of [0, -3600000]) {
+    const cand = new Date(naiveUtcMs + shiftMs);
+    const p = Object.fromEntries(fmt.formatToParts(cand).map(x => [x.type, x.value]));
+    if (+p.year === y && +p.month === mo && +p.day === d &&
+        +p.hour === h && +p.minute === mi && +p.second === s) {
+      return cand;
+    }
+  }
+  return new Date(naiveUtcMs);
 }
 
 // ---- Common train extraction logic ----
