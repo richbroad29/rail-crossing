@@ -1,5 +1,6 @@
 const https = require('https');
 const logger = require('./logger');
+const { parseLondonWallClock, londonDateStamp } = require('./time-utils');
 
 /**
  * LDB Poller — queries departure board data for crossing predictions.
@@ -88,39 +89,18 @@ function parseTime(timeStr) {
       return isNaN(d.getTime()) ? null : d;
     }
     // Europe/London wall-clock without offset (RDM REST shape).
-    // Parsing as new Date() interprets it as VPS-local (UTC), causing
-    // +60min drift during BST. Probe GMT vs BST and pick the candidate
-    // that round-trips to the input.
     return parseLondonWallClock(timeStr);
   }
-  // HH:MM fallback (SOAP path)
+  // HH:MM fallback (SOAP path) — times are UK wall-clock, so build via
+  // today's London date rather than UTC date components.
   if (!timeStr.includes(':')) return null;
   const [h, m] = timeStr.split(':').map(Number);
-  const now = new Date();
-  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m, 0);
-  if (d.getTime() < now.getTime() - 6 * 3600000) d.setDate(d.getDate() + 1);
+  const hh = String(h).padStart(2, '0');
+  const mm = String(m).padStart(2, '0');
+  let d = parseLondonWallClock(`${londonDateStamp()}T${hh}:${mm}:00`);
+  if (!d) return null;
+  if (d.getTime() < Date.now() - 6 * 3600000) d = new Date(d.getTime() + 86400000);
   return d;
-}
-
-function parseLondonWallClock(iso) {
-  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/);
-  if (!m) return null;
-  const y = +m[1], mo = +m[2], d = +m[3], h = +m[4], mi = +m[5], s = +(m[6] || 0);
-  const naiveUtcMs = Date.UTC(y, mo - 1, d, h, mi, s);
-  const fmt = new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'Europe/London', hour12: false,
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit'
-  });
-  for (const shiftMs of [0, -3600000]) {
-    const cand = new Date(naiveUtcMs + shiftMs);
-    const p = Object.fromEntries(fmt.formatToParts(cand).map(x => [x.type, x.value]));
-    if (+p.year === y && +p.month === mo && +p.day === d &&
-        +p.hour === h && +p.minute === mi && +p.second === s) {
-      return cand;
-    }
-  }
-  return new Date(naiveUtcMs);
 }
 
 // ---- Common train extraction logic ----

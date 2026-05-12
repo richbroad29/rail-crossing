@@ -5,7 +5,8 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "node --watch src/index.js"
+    "dev": "node --watch src/index.js",
+    "test": "TZ=UTC node test/time-utils.test.js && TZ=Europe/London node test/time-utils.test.js"
   },
   "engines": {
     "node": ">=20.0.0"

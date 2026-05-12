@@ -1,4 +1,5 @@
 const logger = require('./logger');
+const { londonMinsToDate } = require('./time-utils');
 
 // States: OPEN, CLOSING_SOON, CLOSED, OPENING_SOON
 const CLOSING_SOON_WINDOW_MS = 5 * 60 * 1000; // Show "closing soon" 5 min before
@@ -102,12 +103,9 @@ class CrossingState {
     return merged;
   }
 
-  // Convert schedule minutes-since-midnight to Date for today
+  // Convert schedule minutes-since-midnight to Date for today (Europe/London wall-clock)
   _scheduleTimeToDate(mins) {
-    if (mins === null || mins === undefined) return null;
-    const now = new Date();
-    return new Date(now.getFullYear(), now.getMonth(), now.getDate(),
-      Math.floor(mins / 60) % 24, Math.round(mins % 60), 0);
+    return londonMinsToDate(mins);
   }
 
   // Compute closure periods from merged train list

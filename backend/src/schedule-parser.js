@@ -3,6 +3,7 @@ const zlib = require('zlib');
 const readline = require('readline');
 const path = require('path');
 const logger = require('./logger');
+const { londonMinsToDate, londonDateStamp } = require('./time-utils');
 
 // Parse CIF time "HHMM" or "HHMMH" (H = half-minute) into minutes since midnight
 function cifTimeToMins(t) {
@@ -20,12 +21,9 @@ function minsToTimeStr(mins) {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
 
-// Convert minutes since midnight to a Date for today
+// Convert minutes since midnight to a Date for today (Europe/London wall-clock)
 function minsToDate(mins) {
-  const now = new Date();
-  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate(),
-    Math.floor(mins / 60) % 24, Math.round(mins % 60), 0);
-  return d;
+  return londonMinsToDate(mins);
 }
 
 // Check if a schedule runs on a given day of week (0=Mon, 6=Sun)
@@ -37,14 +35,14 @@ function runsOnDay(daysStr, dayOfWeek) {
 
 // Check if today is within the schedule's date range
 function isActiveToday(schedule) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = londonDateStamp();
   const start = schedule.schedule_start_date?.slice(0, 10);
   const end = schedule.schedule_end_date?.slice(0, 10);
   if (start && today < start) return false;
   if (end && today > end) return false;
-  // Check day of week (JS: 0=Sun, we need 0=Mon)
-  const jsDay = new Date().getDay();
-  const cifDay = jsDay === 0 ? 6 : jsDay - 1; // Convert to Mon=0
+  // Day of week from London's today date — avoids wrong day during BST 00:00–01:00
+  const jsDay = new Date(today + 'T00:00:00Z').getUTCDay(); // 0=Sun
+  const cifDay = jsDay === 0 ? 6 : jsDay - 1; // Convert to CIF Mon=0
   return runsOnDay(schedule.schedule_days_runs, cifDay);
 }
 

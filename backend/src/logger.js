@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { londonDateStamp } = require('./time-utils');
 
 const LOG_DIR = path.join(__dirname, '..', 'data', 'logs');
 
@@ -8,7 +9,7 @@ function ensureDir(dir) {
 }
 
 function dateStamp() {
-  return new Date().toISOString().slice(0, 10);
+  return londonDateStamp();
 }
 
 function timestamp() {

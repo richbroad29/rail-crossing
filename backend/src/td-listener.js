@@ -1,6 +1,7 @@
 const stompit = require('stompit');
 const fs = require('fs');
 const path = require('path');
+const { londonDateStamp } = require('./time-utils');
 
 // NROD's public feed is plain STOMP — they do not expose a TLS endpoint.
 // Credentials travel in the clear; this is the documented NROD design.
@@ -22,7 +23,7 @@ function ensureDir(dir) {
 }
 
 function logFile() {
-  return path.join(LOG_DIR, `td-${new Date().toISOString().slice(0, 10)}.jsonl`);
+  return path.join(LOG_DIR, `td-${londonDateStamp()}.jsonl`);
 }
 
 function writeEvent(evt) {
