@@ -9,6 +9,7 @@
     "autoRaise": true,
     "closeBefore": {"east": 1.5, "west": 2.5},
     "openAfter": {"east": 0.5, "west": 0.5},
+    "openAfterFreight": 1.5,
     "consecutiveWindow": 1.5,
     "signals": {"east": "LG 4", "west": "LG 5"},
     "berths": {

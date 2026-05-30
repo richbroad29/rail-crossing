@@ -47,7 +47,9 @@ function getCloseBefore(direction) {
   if (CFG.closeBefore && typeof CFG.closeBefore === 'object') return CFG.closeBefore[direction] || 1.5;
   return CFG.closeBefore || 1.5;
 }
-function getOpenAfter(direction) {
+function getOpenAfter(direction, train) {
+  // Freight trains take longer to clear — use openAfterFreight if set (calibrated from feedback)
+  if (train && train.trainType === 'freight' && CFG.openAfterFreight != null) return CFG.openAfterFreight;
   if (CFG.openAfter && typeof CFG.openAfter === 'object') return CFG.openAfter[direction] || 0.75;
   return CFG.openAfter || 0.75;
 }
@@ -285,7 +287,7 @@ function computeClosures(trainList) {
   for (var i = 0; i < sorted.length; i++) {
     var t = sorted[i];
     var cb = getCloseBefore(t.direction);
-    var oa = getOpenAfter(t.direction);
+    var oa = getOpenAfter(t.direction, t);
     var cl = new Date(t.bestTime.getTime() - cb * 60000);
     var op = new Date(t.bestTime.getTime() + oa * 60000);
     if (cs === null) { cs = cl; ce = op; ct = [t]; }
@@ -567,7 +569,7 @@ function renderDebugPanel() {
     for (var i = 0; i < trains.length; i++) {
       var t = trains[i];
       var cl = new Date(t.bestTime.getTime() - getCloseBefore(t.direction) * 60000);
-      var op = new Date(t.bestTime.getTime() + getOpenAfter(t.direction) * 60000);
+      var op = new Date(t.bestTime.getTime() + getOpenAfter(t.direction, t) * 60000);
       var arrow = t.direction === 'east' ? '→' : '←';
       html += '<div class="dbg-row">' +
         fmtShort(t.scheduledTime || t.bestTime) + ' ' + arrow + ' ' +
