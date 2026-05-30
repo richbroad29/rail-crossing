@@ -1,7 +1,12 @@
 const stompit = require('stompit');
 const fs = require('fs');
 const path = require('path');
+const { EventEmitter } = require('events');
 const { londonDateStamp } = require('./time-utils');
+
+// Single shared emitter — index.js wires its 'sighting' events into each
+// crossing-state's recordTdSighting method.
+const emitter = new EventEmitter();
 
 // NROD's public feed is plain STOMP — they do not expose a TLS endpoint.
 // Credentials travel in the clear; this is the documented NROD design.
@@ -46,7 +51,7 @@ function processMessage(body) {
       if (!msg || msg.area_id !== TARGET_AREA) continue;
       const ms = Number(msg.time);
       const ts = Number.isFinite(ms) && ms > 0 ? new Date(ms).toISOString() : new Date().toISOString();
-      writeEvent({
+      const evt = {
         ts,
         area: msg.area_id,
         event: msg.msg_type || type.replace('_MSG', ''),
@@ -54,8 +59,16 @@ function processMessage(body) {
         from: msg.from || null,
         to: msg.to || null,
         trust_uid: null
-      });
+      };
+      writeEvent(evt);
       eventsLogged++;
+
+      // Emit a sighting for downstream prediction state. CA = berth step,
+      // CB = interpose (headcode first appearing). Both confirm the train is
+      // physically here. Skip CC (cancel) — those carry the cleared headcode.
+      if (evt.desc && (evt.event === 'CA' || evt.event === 'CB')) {
+        emitter.emit('sighting', { headcode: evt.desc, ts: evt.ts, area: evt.area });
+      }
     }
   }
 
@@ -124,4 +137,4 @@ function start() {
   connect();
 }
 
-module.exports = { start };
+module.exports = { start, on: emitter.on.bind(emitter), off: emitter.off.bind(emitter) };

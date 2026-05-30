@@ -9,6 +9,7 @@ const tdListener = require('./td-listener');
 const tdRotation = require('./td-rotation');
 const cifFetcher = require('./cif-fetcher');
 const corpusFetcher = require('./corpus-fetcher');
+const { computeRunRates } = require('./run-rate');
 const { parseLondonWallClock, londonDateStamp } = require('./time-utils');
 
 // Load config
@@ -77,6 +78,37 @@ async function loadCorpus() {
   }
 }
 
+// Annotate Q-flagged freight trains with their recent run rate by scanning
+// past TD logs. Mutates the trains in place with `recentRunRate` and the
+// underlying `recentRunDays` count for transparency.
+function annotateRunRates(scheduleByCrossing) {
+  const headcodeToDaysPattern = new Map();
+  for (const trains of Object.values(scheduleByCrossing)) {
+    for (const t of trains) {
+      if (t.runsAsRequired && t.headcode) {
+        headcodeToDaysPattern.set(t.headcode, t.daysPattern || '');
+      }
+    }
+  }
+  if (headcodeToDaysPattern.size === 0) return;
+
+  const rates = computeRunRates(headcodeToDaysPattern);
+  for (const trains of Object.values(scheduleByCrossing)) {
+    for (const t of trains) {
+      if (!t.runsAsRequired || !t.headcode) continue;
+      const r = rates[t.headcode];
+      if (!r) continue;
+      t.recentRunRate = r.rate;
+      t.recentRunSeen = r.seen;
+      t.recentRunApplicable = r.applicable;
+    }
+  }
+  const summary = Object.entries(rates).map(([h, r]) =>
+    `${h}=${r.applicable > 0 ? Math.round(100 * r.rate) + '%' : 'n/a'}(${r.seen}/${r.applicable})`
+  ).join(' ');
+  console.log(`Run-rate scan (${headcodeToDaysPattern.size} Q-freight headcodes): ${summary}`);
+}
+
 // Load schedule data — prefers env SCHEDULE_FILE (for testing); else auto-managed CIF
 async function loadSchedule() {
   let file = SCHEDULE_FILE;
@@ -97,6 +129,7 @@ async function loadSchedule() {
   console.log(`Loading schedule from: ${file}`);
   try {
     const scheduleTrains = await parseScheduleFile(file, crossingsConfig);
+    annotateRunRates(scheduleTrains);
     for (const [id, trains] of Object.entries(scheduleTrains)) {
       crossingStates[id].updateScheduleTrains(trains);
     }
@@ -127,6 +160,7 @@ function scheduleDailyCifRefresh() {
       const res = await cifFetcher.downloadCif();
       console.log(`CIF refresh: downloaded ${res.bytes} bytes`);
       const trains = await parseScheduleFile(cifFetcher.latestFilePath(), crossingsConfig);
+      annotateRunRates(trains);
       for (const [id, t] of Object.entries(trains)) {
         crossingStates[id].updateScheduleTrains(t);
       }
@@ -175,7 +209,14 @@ async function main() {
   // Start API server
   createApi(crossingStates, PORT);
 
-  // Start TD feed listener and daily log rotation (additive — does not affect LDB/state path)
+  // Start TD feed listener and daily log rotation (additive — does not affect LDB/state path).
+  // Route every TD sighting into each crossing-state so that CIF-sourced freight
+  // predictions can be marked tdSeen=true once the train enters our area.
+  tdListener.on('sighting', ({ headcode, ts }) => {
+    for (const state of Object.values(crossingStates)) {
+      state.recordTdSighting(headcode, ts);
+    }
+  });
   tdListener.start();
   tdRotation.start();
 

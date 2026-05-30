@@ -15,6 +15,13 @@ class CrossingState {
     this.scheduleTrains = [];      // From CIF schedule file
     this.tdEvents = [];            // Phase 2: from TD berth steps
 
+    // headcode → Date of first TD sighting in our area today. Trains entering
+    // our (narrow) TD area give only ~1 min of warning before Portslade, but
+    // a sighting is a definitive "this train is actually running today" signal
+    // — used to upgrade Q-freight predictions from "may not run" to confirmed.
+    this.tdSeenToday = new Map();
+    this.tdSeenDay = null; // ISO date string for which tdSeenToday applies
+
     // Computed state
     this.closurePeriods = [];
     this.state = 'OPEN';
@@ -23,6 +30,26 @@ class CrossingState {
     // Train history (for feedback correlation)
     this.trainHistory = [];
     this.lastPassedTrain = null;
+  }
+
+  // Record a TD sighting (called from td-listener for each CA/CB event we
+  // care about). We only need the headcode and the time — the berth itself
+  // doesn't matter for "is the train running today".
+  recordTdSighting(headcode, when) {
+    if (!headcode) return;
+    const ts = when instanceof Date ? when : new Date(when);
+    if (!Number.isFinite(ts.getTime())) return;
+    const day = ts.toISOString().slice(0, 10);
+    if (this.tdSeenDay !== day) {
+      this.tdSeenToday.clear();
+      this.tdSeenDay = day;
+    }
+    // Keep the FIRST sighting of the day — used as proof of running.
+    if (!this.tdSeenToday.has(headcode)) {
+      this.tdSeenToday.set(headcode, ts);
+      // Recompute so any CIF entry with this headcode picks up tdSeen=true.
+      this._recompute();
+    }
   }
 
   // Update LDB trains (called every 30s from poller)
@@ -104,6 +131,19 @@ class CrossingState {
         if (looseHit) continue;
       }
 
+      const tdSighting = t.headcode ? this.tdSeenToday.get(t.headcode) : null;
+
+      // Late-minute drop: within TD_LOCK_LEAD_MS of the scheduled crossing,
+      // require a TD sighting to keep the prediction. On-time trains enter
+      // our LA berths ~60–90s before crossing, so a missing sighting at T−60s
+      // is strong evidence the train isn't running (typical Q-path no-show).
+      // We re-add automatically on the next recompute if TD eventually sights
+      // the headcode (the recordTdSighting hook triggers _recompute).
+      const TD_LOCK_LEAD_MS = 60 * 1000;
+      if (!tdSighting && (estTime.getTime() - now.getTime()) < TD_LOCK_LEAD_MS) {
+        continue;
+      }
+
       merged.push({
         origin: t.origin,
         destination: t.destination,
@@ -119,6 +159,12 @@ class CrossingState {
         etaText: 'Timetabled',
         source: 'cif',
         confidence: t.trainType === 'freight' ? 'low' : 'medium',
+        runsAsRequired: !!t.runsAsRequired,
+        recentRunRate: typeof t.recentRunRate === 'number' ? t.recentRunRate : null,
+        recentRunSeen: t.recentRunSeen || 0,
+        recentRunApplicable: t.recentRunApplicable || 0,
+        tdSeen: !!tdSighting,
+        tdSeenAt: tdSighting ? tdSighting.toISOString() : null,
         dedupKey: `cif|${t.uid || t.headcode || ''}|${t.estimatedCrossingMins}`
       });
     }
@@ -202,7 +248,13 @@ class CrossingState {
         delayMins: t.delayMins || 0,
         etaText: t.etaText,
         confidence: t.confidence,
-        source: t.source
+        source: t.source,
+        runsAsRequired: !!t.runsAsRequired,
+        recentRunRate: typeof t.recentRunRate === 'number' ? t.recentRunRate : null,
+        recentRunSeen: t.recentRunSeen || 0,
+        recentRunApplicable: t.recentRunApplicable || 0,
+        tdSeen: !!t.tdSeen,
+        tdSeenAt: t.tdSeenAt || null
       }))
     };
   }

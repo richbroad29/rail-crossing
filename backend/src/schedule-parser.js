@@ -169,6 +169,12 @@ async function parseScheduleFile(filePath, crossingsConfig) {
     const category = segment.CIF_train_category || '';
     const operator = sched.atoc_code || '';
     const power = segment.CIF_power_type || '';
+    const opChars = segment.CIF_operating_characteristics || '';
+    // Q in CIF_operating_characteristics = "runs as required". Path is in the
+    // WTT but the train only runs on demand — common for freight aggregate
+    // flows. Significant false-positive source unless we filter or downgrade.
+    const runsAsRequired = opChars.includes('Q');
+    const daysPattern = sched.schedule_days_runs || '';
 
     // Determine train type from headcode and category
     let trainType = 'passenger';
@@ -200,6 +206,8 @@ async function parseScheduleFile(filePath, crossingsConfig) {
         power,
         direction: route.direction,
         stp,
+        runsAsRequired,
+        daysPattern,
         estimatedCrossingTime: minsToTimeStr(estMins),
         estimatedCrossingMins: estMins,
         nearWestTiploc: route.nearWest.tiploc,
