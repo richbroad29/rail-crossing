@@ -4,6 +4,7 @@ const readline = require('readline');
 const path = require('path');
 const logger = require('./logger');
 const { londonMinsToDate, londonDateStamp } = require('./time-utils');
+const { resolveTiploc } = require('./corpus-fetcher');
 
 // Parse CIF time "HHMM" or "HHMMH" (H = half-minute) into minutes since midnight
 function cifTimeToMins(t) {
@@ -205,8 +206,8 @@ async function parseScheduleFile(filePath, crossingsConfig) {
         nearWestTime: minsToTimeStr(route.nearWest.time),
         nearEastTiploc: route.nearEast.tiploc,
         nearEastTime: minsToTimeStr(route.nearEast.time),
-        origin: locations[0].tiploc_code,
-        destination: locations[locations.length - 1].tiploc_code,
+        origin: resolveTiploc(locations[0].tiploc_code),
+        destination: resolveTiploc(locations[locations.length - 1].tiploc_code),
         source: 'schedule'
       };
 

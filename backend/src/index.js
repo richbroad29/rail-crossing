@@ -8,6 +8,7 @@ const logger = require('./logger');
 const tdListener = require('./td-listener');
 const tdRotation = require('./td-rotation');
 const cifFetcher = require('./cif-fetcher');
+const corpusFetcher = require('./corpus-fetcher');
 const { parseLondonWallClock, londonDateStamp } = require('./time-utils');
 
 // Load config
@@ -54,6 +55,28 @@ async function pollAll() {
   }
 }
 
+// Load CORPUS reference data — used to resolve CIF train origin/destination
+// TIPLOCs to human-readable names. Non-fatal: on failure, freight/ECS origin
+// and destination remain raw TIPLOCs (current pre-CORPUS behaviour).
+async function loadCorpus() {
+  if (!corpusFetcher.latestFileExists()) {
+    console.log('No CORPUS file on disk yet — triggering initial download');
+    try {
+      const res = await corpusFetcher.downloadCorpus();
+      console.log(`CORPUS downloaded: ${res.bytes} bytes`);
+    } catch (err) {
+      console.error('Initial CORPUS download failed:', err.message);
+      console.error('Freight/ECS origins shown as raw TIPLOCs until next refresh.');
+      return;
+    }
+  }
+  try {
+    await corpusFetcher.loadCorpusFromDisk();
+  } catch (err) {
+    console.error('Failed to load CORPUS from disk:', err.message);
+  }
+}
+
 // Load schedule data — prefers env SCHEDULE_FILE (for testing); else auto-managed CIF
 async function loadSchedule() {
   let file = SCHEDULE_FILE;
@@ -82,12 +105,23 @@ async function loadSchedule() {
   }
 }
 
-// Daily CIF refresh — fires at 04:00 Europe/London. On failure, keeps in-memory data.
+// Daily refresh — fires at 04:00 Europe/London. Refreshes CORPUS first so the
+// subsequent CIF reparse sees the latest TIPLOC names. On failure of either
+// stage, keeps in-memory data from the previous run.
 function scheduleDailyCifRefresh() {
   const next = nextFireAt(4, 0);
   const ms = next.getTime() - Date.now();
-  console.log(`CIF refresh: next fire at ${next.toISOString()} (in ${Math.round(ms/60000)} min)`);
+  console.log(`Daily refresh: next fire at ${next.toISOString()} (in ${Math.round(ms/60000)} min)`);
   setTimeout(async function tick() {
+    try {
+      console.log('CORPUS refresh: starting daily fetch');
+      const res = await corpusFetcher.downloadCorpus();
+      console.log(`CORPUS refresh: downloaded ${res.bytes} bytes`);
+      await corpusFetcher.loadCorpusFromDisk();
+    } catch (err) {
+      console.error('CORPUS refresh failed (keeping previous map):', err.message);
+    }
+
     try {
       console.log('CIF refresh: starting daily fetch');
       const res = await cifFetcher.downloadCif();
@@ -128,10 +162,14 @@ async function main() {
 
   logger.logStartup(Object.keys(crossingsConfig), crossingsConfig);
 
+  // Load CORPUS before schedule so CIF parsing can resolve TIPLOC names.
+  // Awaiting keeps the order correct; ~770KB gzipped → typically sub-second.
+  await loadCorpus();
+
   // Load schedule (non-blocking — LDB starts immediately)
   loadSchedule().catch(err => console.error('Schedule load error:', err));
 
-  // Daily CIF refresh at 04:00 Europe/London
+  // Daily refresh at 04:00 Europe/London (CORPUS, then CIF)
   scheduleDailyCifRefresh();
 
   // Start API server
