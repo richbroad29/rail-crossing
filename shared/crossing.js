@@ -449,7 +449,8 @@ function renderClosures() {
       }
       html += '<div class="closure-train">';
       html += '<span style="color:' + dirColor + ';font-weight:700;flex-shrink:0">' + arrow + '</span>';
-      html += '<span class="closure-train-route">' + t.origin + ' \u2192 ' + t.destination + '</span>';
+      var typeLabel = t.trainType === 'freight' ? ' (freight)' : '';
+      html += '<span class="closure-train-route">' + t.origin + ' \u2192 ' + t.destination + typeLabel + '</span>';
       html += '<span class="closure-train-time">' + fmtShort(t.bestTime) + '</span>';
       html += statusHtml;
       html += '</div>';
