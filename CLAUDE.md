@@ -45,6 +45,7 @@ Caddy on Oracle VPS (railcrossing.duckdns.org)
 backend-v2 Node service
   ├─ LDBSVWS via RDM REST   (active — near-term passenger + non-stopping fasts)
   ├─ CIF schedule           (active — freight, ECS, full-day passenger coverage)
+  ├─ CORPUS reference data  (active — TIPLOC → display-name map for CIF trains)
   └─ TD STOMP feed          (logged to JSONL, NOT yet joined into predictions)
 ```
 
@@ -61,6 +62,8 @@ The frontend polls `GET /crossing/portslade`, receives JSON with the backend's p
 *CIF schedule* — active. Auto-downloaded from NROD (`CIF_ALL_FULL_DAILY`, same basic-auth credentials as STOMP) to `~/rail-crossing/backend/data/schedule/cif-latest.json.gz` at startup and refreshed daily at 04:00 Europe/London. Parsed in memory only. Provides full-day coverage including freight, ECS, and all services beyond LDBSVWS's 2h window. Source label `"cif"`.
 
 Dedup: UID-first (CIF `CIF_train_uid` vs LDBSVWS `svc.uid`), then headcode + time ±5 min, then direction + time ±3 min as last resort. LDBSVWS wins on any match.
+
+**CIF origin/destination resolution via CORPUS:** CIF entries carry raw TIPLOCs (e.g. `FRTSTGT`) where LDBSVWS provides `locationName` strings. `backend/src/corpus-fetcher.js` downloads NR CORPUS at startup, builds an in-memory `TIPLOC → NLCDESC` map (falls back to `3ALPHA`; parenthetical CORPUS admin markers like `(C) (TPS INDIC. ONLY)` are stripped at map-build time by `_cleanDisplayName`), and `schedule-parser.js` resolves `origin`/`destination` through it. Unknown TIPLOCs pass through unchanged — never silently dropped. LDBSVWS-sourced trains are not touched (they already have human names). Refreshed daily at 04:00 Europe/London immediately before the CIF reparse.
 
 **Known CIF limitation — midnight-crossing trains:** CIF times past 24:00 (e.g., `2510` = 01:10 next morning) are mapped modulo-24 by `londonMinsToDate`. A train timetabled at `2510` will be placed at 01:10 *today* instead of 01:10 *tomorrow*, appearing stale or absent. Affects overnight freight and ECS only; daytime services are unaffected. Phase 2 fix.
 
@@ -125,6 +128,7 @@ These are also the values in `crossings.json` → `berths.east/west.approach/pro
 - **LDBSVWS** (Rail Data Marketplace, Staff Version) — backend-v2 calls the RDM REST endpoint with `x-apikey` (the `RDM_API_KEY` in backend `.env`). This is the active LDB data source.
 - **NWR Train Describer (STOMP)** — Rich is subscribed via NROD. Backend-v2 `td-listener.js` subscribes via plain STOMP (no TLS) to `publicdatafeeds.networkrail.co.uk:61618`, filters area LA, writes JSONL to `backend/data/logs/td/`. Not yet joined into prediction output.
 - **NWR SCHEDULE (CIF)** — downloaded automatically from NROD `CifFileAuthenticate` endpoint using the same basic-auth credentials as STOMP (`NR_FEED_USER`/`NR_FEED_PASS` in backend `.env`). No separate NROD subscription needed — the portal grants global access to all feeds. Daily full extract, ~120 MB gzipped; stored at `~/rail-crossing/backend/data/schedule/cif-latest.json.gz`. **Credential testing gotcha:** `source .env` in bash expands `$` in the password (e.g., `p$i$d…` → `p`) — use `awk -F= '/^NR_FEED_PASS=/{sub(/^NR_FEED_PASS=/,"");print}' .env` to read the literal value.
+- **NWR CORPUS** — downloaded from `https://publicdatafeeds.networkrail.co.uk/ntrod/SupportingFileAuthenticate?type=CORPUS` using the same `NR_FEED_USER`/`NR_FEED_PASS` credentials. ~770 KB gzipped, ~12.3k usable TIPLOC entries after build; stored at `~/rail-crossing/backend/data/corpus/corpus-latest.json.gz`. Used only for resolving CIF train origin/destination names — see "CIF origin/destination resolution via CORPUS" above.
 - **Google Apps Script + Sheets** — feedback collection. URL is in `crossings.json`.
 - **GoatCounter** — analytics
 - **Buy Me a Coffee** — donations
