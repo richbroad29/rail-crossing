@@ -272,7 +272,13 @@ function parseVpsResponse(data) {
         source: t.source,
         headcode: t.headcode,
         trainType: t.trainType,
-        tdBerth: t.tdBerth
+        tdBerth: t.tdBerth,
+        runsAsRequired: !!t.runsAsRequired,
+        recentRunRate: typeof t.recentRunRate === 'number' ? t.recentRunRate : null,
+        recentRunSeen: t.recentRunSeen || 0,
+        recentRunApplicable: t.recentRunApplicable || 0,
+        tdSeen: !!t.tdSeen,
+        tdSeenAt: t.tdSeenAt || null
       });
     }
   }
@@ -449,7 +455,21 @@ function renderClosures() {
       }
       html += '<div class="closure-train">';
       html += '<span style="color:' + dirColor + ';font-weight:700;flex-shrink:0">' + arrow + '</span>';
-      var typeLabel = t.trainType === 'freight' ? ' (freight)' : '';
+      var typeLabel = '';
+      if (t.trainType === 'freight') {
+        // Confidence ladder: TD sighting today (live confirmation) beats recent
+        // history; recent history beats schedule-only. A Q-flagged freight with
+        // a low historical run rate is the typical false-positive culprit.
+        if (t.tdSeen) {
+          typeLabel = ' (freight \u2014 confirmed)';
+        } else if (t.runsAsRequired && t.recentRunRate !== null && t.recentRunRate < 0.3) {
+          typeLabel = ' (freight \u2014 usually doesn\u2019t run)';
+        } else if (t.runsAsRequired) {
+          typeLabel = ' (freight \u2014 may not run)';
+        } else {
+          typeLabel = ' (freight)';
+        }
+      }
       html += '<span class="closure-train-route">' + t.origin + ' \u2192 ' + t.destination + typeLabel + '</span>';
       html += '<span class="closure-train-time">' + fmtShort(t.bestTime) + '</span>';
       html += statusHtml;
