@@ -46,7 +46,7 @@ backend-v2 Node service
   ├─ LDBSVWS via RDM REST   (active — near-term passenger + non-stopping fasts)
   ├─ CIF schedule           (active — freight, ECS, full-day passenger coverage)
   ├─ CORPUS reference data  (active — TIPLOC → display-name map for CIF trains)
-  └─ TD STOMP feed          (logged to JSONL, NOT yet joined into predictions)
+  └─ TD STOMP feed          (live sightings join predictions for Q-freight lock; tdBerth tier-narrowing pending)
 ```
 
 The frontend polls `GET /crossing/portslade`, receives JSON with the backend's pre-computed upcoming closures, then runs its own client-side closure logic over the train list (so `closeBefore`/`openAfter`/`consecutiveWindow` stay tunable via `crossings.json` without a backend deploy). Renders a state (`OPEN`, `CLOSING_SOON`, `CLOSED`).
@@ -67,7 +67,14 @@ Dedup: UID-first (CIF `CIF_train_uid` vs LDBSVWS `svc.uid`), then headcode + tim
 
 **Known CIF limitation — midnight-crossing trains:** CIF times past 24:00 (e.g., `2510` = 01:10 next morning) are mapped modulo-24 by `londonMinsToDate`. A train timetabled at `2510` will be placed at 01:10 *today* instead of 01:10 *tomorrow*, appearing stale or absent. Affects overnight freight and ECS only; daytime services are unaffected. Phase 2 fix.
 
-*TD* — STOMP listener active, writing JSONL to `~/rail-crossing/backend/data/logs/td/`. Not yet joined into predictions. No `tdBerth` field on trains, no confidence-tier narrowing yet.
+*TD* — STOMP listener active, writing JSONL to `~/rail-crossing/backend/data/logs/td/`. **Partially joined into predictions:** every CA/CB event emits a `sighting` event (`td-listener.js`); `crossing-state` records the first sighting per headcode per day in `tdSeenToday`, surfaces `tdSeen`/`tdSeenAt` on the API, and uses the sighting as the late-minute lock signal for CIF predictions (see Q-freight handling below). Still pending: confidence-tier narrowing via `tdBerth` (approach/protecting/clear).
+
+**Q-freight handling — false-positive control for CIF.** Freight scheduled in CIF often carries `Q` in `CIF_operating_characteristics` = "runs as required" (path booked, train only runs on demand — ~50% of Portslade-area freight). The pipeline addresses this in three layers:
+- `schedule-parser.js` sets `runsAsRequired=true` when the entry has the `Q` flag.
+- `backend/src/run-rate.js` scans the last 14 days of TD logs at schedule-load and daily-refresh time. For each Q-flagged headcode it computes `recentRunRate = daysSeen / applicableDays` (applicability respects `schedule_days_runs`). Attached to the train as `recentRunRate` / `recentRunSeen` / `recentRunApplicable`.
+- `crossing-state._mergeTrains` applies a **late-minute lock**: within `TD_LOCK_LEAD_MS` (60 s) of the scheduled crossing, a CIF entry with `tdSeen=false` is dropped from the merged train list. The recompute triggered by `recordTdSighting` re-adds the entry if TD sights the headcode later. This is what guarantees "app says CLOSED ⇔ a train has actually been seen entering our berths" for CIF-sourced trains.
+
+The frontend renders four-state freight labels by descending confidence: `confirmed` (tdSeen=true) → `usually doesn't run` (Q-flag and recentRunRate<0.3) → `may not run` (Q-flag, no rate) → plain `(freight)`. LDBSVWS-sourced predictions are untouched throughout (they have realtime ETAs).
 
 Feedback flow: when the user reports a wrong prediction, the frontend POSTs to a Google Apps Script URL (in `crossings.json` → `feedbackUrl`), which appends a row to a Google Sheet.
 
@@ -178,7 +185,8 @@ External services should be free unless the value clearly justifies a paid tier.
 
 ## Active work / pending items
 
-- **Join TD events into the prediction pipeline** — events are flowing to JSONL on disk but `crossing-state` doesn't yet use them to set `tdBerth` on trains. Wiring this up is what unlocks confidence-tier narrowing (±90s → ±60s → ±30s → "imminent") on the frontend.
+- **Confidence-tier narrowing via TD berth state** — TD sightings now flow into predictions (`tdSeen`/`tdSeenAt` on each CIF train) and drive the late-minute lock for Q-freight, but the per-berth `tdBerth` field (approach/protecting/clear) is still not populated. Setting it would unlock the ±90s → ±60s → ±30s → "imminent" confidence-window narrowing.
+- **Late-running CIF freight after the lock window** — when TD sights a CIF train >60 s after its scheduled time, `_mergeTrains` re-includes it, but its closure period is in the past and gets filtered by the renderer. To show "CLOSED, freight passing now" for late trains, update `bestTime` to the TD sighting timestamp when re-adding.
 - **Fix midnight-crossing bug in CIF** — CIF times past 24:00 (e.g., `2510` = 01:10 next day) are placed on today rather than tomorrow. Affects overnight freight/ECS only.
 - **Handle CIF cancellations (STP C)** — cancelled trains will appear in predictions until the next daily refresh at 04:00. Low priority.
 - **Retire the Cloudflare Worker** — one-week observation window started 11 May 2026. After that, decide whether to leave it as a permanent fallback or tear down the Workers project.
