@@ -89,6 +89,15 @@ function downloadCorpus() {
   });
 }
 
+// Strip parenthetical suffixes from NLCDESC ("VICTORIA (C) (TPS INDIC. ONLY)"
+// → "VICTORIA"). CORPUS uses these for administrative markers that aren't
+// useful end-user labels. Returns empty string if input is missing/blank;
+// callers fall back to 3ALPHA in that case.
+function cleanDisplayName(raw) {
+  if (!raw) return '';
+  return String(raw).replace(/\s*\([^)]*\)/g, '').replace(/\s+/g, ' ').trim();
+}
+
 // Read TARGET, gunzip, parse JSON, build the in-memory map.
 // Atomic: builds a fresh Map first and only swaps into tiplocMap on success.
 async function loadCorpusFromDisk() {
@@ -112,7 +121,7 @@ async function loadCorpusFromDisk() {
   for (const entry of list) {
     const tip = (entry.TIPLOC || '').trim();
     if (!tip) { skipped++; continue; }
-    const nlc = (entry.NLCDESC || '').trim();
+    const nlc = cleanDisplayName(entry.NLCDESC);
     const tre = (entry['3ALPHA'] || '').trim();
     const name = nlc || tre;
     if (!name) { skipped++; continue; }
@@ -145,5 +154,6 @@ module.exports = {
   loadCorpusFromDisk,
   resolveTiploc,
   mapSize,
-  latestFileExists
+  latestFileExists,
+  _cleanDisplayName: cleanDisplayName
 };
