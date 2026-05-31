@@ -15,7 +15,10 @@ function cifTimeToMins(t) {
   return h * 60 + m + half;
 }
 
-// Convert minutes since midnight to "HH:MM" string
+// Convert minutes since midnight to "HH:MM" string. Display-only: the "% 24"
+// intentionally drops the day for a post-midnight (>= 1440) value so the label
+// reads as a 24h wall clock (e.g. 00:05). The calendar day is carried by the
+// Date from londonMinsToDate, never by this string.
 function minsToTimeStr(mins) {
   const h = Math.floor(mins / 60) % 24;
   const m = Math.round(mins % 60);
@@ -47,6 +50,10 @@ function isActiveToday(schedule) {
   return runsOnDay(schedule.schedule_days_runs, cifDay);
 }
 
+// A backward jump in the wall clock larger than this (minutes) means the
+// service crossed midnight, not that timing points are out of order.
+const MIDNIGHT_WRAP_THRESHOLD_MINS = 720;
+
 // Determine if a schedule traverses a crossing based on TIPLOC sets
 // Returns { traverses, direction, westTiploc, eastTiploc, westTime, eastTime }
 function analyseRoute(locations, crossingConfig) {
@@ -56,15 +63,36 @@ function analyseRoute(locations, crossingConfig) {
   let firstWest = null, lastWest = null;
   let firstEast = null, lastEast = null;
 
+  // Midnight unwrap (intended behaviour): CIF times are wall-clock HHMM within
+  // a single service day, so a service departing late evening and continuing
+  // past 00:00 has later locations with *smaller* HHMM values. Walk the
+  // locations in order and add 1440 whenever the clock jumps backwards by more
+  // than MIDNIGHT_WRAP_THRESHOLD_MINS, producing a monotonic minutes scale on
+  // which post-midnight times are >= 1440. estimateCrossingTime then yields an
+  // estimate >= 1440 and londonMinsToDate places it on the correct next day —
+  // so a ~00:05 traversal appears at 00:05 instead of being dropped or folded
+  // back onto the wrong day. (This covers the service whose own day spans
+  // midnight; the daily parse that captures it runs while that day is "today",
+  // and the in-memory schedule persists across the crossing.)
+  let prevTime = null;
+  let offset = 0;
+
   for (const loc of locations) {
     const tip = loc.tiploc_code;
-    const time = cifTimeToMins(loc.departure || loc.pass || loc.arrival);
+    const raw = cifTimeToMins(loc.departure || loc.pass || loc.arrival);
+    if (raw === null) continue;
 
-    if (westSet.has(tip) && time !== null) {
+    if (prevTime !== null && raw + offset < prevTime - MIDNIGHT_WRAP_THRESHOLD_MINS) {
+      offset += 1440;
+    }
+    const time = raw + offset;
+    prevTime = time;
+
+    if (westSet.has(tip)) {
       if (!firstWest) firstWest = { tiploc: tip, time };
       lastWest = { tiploc: tip, time };
     }
-    if (eastSet.has(tip) && time !== null) {
+    if (eastSet.has(tip)) {
       if (!firstEast) firstEast = { tiploc: tip, time };
       lastEast = { tiploc: tip, time };
     }
@@ -255,4 +283,7 @@ async function parseScheduleFile(filePath, crossingsConfig) {
   return results;
 }
 
-module.exports = { parseScheduleFile, cifTimeToMins, minsToTimeStr, minsToDate };
+module.exports = {
+  parseScheduleFile, cifTimeToMins, minsToTimeStr, minsToDate,
+  analyseRoute, estimateCrossingTime
+};

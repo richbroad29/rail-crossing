@@ -50,17 +50,46 @@ function parseLondonWallClock(iso) {
 }
 
 /**
- * Convert CIF/schedule minutes-since-midnight (Europe/London wall-clock) to
- * a UTC Date for today. Returns null if the time falls in the spring-forward gap.
+ * Add `days` to a "YYYY-MM-DD" stamp using pure calendar arithmetic. Done in
+ * UTC (date-only, so no DST drift); the wall-clock time is applied afterwards
+ * by parseLondonWallClock, which handles BST/GMT for the resulting date.
+ */
+function shiftDateStamp(stamp, days) {
+  if (!days) return stamp;
+  const d = new Date(`${stamp}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  const y = d.getUTCFullYear();
+  const mo = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const da = String(d.getUTCDate()).padStart(2, '0');
+  return `${y}-${mo}-${da}`;
+}
+
+/**
+ * Convert CIF/schedule minutes-since-midnight (Europe/London wall-clock) to a
+ * UTC Date, relative to today's service day. Returns null if the time falls in
+ * the spring-forward gap.
+ *
+ * Day rollover (intended behaviour): a crossing can fall on a different
+ * calendar day than today. A service departing late evening and crossing at
+ * ~00:05 yields mins >= 1440 (the schedule-parser unwraps post-midnight times
+ * onto a monotonic scale). Such a value must map to TOMORROW 00:05 — not be
+ * folded back onto today by "% 24". We therefore split off whole days and shift
+ * the date stamp accordingly (negative mins → a previous day, handled the same
+ * way via floor division).
  */
 function londonMinsToDate(mins) {
   if (mins === null || mins === undefined) return null;
-  const h = Math.floor(mins / 60) % 24;
-  const mi = Math.round(mins % 60);
+  // Round to whole minutes first so a fractional (interpolated half-minute)
+  // input can never produce mm = "60".
+  const total = Math.round(mins);
+  const dayOffset = Math.floor(total / 1440);
+  const within = total - dayOffset * 1440; // 0..1439
+  const h = Math.floor(within / 60);
+  const mi = within % 60;
   const hh = String(h).padStart(2, '0');
   const mm = String(mi).padStart(2, '0');
-  const today = londonDateStamp();
-  return parseLondonWallClock(`${today}T${hh}:${mm}:00`);
+  const dateStamp = shiftDateStamp(londonDateStamp(), dayOffset);
+  return parseLondonWallClock(`${dateStamp}T${hh}:${mm}:00`);
 }
 
 /**
@@ -72,4 +101,4 @@ function londonDateStamp() {
   return `${p.year}-${p.month}-${p.day}`;
 }
 
-module.exports = { parseLondonWallClock, londonMinsToDate, londonDateStamp };
+module.exports = { parseLondonWallClock, londonMinsToDate, londonDateStamp, shiftDateStamp };
