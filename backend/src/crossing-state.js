@@ -4,6 +4,24 @@ const { londonMinsToDate } = require('./time-utils');
 // States: OPEN, CLOSING_SOON, CLOSED, OPENING_SOON
 const CLOSING_SOON_WINDOW_MS = 5 * 60 * 1000; // Show "closing soon" 5 min before
 
+// --- Late-running re-attachment (see _mergeTrains) ---
+// A real, approaching train must never show an expired time or drop off the
+// list, so a projected crossing is floored to now + this epsilon.
+const BEST_TIME_EPSILON_MS = 30 * 1000;
+// A TD-sighted (confirmed-live) train is kept until this long past its
+// projected crossing, so a late-runner is never removed while still en route.
+const SIGHTING_DROP_GRACE_MS = 3 * 60 * 1000;
+// Un-sighted schedule trains are dropped once the *scheduled* crossing is this
+// far in the past (the train has either run already or won't — no live signal).
+const SCHEDULE_PAST_GRACE_MS = 10 * 60 * 1000;
+// Within this lead of the *scheduled* crossing, an un-sighted train is treated
+// as a no-show; a sighted train switches to sighting-based projection.
+const TD_LOCK_LEAD_MS = 60 * 1000;
+// Fallback "TD-area-entry → crossing" transit if config omits areaEntryLeadSecs.
+// Biased slightly low so projections fire early rather than late (catch-every-
+// closure). Westbound measured ~112s; eastbound longer — tune from TD logs.
+const DEFAULT_AREA_ENTRY_LEAD_SECS = { east: 150, west: 112 };
+
 class CrossingState {
   constructor(crossingId, config) {
     this.id = crossingId;
@@ -105,7 +123,27 @@ class CrossingState {
 
     for (const t of this.scheduleTrains) {
       const estTime = this._scheduleTimeToDate(t.estimatedCrossingMins);
-      if (!estTime || estTime < new Date(now.getTime() - 600000)) continue;
+      if (!estTime) continue;
+
+      const tdSighting = t.headcode ? this.tdSeenToday.get(t.headcode) : null;
+
+      // The 'sighting' event fires on ANY CA/CB step in TD area LA and carries
+      // only { headcode, ts } — NOT the approach berth. So it means "entered
+      // the LA area", a per-direction transit *before* the crossing, not the
+      // crossing itself. Project forward by that nominal lead.
+      const leadMs = this._getAreaEntryLeadMs(t.direction);
+      const projectedFromSighting = tdSighting ? tdSighting.getTime() + leadMs : null;
+
+      // Drop trains that have clearly gone:
+      //  - Sighted (confirmed live): keep until SIGHTING_DROP_GRACE_MS past the
+      //    *projected* crossing, so a late-runner is never removed mid-approach.
+      //  - Un-sighted: drop once the *scheduled* crossing is SCHEDULE_PAST_GRACE_MS
+      //    stale (already ran, or a no-show). This preserves the old behaviour.
+      if (tdSighting) {
+        if (now.getTime() > projectedFromSighting + SIGHTING_DROP_GRACE_MS) continue;
+      } else if (estTime.getTime() < now.getTime() - SCHEDULE_PAST_GRACE_MS) {
+        continue;
+      }
 
       // 1. UID match (canonical, both sides expose CIF train UID)
       if (t.uid && ldbByUid.has(t.uid)) continue;
@@ -131,34 +169,52 @@ class CrossingState {
         if (looseHit) continue;
       }
 
-      const tdSighting = t.headcode ? this.tdSeenToday.get(t.headcode) : null;
-
       // Late-minute drop: within TD_LOCK_LEAD_MS of the scheduled crossing,
       // require a TD sighting to keep the prediction. On-time trains enter
       // our LA berths ~60–90s before crossing, so a missing sighting at T−60s
       // is strong evidence the train isn't running (typical Q-path no-show).
       // We re-add automatically on the next recompute if TD eventually sights
       // the headcode (the recordTdSighting hook triggers _recompute).
-      const TD_LOCK_LEAD_MS = 60 * 1000;
+      // NOTE: this drop only fires for genuinely-absent (un-sighted) trains —
+      // the sighted late-running path below is left intact.
       if (!tdSighting && (estTime.getTime() - now.getTime()) < TD_LOCK_LEAD_MS) {
         continue;
       }
+
+      // bestTime: normally the scheduled crossing. But once the scheduled time
+      // has effectively passed (or we're inside the T−60s window) AND TD has
+      // sighted the train, the schedule time is stale — a late-runner would
+      // show an expired/disappearing prediction. Project from the sighting
+      // instead and mark it low-confidence.
+      let bestTime = estTime;
+      let confidence = t.trainType === 'freight' ? 'low' : 'medium';
+      let etaText = 'Timetabled';
+      if (tdSighting && (estTime.getTime() - now.getTime()) < TD_LOCK_LEAD_MS) {
+        bestTime = new Date(projectedFromSighting);
+        confidence = 'low';
+        etaText = 'Live (TD)';
+      }
+
+      // Never emit a crossing time in the past — a real approaching train must
+      // not show an expired prediction or fall off the list.
+      const floorMs = now.getTime() + BEST_TIME_EPSILON_MS;
+      if (bestTime.getTime() < floorMs) bestTime = new Date(floorMs);
 
       merged.push({
         origin: t.origin,
         destination: t.destination,
         operator: t.operator,
         direction: t.direction,
-        bestTime: estTime,
+        bestTime,
         scheduledTime: estTime,
         headcode: t.headcode,
         uid: t.uid,
         trainType: t.trainType,
         delayMins: 0,
         isUncertain: true,
-        etaText: 'Timetabled',
+        etaText,
         source: 'cif',
-        confidence: t.trainType === 'freight' ? 'low' : 'medium',
+        confidence,
         runsAsRequired: !!t.runsAsRequired,
         recentRunRate: typeof t.recentRunRate === 'number' ? t.recentRunRate : null,
         recentRunSeen: t.recentRunSeen || 0,
@@ -176,6 +232,22 @@ class CrossingState {
   // Convert schedule minutes-since-midnight to Date for today (Europe/London wall-clock)
   _scheduleTimeToDate(mins) {
     return londonMinsToDate(mins);
+  }
+
+  // Nominal "entered TD area LA → crossing" transit for a direction, in ms.
+  // Config: timing.areaEntryLeadSecs (per-direction object or single number);
+  // falls back to DEFAULT_AREA_ENTRY_LEAD_SECS. Used to project a late-running
+  // train's crossing from its TD sighting (see _mergeTrains).
+  _getAreaEntryLeadMs(direction) {
+    const cfg = this.timing && this.timing.areaEntryLeadSecs;
+    let secs;
+    if (cfg && typeof cfg === 'object') secs = cfg[direction];
+    else if (typeof cfg === 'number') secs = cfg;
+    if (typeof secs !== 'number') {
+      secs = DEFAULT_AREA_ENTRY_LEAD_SECS[direction];
+      if (typeof secs !== 'number') secs = 120;
+    }
+    return secs * 1000;
   }
 
   // Compute closure periods from merged train list
