@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { pollCrossing } = require('./ldb-poller');
-const { parseScheduleFile } = require('./schedule-parser');
+const { parseScheduleFile, applyUpdateExtract } = require('./schedule-parser');
 const CrossingState = require('./crossing-state');
 const { createApi } = require('./api');
 const logger = require('./logger');
@@ -22,6 +22,12 @@ const NR_TOKEN_SV = process.env.NR_TOKEN_SV;       // Direct SOAP token (alterna
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const SCHEDULE_FILE = process.env.SCHEDULE_FILE || '';
 const POLL_INTERVAL_MS = 30000; // 30 seconds
+const UPDATE_INTERVAL_MS = 3600000; // 1 hour — daily UPDATE extract apply cadence
+
+// Last full-parse result (per crossing), annotated with run-rates. The hourly
+// UPDATE-extract apply overlays onto a clone of this, so each application is
+// idempotent from a clean baseline. Null until the first full parse completes.
+let baseScheduleByCrossing = null;
 
 // Build auth config — RDM takes priority
 let auth;
@@ -130,11 +136,38 @@ async function loadSchedule() {
   try {
     const scheduleTrains = await parseScheduleFile(file, crossingsConfig);
     annotateRunRates(scheduleTrains);
+    baseScheduleByCrossing = scheduleTrains;
     for (const [id, trains] of Object.entries(scheduleTrains)) {
       crossingStates[id].updateScheduleTrains(trains);
     }
   } catch (err) {
     console.error('Failed to load schedule:', err.message);
+  }
+}
+
+// Fetch the daily UPDATE extract and overlay it on the last full parse, so a
+// same-day STP=C cancellation suppresses that train within the hour without
+// waiting for the next 04:00 full re-download. Non-fatal: on any failure we
+// keep the current predictions.
+async function refreshScheduleUpdate() {
+  if (!baseScheduleByCrossing) return; // no full-parse baseline yet
+  let updateFile;
+  try {
+    const res = await cifFetcher.downloadCifUpdate();
+    updateFile = res.path;
+    console.log(`CIF update: downloaded ${res.bytes} bytes (toc-update-${res.day})`);
+  } catch (err) {
+    console.error('CIF update download failed (keeping current predictions):', err.message);
+    return;
+  }
+  try {
+    const { trains } = await applyUpdateExtract(updateFile, crossingsConfig, baseScheduleByCrossing);
+    annotateRunRates(trains);
+    for (const [id, t] of Object.entries(trains)) {
+      crossingStates[id].updateScheduleTrains(t);
+    }
+  } catch (err) {
+    console.error('CIF update apply failed (keeping current predictions):', err.message);
   }
 }
 
@@ -161,6 +194,7 @@ function scheduleDailyCifRefresh() {
       console.log(`CIF refresh: downloaded ${res.bytes} bytes`);
       const trains = await parseScheduleFile(cifFetcher.latestFilePath(), crossingsConfig);
       annotateRunRates(trains);
+      baseScheduleByCrossing = trains;
       for (const [id, t] of Object.entries(trains)) {
         crossingStates[id].updateScheduleTrains(t);
       }
@@ -200,8 +234,18 @@ async function main() {
   // Awaiting keeps the order correct; ~770KB gzipped → typically sub-second.
   await loadCorpus();
 
-  // Load schedule (non-blocking — LDB starts immediately)
-  loadSchedule().catch(err => console.error('Schedule load error:', err));
+  // Load schedule (non-blocking — LDB starts immediately). Once the full-parse
+  // baseline is in place, apply the daily UPDATE extract straight away so any
+  // already-issued same-day cancellations take effect at startup.
+  loadSchedule()
+    .then(() => refreshScheduleUpdate())
+    .catch(err => console.error('Schedule load error:', err));
+
+  // Re-apply the UPDATE extract hourly to pick up same-day STP=C cancellations
+  // (and overlays) without waiting for the 04:00 full re-download.
+  setInterval(() => {
+    refreshScheduleUpdate().catch(err => console.error('Schedule update error:', err));
+  }, UPDATE_INTERVAL_MS);
 
   // Daily refresh at 04:00 Europe/London (CORPUS, then CIF)
   scheduleDailyCifRefresh();

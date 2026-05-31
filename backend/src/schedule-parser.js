@@ -142,6 +142,109 @@ function estimateCrossingTime(nearWest, nearEast, direction, interpolation) {
   }
 }
 
+// STP indicator priority — higher replaces lower. C (cancel) > N (new STP) >
+// O (overlay) > P (permanent / base WTT). Shared by the full parse and the
+// daily-update overlay so the two paths agree.
+const STP_PRIORITY = { P: 0, O: 1, N: 2, C: 3 };
+
+function stpRank(stp) {
+  return STP_PRIORITY[stp] || 0;
+}
+
+// Pull the common train-level fields out of a JsonScheduleV1 record.
+function extractTrainFields(sched) {
+  const segment = sched.schedule_segment || {};
+  const headcode = segment.signalling_id || '';
+  const category = segment.CIF_train_category || '';
+  const opChars = segment.CIF_operating_characteristics || '';
+  // Q in CIF_operating_characteristics = "runs as required". Path is in the
+  // WTT but the train only runs on demand — common for freight aggregate
+  // flows. Significant false-positive source unless we filter or downgrade.
+  const runsAsRequired = opChars.includes('Q');
+
+  // Determine train type from headcode and category
+  let trainType = 'passenger';
+  if (category === 'EE') trainType = 'ecs';
+  else if (headcode && '67'.includes(headcode.charAt(0))) trainType = 'freight';
+  else if (headcode && headcode.charAt(0) === '3') trainType = 'test';
+  else if (headcode && headcode.charAt(0) === '5') trainType = 'ecs';
+
+  return {
+    uid: sched.CIF_train_uid,
+    stp: sched.CIF_stp_indicator || 'P',
+    headcode, category, trainType,
+    operator: sched.atoc_code || '',
+    power: segment.CIF_power_type || '',
+    runsAsRequired,
+    daysPattern: sched.schedule_days_runs || ''
+  };
+}
+
+// Build the per-crossing train entry for a record that traverses, or null.
+function buildCrossingEntry(fields, locations, crossingCfg) {
+  const schedCfg = crossingCfg.schedule;
+  if (!schedCfg) return null;
+
+  const route = analyseRoute(locations, schedCfg);
+  if (!route.traverses) return null;
+
+  const estMins = estimateCrossingTime(
+    route.nearWest, route.nearEast, route.direction, schedCfg.interpolation
+  );
+  if (estMins === null) return null;
+
+  return {
+    uid: fields.uid,
+    headcode: fields.headcode,
+    category: fields.category,
+    operator: fields.operator,
+    trainType: fields.trainType,
+    power: fields.power,
+    direction: route.direction,
+    stp: fields.stp,
+    runsAsRequired: fields.runsAsRequired,
+    daysPattern: fields.daysPattern,
+    estimatedCrossingTime: minsToTimeStr(estMins),
+    estimatedCrossingMins: estMins,
+    nearWestTiploc: route.nearWest.tiploc,
+    nearWestTime: minsToTimeStr(route.nearWest.time),
+    nearEastTiploc: route.nearEast.tiploc,
+    nearEastTime: minsToTimeStr(route.nearEast.time),
+    origin: resolveTiploc(locations[0].tiploc_code),
+    destination: resolveTiploc(locations[locations.length - 1].tiploc_code),
+    source: 'schedule'
+  };
+}
+
+// Insert/replace an entry into the uid-keyed map under STP priority.
+function mergeByStp(schedulesByUid, key, entry) {
+  const existing = schedulesByUid.get(key);
+  if (!existing || stpRank(entry.stp) >= stpRank(existing.stp)) {
+    schedulesByUid.set(key, entry);
+  }
+}
+
+// Stream a CIF JSON file line-by-line (gzip-aware) and invoke onRecord(sched,
+// obj) for each line: `sched` is obj.JsonScheduleV1 when present, else null
+// (so callers can also see TIPLOC/association records). Returns the line count.
+async function streamScheduleRecords(filePath, onRecord) {
+  const isGzip = filePath.endsWith('.gz');
+  let inputStream = fs.createReadStream(filePath);
+  if (isGzip) inputStream = inputStream.pipe(zlib.createGunzip());
+
+  const rl = readline.createInterface({ input: inputStream, crlfDelay: Infinity });
+  let lineCount = 0;
+
+  for await (const line of rl) {
+    lineCount++;
+    if (!line.trim()) continue;
+    let obj;
+    try { obj = JSON.parse(line); } catch { continue; }
+    onRecord(obj.JsonScheduleV1 || null, obj);
+  }
+  return lineCount;
+}
+
 // Parse the CIF file and extract trains for configured crossings
 // Uses streaming to stay within memory limits
 async function parseScheduleFile(filePath, crossingsConfig) {
@@ -151,113 +254,36 @@ async function parseScheduleFile(filePath, crossingsConfig) {
     results[id] = [];
   }
 
-  // Determine if file is gzipped
-  const isGzip = filePath.endsWith('.gz');
-  let inputStream = fs.createReadStream(filePath);
-  if (isGzip) {
-    inputStream = inputStream.pipe(zlib.createGunzip());
-  }
-
-  const rl = readline.createInterface({ input: inputStream, crlfDelay: Infinity });
-
-  // STP overlay tracking: uid → highest-priority schedule
+  // STP overlay tracking: crossingId|uid → highest-priority schedule
   const schedulesByUid = new Map();
 
-  let lineCount = 0;
   let scheduleCount = 0;
 
-  for await (const line of rl) {
-    lineCount++;
-    if (!line.trim()) continue;
-
-    let obj;
-    try {
-      obj = JSON.parse(line);
-    } catch {
-      continue;
-    }
-
-    if (!obj.JsonScheduleV1) continue;
-    const sched = obj.JsonScheduleV1;
+  const lineCount = await streamScheduleRecords(filePath, (sched) => {
+    if (!sched) return;
     scheduleCount++;
 
-    // Only process Create records that are active today
-    if (sched.transaction_type !== 'Create') continue;
-    if (!isActiveToday(sched)) continue;
+    // The full snapshot carries Create records only (overlays are Create with a
+    // non-P stp). Delete/cancellation transactions arrive via the daily UPDATE
+    // extract — see applyUpdateExtract.
+    if (sched.transaction_type !== 'Create') return;
+    if (!isActiveToday(sched)) return;
 
     const segment = sched.schedule_segment;
-    if (!segment) continue;
+    if (!segment) return;
 
     const locations = segment.schedule_location || [];
-    if (locations.length < 2) continue;
+    if (locations.length < 2) return;
 
-    const uid = sched.CIF_train_uid;
-    const stp = sched.CIF_stp_indicator || 'P';
-    const headcode = segment.signalling_id || '';
-    const category = segment.CIF_train_category || '';
-    const operator = sched.atoc_code || '';
-    const power = segment.CIF_power_type || '';
-    const opChars = segment.CIF_operating_characteristics || '';
-    // Q in CIF_operating_characteristics = "runs as required". Path is in the
-    // WTT but the train only runs on demand — common for freight aggregate
-    // flows. Significant false-positive source unless we filter or downgrade.
-    const runsAsRequired = opChars.includes('Q');
-    const daysPattern = sched.schedule_days_runs || '';
-
-    // Determine train type from headcode and category
-    let trainType = 'passenger';
-    if (category === 'EE') trainType = 'ecs';
-    else if (headcode && '67'.includes(headcode.charAt(0))) trainType = 'freight';
-    else if (headcode && headcode.charAt(0) === '3') trainType = 'test';
-    else if (headcode && headcode.charAt(0) === '5') trainType = 'ecs';
+    const fields = extractTrainFields(sched);
 
     // Check each crossing
     for (const [crossingId, crossingCfg] of Object.entries(crossingsConfig)) {
-      const schedCfg = crossingCfg.schedule;
-      if (!schedCfg) continue;
-
-      const route = analyseRoute(locations, schedCfg);
-      if (!route.traverses) continue;
-
-      const estMins = estimateCrossingTime(
-        route.nearWest, route.nearEast, route.direction,
-        schedCfg.interpolation
-      );
-      if (estMins === null) continue;
-
-      const entry = {
-        uid,
-        headcode,
-        category,
-        operator,
-        trainType,
-        power,
-        direction: route.direction,
-        stp,
-        runsAsRequired,
-        daysPattern,
-        estimatedCrossingTime: minsToTimeStr(estMins),
-        estimatedCrossingMins: estMins,
-        nearWestTiploc: route.nearWest.tiploc,
-        nearWestTime: minsToTimeStr(route.nearWest.time),
-        nearEastTiploc: route.nearEast.tiploc,
-        nearEastTime: minsToTimeStr(route.nearEast.time),
-        origin: resolveTiploc(locations[0].tiploc_code),
-        destination: resolveTiploc(locations[locations.length - 1].tiploc_code),
-        source: 'schedule'
-      };
-
-      // STP overlay logic: higher-priority STP indicator replaces lower
-      // C (cancel) > N (new) > O (overlay) > P (permanent)
-      const stpPriority = { P: 0, O: 1, N: 2, C: 3 };
-      const key = `${crossingId}|${uid}`;
-      const existing = schedulesByUid.get(key);
-
-      if (!existing || (stpPriority[stp] || 0) >= (stpPriority[existing.stp] || 0)) {
-        schedulesByUid.set(key, entry);
-      }
+      const entry = buildCrossingEntry(fields, locations, crossingCfg);
+      if (!entry) continue;
+      mergeByStp(schedulesByUid, `${crossingId}|${fields.uid}`, entry);
     }
-  }
+  });
 
   // Collect final results, excluding cancellations
   for (const [key, entry] of schedulesByUid) {
@@ -283,7 +309,101 @@ async function parseScheduleFile(filePath, crossingsConfig) {
   return results;
 }
 
+// Apply a daily UPDATE extract on top of an already-parsed full schedule,
+// WITHOUT a full re-download — so a same-day STP=C cancellation can suppress a
+// train within the hour instead of waiting for the next 04:00 full reparse.
+//
+// Start from the full-parse result (`baseByCrossing`) and overlay the update's
+// transactions, preserving STP priority (C > N > O > P):
+//   - STP=C cancellation → remove the uid from predictions (the headline fix).
+//       CIF cancellations usually carry no schedule_location, so we cancel by
+//       uid against every crossing where the base predicted that uid.
+//   - N/O/P overlay that traverses → add or replace under STP priority,
+//       extending same-day coverage (a new short-term path appears within the hour).
+//   - Delete transaction → counted and logged, but the train is NOT removed.
+//       A bare Delete withdraws a specific prior schedule version; dropping a
+//       train on it risks a false negative (a missed closure). Full schedule-
+//       version tracking is out of scope, so the conservative choice favours
+//       false positives, per the catch-every-closure priority.
+//
+// The base is never mutated and a fresh result is returned, so re-applying the
+// (latest) update each hour is idempotent from a clean baseline.
+async function applyUpdateExtract(updateFilePath, crossingsConfig, baseByCrossing) {
+  const stats = { records: 0, cancelled: 0, overlays: 0, deletes: 0, deleteUids: [] };
+  const crossingIds = Object.keys(crossingsConfig);
+
+  // Rebuild the uid-keyed map from the base predictions (these already exclude
+  // any C the full snapshot carried, so their stp is P/O/N). Clone so the
+  // caller's base array is never mutated.
+  const schedulesByUid = new Map();
+  for (const [crossingId, trains] of Object.entries(baseByCrossing || {})) {
+    for (const t of trains) {
+      if (t && t.uid) schedulesByUid.set(`${crossingId}|${t.uid}`, { ...t });
+    }
+  }
+
+  await streamScheduleRecords(updateFilePath, (sched) => {
+    if (!sched || !sched.CIF_train_uid) return;
+    stats.records++;
+    const uid = sched.CIF_train_uid;
+    const tt = sched.transaction_type || 'Create';
+    const stp = sched.CIF_stp_indicator || 'P';
+
+    // Only records effective today affect today's predictions.
+    if (!isActiveToday(sched)) return;
+
+    if (tt === 'Delete') {
+      stats.deletes++;
+      if (stats.deleteUids.length < 50) stats.deleteUids.push(uid);
+      return; // conservative: never remove a train on a bare Delete
+    }
+
+    if (stp === 'C') {
+      let didCancel = false;
+      for (const crossingId of crossingIds) {
+        const key = `${crossingId}|${uid}`;
+        const existing = schedulesByUid.get(key);
+        if (existing && stpRank('C') >= stpRank(existing.stp)) {
+          schedulesByUid.set(key, { ...existing, stp: 'C' });
+          didCancel = true;
+        }
+      }
+      if (didCancel) stats.cancelled++;
+      return;
+    }
+
+    // N/O/P overlay carrying locations → add or replace under STP priority.
+    const segment = sched.schedule_segment;
+    const locations = (segment && segment.schedule_location) || [];
+    if (locations.length < 2) return;
+    const fields = extractTrainFields(sched);
+    let didOverlay = false;
+    for (const crossingId of crossingIds) {
+      const entry = buildCrossingEntry(fields, locations, crossingsConfig[crossingId]);
+      if (!entry) continue;
+      mergeByStp(schedulesByUid, `${crossingId}|${uid}`, entry);
+      didOverlay = true;
+    }
+    if (didOverlay) stats.overlays++;
+  });
+
+  // Rebuild per-crossing results, excluding cancellations, sorted by time.
+  const results = {};
+  for (const id of crossingIds) results[id] = [];
+  for (const [key, entry] of schedulesByUid) {
+    const crossingId = key.split('|')[0];
+    if (entry.stp !== 'C' && results[crossingId]) results[crossingId].push(entry);
+  }
+  for (const id of crossingIds) {
+    results[id].sort((a, b) => a.estimatedCrossingMins - b.estimatedCrossingMins);
+  }
+
+  console.log(`CIF update applied: ${stats.cancelled} cancellation(s), ${stats.overlays} overlay(s), ${stats.deletes} delete(s) over ${stats.records} update record(s)`);
+  return { trains: results, stats };
+}
+
 module.exports = {
-  parseScheduleFile, cifTimeToMins, minsToTimeStr, minsToDate,
+  parseScheduleFile, applyUpdateExtract,
+  cifTimeToMins, minsToTimeStr, minsToDate,
   analyseRoute, estimateCrossingTime
 };

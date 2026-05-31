@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
-    "test": "TZ=UTC node test/time-utils.test.js && TZ=Europe/London node test/time-utils.test.js && node test/crossing-state.test.js && TZ=UTC node test/schedule-midnight.test.js && TZ=Europe/London node test/schedule-midnight.test.js"
+    "test": "TZ=UTC node test/time-utils.test.js && TZ=Europe/London node test/time-utils.test.js && node test/crossing-state.test.js && TZ=UTC node test/schedule-midnight.test.js && TZ=Europe/London node test/schedule-midnight.test.js && node test/update-extract.test.js"
   },
   "engines": {
     "node": ">=20.0.0"
