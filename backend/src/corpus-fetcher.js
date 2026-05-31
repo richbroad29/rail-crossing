@@ -136,6 +136,13 @@ async function loadCorpusFromDisk() {
 }
 
 // Lookup. Returns the display name if known, otherwise the raw TIPLOC unchanged.
+//
+// NOTE (Fix 4): TIPLOC name resolution is CORPUS-authoritative. The CIF feed's
+// own TIPLOC Insert/Amend (TI/TA) reference records are intentionally NOT used
+// here — they are counted/logged but not applied (see the FINDING in
+// schedule-parser.parseScheduleFile). Portslade's relevant TIPLOCs are stable
+// and already present in CORPUS, and traversal/timing key off the hard-coded
+// TIPLOC codes in config rather than names, so TI/TA change no prediction.
 function resolveTiploc(tip) {
   if (!tip) return tip;
   return tiplocMap.get(tip) || tip;

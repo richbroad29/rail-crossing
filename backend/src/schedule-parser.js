@@ -259,8 +259,39 @@ async function parseScheduleFile(filePath, crossingsConfig) {
 
   let scheduleCount = 0;
 
-  const lineCount = await streamScheduleRecords(filePath, (sched) => {
-    if (!sched) return;
+  // FINDING (Fix 4) — CR / TI / TA records are counted, not applied.
+  //
+  // Assessment for Portslade (ELR BLI1):
+  //   * Change-en-Route (CR) locations alter a train's category/power/timing
+  //     part-way through its journey. They do NOT add or remove calling points,
+  //     so they cannot change WHETHER a service traverses the crossing, and the
+  //     crossing time is interpolated from the LI arrival/pass/departure times
+  //     (unaffected by a CR). The only thing a CR could touch is the train-type
+  //     label, and our classification keys off the base signalling_id headcode,
+  //     not a mid-route category change — West Coastway services through this
+  //     crossing do not change category at Portslade. → immaterial to closures.
+  //   * TIPLOC Insert/Amend (TI/TA = TiplocV1 Create/Update) are reference
+  //     records mapping TIPLOC→name. Name resolution is done from CORPUS
+  //     (see corpus-fetcher.resolveTiploc), and traversal/timing key off the
+  //     hard-coded TIPLOC codes in config, not these records. → immaterial.
+  // So we deliberately do NOT apply them (that would add complexity without
+  // changing a single Portslade prediction). Instead we COUNT and LOG them so
+  // they are visible rather than silently dropped, per the catch-every-closure
+  // posture (if this assumption ever breaks, the counts make it obvious).
+  const skipped = { tiInsert: 0, taAmend: 0, tiplocOther: 0, crLocations: 0, crOnTraversing: 0 };
+
+  const lineCount = await streamScheduleRecords(filePath, (sched, obj) => {
+    if (!sched) {
+      // Non-schedule line. Count TIPLOC reference records (TI/TA) for visibility.
+      const tip = obj && obj.TiplocV1;
+      if (tip) {
+        const tt = tip.transaction_type;
+        if (tt === 'Create') skipped.tiInsert++;           // TI — insert
+        else if (tt === 'Update' || tt === 'Delete') skipped.taAmend++; // TA — amend/delete
+        else skipped.tiplocOther++;
+      }
+      return;
+    }
     scheduleCount++;
 
     // The full snapshot carries Create records only (overlays are Create with a
@@ -275,14 +306,22 @@ async function parseScheduleFile(filePath, crossingsConfig) {
     const locations = segment.schedule_location || [];
     if (locations.length < 2) return;
 
+    // Count Change-en-Route locations (visibility only — see FINDING above).
+    let crHere = 0;
+    for (const loc of locations) if (loc.location_type === 'CR') crHere++;
+    skipped.crLocations += crHere;
+
     const fields = extractTrainFields(sched);
 
     // Check each crossing
+    let traversed = false;
     for (const [crossingId, crossingCfg] of Object.entries(crossingsConfig)) {
       const entry = buildCrossingEntry(fields, locations, crossingCfg);
       if (!entry) continue;
+      traversed = true;
       mergeByStp(schedulesByUid, `${crossingId}|${fields.uid}`, entry);
     }
+    if (traversed && crHere) skipped.crOnTraversing += crHere;
   });
 
   // Collect final results, excluding cancellations
@@ -306,7 +345,22 @@ async function parseScheduleFile(filePath, crossingsConfig) {
     console.log(`  ${id}: ${trains.length} trains (${JSON.stringify(types)})`);
   }
 
+  // Visibility for the deliberately-unapplied CR/TI/TA records (see FINDING).
+  console.log(
+    `Schedule: skipped reference/CR records (not applied — immaterial to Portslade): ` +
+    `TIPLOC insert(TI)=${skipped.tiInsert}, amend/delete(TA)=${skipped.taAmend}, ` +
+    `CR-en-route locations=${skipped.crLocations} (on traversing trains=${skipped.crOnTraversing})`
+  );
+
+  lastParseStats = { ...skipped, lineCount, scheduleCount };
   return results;
+}
+
+// Counts from the most recent parseScheduleFile run (TI/TA/CR skip tallies +
+// line/schedule counts). Exposed for diagnostics and tests.
+let lastParseStats = null;
+function getLastParseStats() {
+  return lastParseStats;
 }
 
 // Apply a daily UPDATE extract on top of an already-parsed full schedule,
@@ -403,7 +457,7 @@ async function applyUpdateExtract(updateFilePath, crossingsConfig, baseByCrossin
 }
 
 module.exports = {
-  parseScheduleFile, applyUpdateExtract,
+  parseScheduleFile, applyUpdateExtract, getLastParseStats,
   cifTimeToMins, minsToTimeStr, minsToDate,
   analyseRoute, estimateCrossingTime
 };
