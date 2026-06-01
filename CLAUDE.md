@@ -26,6 +26,7 @@ siri.js                          Scriptable iOS integration (separate, mirrors t
 feedback-update-instructions.md  Notes on the feedback system
 README.md                        Almost empty
 worker/                          Cloudflare Worker source (wrangler.jsonc + src/worker.js)
+observe/                         Barrier-observation PWA — field data-collection tool (separate app, /observe/)
 ```
 
 The **frontend has no build step** — edit files, push to `main`, GitHub Pages deploys within ~1 minute. The **worker requires a separate deploy step**: `cd worker && npx wrangler deploy`.
@@ -104,6 +105,14 @@ Dedup: UID-first (CIF `CIF_train_uid` vs LDBSVWS `svc.uid`), then headcode + tim
 The frontend renders four-state freight labels by descending confidence: `confirmed` (tdSeen=true) → `usually doesn't run` (Q-flag and recentRunRate<0.3) → `may not run` (Q-flag, no rate) → plain `(freight)`. LDBSVWS-sourced predictions are untouched throughout (they have realtime ETAs).
 
 Feedback flow: when the user reports a wrong prediction, the frontend POSTs to a Google Apps Script URL (in `crossings.json` → `feedbackUrl`), which appends a row to a Google Sheet.
+
+## Observer app (`/observe/`)
+
+A separate installable PWA (`observe/`, deployed on `main` via GitHub Pages) for on-site collection of real barrier event timestamps — **step 1 of position-based closure triggering**, not a prediction surface. It is read-only on train data and (v1) writes only to local device storage.
+
+- Polls the backend's **B1 live endpoint** `GET /crossing/:id/live` (~2.5s) for trains currently in TD area LA. The endpoint feeds the observer the per-train `{ headcode, berth, fromBerth, event, direction, stopping, origin, destination, lastSeen, ageSecs }` plus `serverTime` (for device clock-offset). B1 lives in `backend-v2`: `td-listener` emits the berth, `crossing-state.recordTdBerth`/`getLiveTrains` keep a TTL-pruned `liveTrains` map (config `live.ttlSecs`), `api.js` serves it. Direction is from a headcode→LDB/CIF join (`"unknown"` if no match); `stopping` is `true` only if on the PLD board, else `"unknown"` (never `false`).
+- Captures **two events only** — CLOSE (red lights start) / OPEN (booms fully up) — each attributed to a **single** train: CLOSE → nearest *approaching* train, OPEN → *just-cleared* train. Attribution leans on direction + the **confirmed Portslade approach berths only** (`berths.east/west` in `shared/crossings.json`), never raw berth proximity across all of LA (that mapping is the later berth-chain analysis).
+- Offline-first: timestamp captured synchronously at tap, IndexedDB storage, CSV/JSON export. No server-sync endpoint in v1 (add a token-protected `POST /observations` later only if per-session export becomes a chore).
 
 ## Non-obvious technical patterns — read before changing logic
 
