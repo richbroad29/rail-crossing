@@ -1,0 +1,15 @@
+{
+  "name": "Crossing Observer",
+  "short_name": "Observer",
+  "description": "Field tool to record level-crossing barrier CLOSE/OPEN events and attribute them to trains.",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0F172A",
+  "theme_color": "#0F172A",
+  "icons": [
+    { "src": "../shared/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" },
+    { "src": "../shared/icon-180.png", "sizes": "180x180", "type": "image/png" }
+  ]
+}

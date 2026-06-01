@@ -1,0 +1,90 @@
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0F172A;color:#E2E8F0;font-family:-apple-system,BlinkMacSystemFont,'SF Pro',system-ui,sans-serif;min-height:100vh;min-height:100dvh;-webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent}
+.wrap{max-width:480px;margin:0 auto;padding:12px;padding-top:calc(12px + env(safe-area-inset-top,0px));padding-bottom:calc(20px + env(safe-area-inset-bottom,0px))}
+
+.hdr{text-align:center;margin-bottom:14px}
+.hdr-title{font-size:18px;font-weight:700}
+.hdr-road{font-size:11px;color:#94A3B8}
+.clock{font-size:34px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:1px;margin-top:6px}
+.statusbar{font-size:10px;color:#94A3B8;margin-top:2px;font-variant-numeric:tabular-nums}
+.statusbar .sep{margin:0 4px;color:#475569}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;vertical-align:middle;margin-right:3px}
+.dot-ok{background:#22C55E}.dot-warn{background:#F59E0B}.dot-bad{background:#EF4444}
+
+/* Capture buttons — large, one-handed, never blocked on network */
+.capture{display:flex;gap:10px;margin-bottom:14px}
+.cap-btn{flex:1;border:none;border-radius:16px;padding:22px 8px;display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer;color:#fff;font-family:inherit;min-height:96px;transition:transform .05s}
+.cap-btn:active{transform:scale(.97)}
+.cap-label{font-size:26px;font-weight:800;letter-spacing:1px}
+.cap-sub{font-size:11px;opacity:.85}
+.cap-close{background:#B91C1C}
+.cap-open{background:#15803D}
+.cap-btn.flash{animation:flash .4s ease}
+@keyframes flash{0%{filter:brightness(2)}100%{filter:brightness(1)}}
+
+.section{background:#1E293B;border-radius:12px;padding:12px;margin-bottom:14px}
+.section-hdr{font-size:12px;font-weight:600;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center}
+.muted{color:#64748B;font-size:11px;font-weight:400}
+.empty{text-align:center;color:#64748B;font-size:12px;padding:14px}
+.info-text{font-size:10px;color:#64748B;line-height:1.5;margin-top:8px}
+
+/* Attribution */
+.attr{border:1px solid #334155}
+.attr-hdr{display:flex;justify-content:space-between;align-items:baseline;font-size:14px;font-weight:700;margin-bottom:8px}
+.attr-time{font-variant-numeric:tabular-nums;font-size:13px;color:#CBD5E1}
+.attr-suggest{font-size:12px;color:#94A3B8;margin-bottom:8px}
+.attr-suggest b{color:#E2E8F0}
+.attr-pick-label{font-size:11px;color:#94A3B8;margin-bottom:6px}
+.attr-picker{display:flex;flex-direction:column;gap:6px;max-height:230px;overflow-y:auto}
+.pick{display:flex;align-items:center;gap:8px;padding:9px 10px;border-radius:8px;background:#0F172A;border:1px solid #1E293B;cursor:pointer;font-size:13px}
+.pick.sel{border-color:#3B82F6;background:#172554}
+.pick.suggested{border-color:#16A34A}
+.pick .hc{font-weight:700;font-variant-numeric:tabular-nums}
+.pick .meta{font-size:10px;color:#94A3B8;margin-left:auto;text-align:right}
+.attr-conf{display:flex;align-items:center;gap:6px;font-size:11px;color:#94A3B8;margin:10px 0 8px}
+.conf-btn{padding:5px 12px;border-radius:7px;border:1px solid #334155;background:#0F172A;color:#CBD5E1;font-size:12px;cursor:pointer}
+.conf-btn.sel{border-color:#3B82F6;background:#172554;color:#fff}
+.attr-note{width:100%;padding:9px 10px;border-radius:8px;border:1px solid #334155;background:#0F172A;color:#E2E8F0;font-size:13px;font-family:inherit;margin-bottom:10px}
+.attr-actions{display:flex;gap:8px}
+.btn-primary{flex:1;padding:12px;border-radius:9px;border:none;background:#2563EB;color:#fff;font-size:14px;font-weight:700;cursor:pointer}
+.btn-primary:active{background:#1D4ED8}
+.btn-ghost{padding:12px 16px;border-radius:9px;border:1px solid #334155;background:#0F172A;color:#CBD5E1;font-size:13px;cursor:pointer}
+.btn-ghost.sm{padding:5px 10px;font-size:11px}
+
+/* Live train list */
+.train{display:flex;align-items:center;gap:8px;padding:9px 8px;border-radius:8px;border:1px solid #1E293B;margin-bottom:6px}
+.train.approaching{border-color:#3B82F6;background:#111c34}
+.train .dir{font-size:16px;width:18px;text-align:center}
+.train .hc{font-weight:700;font-variant-numeric:tabular-nums;font-size:14px}
+.train .od{font-size:10px;color:#94A3B8}
+.train .right{margin-left:auto;text-align:right;font-size:10px;color:#94A3B8;font-variant-numeric:tabular-nums}
+.train .berth{font-weight:600;color:#CBD5E1}
+.badge{display:inline-block;font-size:9px;padding:1px 5px;border-radius:5px;margin-left:4px;vertical-align:middle}
+.badge-stop{background:#064E3B;color:#6EE7B7}
+.badge-unknown{background:#334155;color:#94A3B8}
+.badge-appr{background:#1E3A8A;color:#BFDBFE}
+
+/* Tally */
+.tally{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+.tally-cell{background:#0F172A;border-radius:8px;padding:8px;text-align:center}
+.tally-n{font-size:22px;font-weight:800;font-variant-numeric:tabular-nums}
+.tally-l{font-size:10px;color:#94A3B8;margin-top:2px}
+
+/* Recent captures */
+.rec{display:flex;align-items:center;gap:8px;padding:8px;border-radius:8px;border:1px solid #1E293B;margin-bottom:6px;font-size:12px}
+.rec .tag{font-size:10px;font-weight:700;padding:2px 7px;border-radius:5px}
+.tag-close{background:#7F1D1D;color:#FCA5A5}
+.tag-open{background:#064E3B;color:#6EE7B7}
+.rec .rt{font-variant-numeric:tabular-nums}
+.rec .rmeta{color:#94A3B8;font-size:11px}
+.rec .ractions{margin-left:auto;display:flex;gap:6px}
+.rec .ractions button{font-size:10px;padding:4px 8px;border-radius:6px;border:1px solid #334155;background:#0F172A;color:#CBD5E1;cursor:pointer}
+
+.export-row{display:flex;gap:8px}
+.setup-btn{flex:1;padding:11px;border-radius:8px;border:1px solid #334155;background:#0F172A;color:#E2E8F0;font-size:12px;font-weight:600;text-align:center;cursor:pointer}
+.setup-btn:active{background:#334155}
+
+.footer{text-align:center;font-size:9px;color:#475569;margin-top:6px}
+.hidden{display:none}
+
+.toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:#334155;color:#fff;padding:10px 16px;border-radius:10px;font-size:13px;z-index:50;box-shadow:0 4px 16px rgba(0,0,0,.4)}

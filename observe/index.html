@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Observer">
+<meta name="theme-color" content="#0F172A">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="../shared/icon-180.png">
+<link rel="icon" type="image/svg+xml" href="../shared/icon.svg">
+<title>Crossing Observer</title>
+<link rel="stylesheet" href="observe.css">
+</head>
+<body>
+<div class="wrap">
+
+  <div class="hdr">
+    <div class="hdr-title">Crossing Observer</div>
+    <div class="hdr-road">Boundary Road · Portslade</div>
+    <div class="clock" id="clock">--:--:--</div>
+    <div class="statusbar">
+      <span id="netDot" class="dot dot-warn"></span>
+      <span id="netText">connecting…</span>
+      <span class="sep">·</span>
+      <span id="offsetText">offset --</span>
+      <span class="sep">·</span>
+      <span id="pollAge">feed --</span>
+    </div>
+  </div>
+
+  <!-- Capture: timestamp first, attribution second. Tap is never blocked. -->
+  <div class="capture">
+    <button class="cap-btn cap-close" id="btnClose">
+      <span class="cap-label">CLOSE</span>
+      <span class="cap-sub">red lights start</span>
+    </button>
+    <button class="cap-btn cap-open" id="btnOpen">
+      <span class="cap-label">OPEN</span>
+      <span class="cap-sub">booms fully up</span>
+    </button>
+  </div>
+
+  <!-- Attribution panel — opens on capture, pre-filled with the suggestion. -->
+  <div class="section attr hidden" id="attrPanel">
+    <div class="attr-hdr">
+      <span id="attrTitle">Attribute</span>
+      <span class="attr-time" id="attrTime"></span>
+    </div>
+    <div class="attr-suggest" id="attrSuggest"></div>
+    <div class="attr-pick-label">Pick the train:</div>
+    <div id="attrPicker" class="attr-picker"></div>
+    <div class="attr-conf">
+      <span>Confidence:</span>
+      <button class="conf-btn" data-conf="high">High</button>
+      <button class="conf-btn" data-conf="med">Med</button>
+      <button class="conf-btn" data-conf="low">Low</button>
+    </div>
+    <input class="attr-note" id="attrNote" type="text" placeholder="Note (held at signal, no train, false start…)" autocomplete="off">
+    <div class="attr-actions">
+      <button class="btn-ghost" id="attrUnknown">Unknown</button>
+      <button class="btn-primary" id="attrSave">Save</button>
+    </div>
+  </div>
+
+  <!-- Live train view (B1 feed) -->
+  <div class="section">
+    <div class="section-hdr">
+      <span>Live trains in area</span>
+      <span class="muted" id="liveCount"></span>
+    </div>
+    <div id="liveList"><div class="empty">Waiting for feed…</div></div>
+    <div class="info-text" id="approachNote">Approaching = on a confirmed Portslade approach berth. Other LA berths are shown but not assumed on-approach.</div>
+  </div>
+
+  <!-- Category tally -->
+  <div class="section">
+    <div class="section-hdr"><span>Tally (clean CLOSE events)</span></div>
+    <div id="tally" class="tally"></div>
+  </div>
+
+  <!-- Recent captures with undo/edit/delete -->
+  <div class="section">
+    <div class="section-hdr">
+      <span>Recent captures</span>
+      <button class="btn-ghost sm" id="undoBtn">Undo last</button>
+    </div>
+    <div id="recentList"><div class="empty">No captures yet.</div></div>
+  </div>
+
+  <!-- Export (v1: local only, no server sync) -->
+  <div class="section">
+    <div class="section-hdr"><span>Stored observations</span><span class="muted" id="storedCount">0</span></div>
+    <div class="export-row">
+      <button class="setup-btn" id="exportCsv">Export CSV</button>
+      <button class="setup-btn" id="exportJson">Export JSON</button>
+    </div>
+    <div class="info-text" id="exportNote"></div>
+  </div>
+
+  <div class="footer">Field data tool · stored on this device only · not a safety system</div>
+</div>
+
+<div class="toast hidden" id="toast"></div>
+
+<script src="observe.js"></script>
+</body>
+</html>
