@@ -256,9 +256,10 @@ async function main() {
   // Start TD feed listener and daily log rotation (additive — does not affect LDB/state path).
   // Route every TD sighting into each crossing-state so that CIF-sourced freight
   // predictions can be marked tdSeen=true once the train enters our area.
-  tdListener.on('sighting', ({ headcode, ts }) => {
+  tdListener.on('sighting', (s) => {
     for (const state of Object.values(crossingStates)) {
-      state.recordTdSighting(headcode, ts);
+      state.recordTdSighting(s.headcode, s.ts);
+      state.recordTdBerth(s); // B1: feed the live-position map (berth in payload)
     }
   });
   tdListener.start();

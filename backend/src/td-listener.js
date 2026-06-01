@@ -66,8 +66,13 @@ function processMessage(body) {
       // Emit a sighting for downstream prediction state. CA = berth step,
       // CB = interpose (headcode first appearing). Both confirm the train is
       // physically here. Skip CC (cancel) — those carry the cleared headcode.
+      // Payload now carries the berth (from/to/event) too — recordTdSighting
+      // ignores the extra fields, while the live-position map (B1) needs them.
       if (evt.desc && (evt.event === 'CA' || evt.event === 'CB')) {
-        emitter.emit('sighting', { headcode: evt.desc, ts: evt.ts, area: evt.area });
+        emitter.emit('sighting', {
+          headcode: evt.desc, ts: evt.ts, area: evt.area,
+          event: evt.event, from: evt.from, to: evt.to
+        });
       }
     }
   }

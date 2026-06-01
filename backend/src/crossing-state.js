@@ -41,6 +41,12 @@ class CrossingState {
     this.scheduleTrains = [];      // From CIF schedule file
     this.tdEvents = [];            // Phase 2: from TD berth steps
 
+    // B1 live-position map: headcode → { berth, fromBerth, event, lastSeen(ms) }.
+    // Updated on every TD berth step (the TD feed is area-wide for LA), pruned by
+    // TTL on read. Read-only feed for the observer app — deliberately NOT in the
+    // prediction path (recordTdBerth does not trigger _recompute).
+    this.liveTrains = new Map();
+
     // headcode → Date of first TD sighting in our area today. Trains entering
     // our (narrow) TD area give only ~1 min of warning before Portslade, but
     // a sighting is a definitive "this train is actually running today" signal
@@ -76,6 +82,68 @@ class CrossingState {
       // Recompute so any CIF entry with this headcode picks up tdSeen=true.
       this._recompute();
     }
+  }
+
+  // B1: record a TD berth step into the live-position map. Called from the same
+  // 'sighting' hook as recordTdSighting, with the enriched payload that now
+  // carries the berth. Intentionally does NOT _recompute — the live map is a
+  // separate read-only feed and must not touch predictions.
+  recordTdBerth(evt) {
+    if (!evt || !evt.headcode) return;
+    const ms = evt.ts ? new Date(evt.ts).getTime() : Date.now();
+    if (!Number.isFinite(ms)) return;
+    this.liveTrains.set(evt.headcode, {
+      berth: evt.to || null,        // the berth the train just stepped INTO
+      fromBerth: evt.from || null,
+      event: evt.event || null,
+      lastSeen: ms
+    });
+  }
+
+  // TTL (ms) after which a train that hasn't stepped is dropped from the live
+  // map. Config: crossing `live.ttlSecs`; default 4 min (rough area-transit guess).
+  _getLiveTtlMs() {
+    const secs = this.config && this.config.live && this.config.live.ttlSecs;
+    return (typeof secs === 'number' ? secs : 240) * 1000;
+  }
+
+  // Find a known train (LDB first, then CIF schedule) by headcode, for enriching
+  // a live berth sighting with direction / origin / destination.
+  _matchKnownTrain(headcode) {
+    if (!headcode) return null;
+    for (const t of this.ldbTrains) if (t.headcode === headcode) return t;
+    for (const t of this.scheduleTrains) if (t.headcode === headcode) return t;
+    return null;
+  }
+
+  // B1: current trains in the TD area, pruned by TTL and enriched from CIF/LDB.
+  //  - direction: from the headcode→known-train join; "unknown" if no match
+  //    (never guessed from raw berths).
+  //  - stopping: true if the train is on the PLD LDB board (boards only list
+  //    calling services); otherwise "unknown" — never false (a non-stopping
+  //    fast simply isn't on the board, so absence ≠ non-stopping).
+  getLiveTrains(now = Date.now()) {
+    const ttl = this._getLiveTtlMs();
+    const out = [];
+    for (const [headcode, t] of this.liveTrains) {
+      if (now - t.lastSeen > ttl) { this.liveTrains.delete(headcode); continue; }
+      const match = this._matchKnownTrain(headcode);
+      const onBoard = this.ldbTrains.some(x => x.headcode === headcode);
+      out.push({
+        headcode,
+        berth: t.berth,
+        fromBerth: t.fromBerth,
+        event: t.event,
+        direction: match && match.direction ? match.direction : 'unknown',
+        stopping: onBoard ? true : 'unknown',
+        origin: match ? (match.origin || null) : null,
+        destination: match ? (match.destination || null) : null,
+        lastSeen: t.lastSeen,
+        ageSecs: Math.round((now - t.lastSeen) / 1000)
+      });
+    }
+    out.sort((a, b) => b.lastSeen - a.lastSeen); // most recently seen first
+    return out;
   }
 
   // Update LDB trains (called every 30s from poller)

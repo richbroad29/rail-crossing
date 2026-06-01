@@ -1,0 +1,120 @@
+'use strict';
+
+// B1 — live-position map + GET /crossing/:id/live.
+//
+// Asserts the constraints Rich set:
+//   - direction from the headcode→LDB/CIF join; "unknown" if no match (never
+//     guessed from raw berths);
+//   - stopping = true only if the train is on the PLD LDB board; otherwise
+//     "unknown" — never false;
+//   - latest berth (the `to` of the most recent step) wins;
+//   - entries past the TTL are pruned;
+//   - the endpoint returns the list plus serverTime + ttlSecs.
+
+const http = require('http');
+const CrossingState = require('../src/crossing-state');
+const { createApi } = require('../src/api');
+
+let pass = 0, fail = 0;
+function check(label, actual, expected) {
+  if (actual === expected) { console.log(`  PASS  ${label}`); pass++; }
+  else {
+    console.log(`  FAIL  ${label}`);
+    console.log(`          got:      ${actual}`);
+    console.log(`          expected: ${expected}`);
+    fail++;
+  }
+}
+function checkTruthy(label, actual) {
+  if (actual) { console.log(`  PASS  ${label}`); pass++; }
+  else { console.log(`  FAIL  ${label} (got: ${actual})`); fail++; }
+}
+
+const cfg = {
+  name: 'Test Crossing', road: 'Test Rd',
+  td: { area: 'LA' },
+  live: { ttlSecs: 240 },
+  timing: { closeBefore: { east: 1.5, west: 2.5 }, openAfter: { east: 0.5, west: 0.5 }, consecutiveWindow: 1.5 }
+};
+
+const BASE = 1_750_000_000_000; // fixed reference instant (ms)
+
+function freshState() {
+  const s = new CrossingState('portslade', cfg);
+  // A CIF-known freight (not on the LDB board) and an LDB passenger (on board).
+  s.scheduleTrains = [{ headcode: '6O12', direction: 'east', origin: 'EASTLEIGH', destination: 'VICTORIA' }];
+  s.ldbTrains = [{ headcode: '2W20', direction: 'west', origin: 'BRIGHTON', destination: 'SOUTHAMPTON' }];
+  return s;
+}
+
+console.log('\nB1 — live-position map\n');
+
+{
+  const s = freshState();
+  s.recordTdBerth({ headcode: '6O12', ts: BASE, event: 'CA', from: '0006', to: '0004' });
+  s.recordTdBerth({ headcode: '2W20', ts: BASE, event: 'CA', from: '0003', to: '0005' });
+  s.recordTdBerth({ headcode: '9Z99', ts: BASE, event: 'CB', from: 'A010', to: 'A035' });
+  s.recordTdBerth({ headcode: '5S00', ts: BASE - 10 * 60000, event: 'CA', from: '0001', to: '0002' }); // stale
+
+  const live = s.getLiveTrains(BASE);
+  const byHc = Object.fromEntries(live.map(t => [t.headcode, t]));
+
+  // CIF-matched freight: direction from schedule, NOT on board → stopping "unknown" (never false).
+  checkTruthy('6O12 present', byHc['6O12']);
+  check('6O12 direction from CIF join', byHc['6O12'] && byHc['6O12'].direction, 'east');
+  check('6O12 stopping is "unknown" (not on board)', byHc['6O12'] && byHc['6O12'].stopping, 'unknown');
+  check('6O12 stopping is never false', byHc['6O12'] && byHc['6O12'].stopping === false, false);
+  check('6O12 berth = latest step `to`', byHc['6O12'] && byHc['6O12'].berth, '0004');
+  check('6O12 fromBerth', byHc['6O12'] && byHc['6O12'].fromBerth, '0006');
+
+  // LDB-matched passenger: direction from LDB, on board → stopping true.
+  check('2W20 direction from LDB join', byHc['2W20'] && byHc['2W20'].direction, 'west');
+  check('2W20 stopping true (on PLD board)', byHc['2W20'] && byHc['2W20'].stopping, true);
+
+  // No CIF/LDB match → direction "unknown" (not guessed from the A0xx berth).
+  checkTruthy('9Z99 present (unknown train)', byHc['9Z99']);
+  check('9Z99 direction "unknown" (no match)', byHc['9Z99'] && byHc['9Z99'].direction, 'unknown');
+  check('9Z99 stopping "unknown"', byHc['9Z99'] && byHc['9Z99'].stopping, 'unknown');
+
+  // Stale entry pruned (and removed from the underlying map).
+  check('5S00 pruned past TTL', '5S00' in byHc, false);
+  check('liveTrains map pruned to 3', s.liveTrains.size, 3);
+}
+
+// Latest berth wins on a subsequent step.
+{
+  const s = freshState();
+  s.recordTdBerth({ headcode: '6O12', ts: BASE, event: 'CA', from: '0006', to: '0004' });
+  s.recordTdBerth({ headcode: '6O12', ts: BASE + 1000, event: 'CA', from: '0004', to: '0002' });
+  const t = s.getLiveTrains(BASE + 1000).find(x => x.headcode === '6O12');
+  check('berth updates to most recent `to`', t && t.berth, '0002');
+  check('fromBerth updates too', t && t.fromBerth, '0004');
+  check('lastSeen is the later step', t && t.lastSeen, BASE + 1000);
+}
+
+// Endpoint shape over real HTTP.
+(async () => {
+  const s = freshState();
+  s.recordTdBerth({ headcode: '2W20', ts: Date.now(), event: 'CA', from: '0003', to: '0005' });
+  const server = createApi({ portslade: s }, 0);
+  await new Promise(r => (server.listening ? r() : server.once('listening', r)));
+  const port = server.address().port;
+
+  const body = await new Promise((resolve, reject) => {
+    http.get(`http://127.0.0.1:${port}/crossing/portslade/live`, res => {
+      let d = ''; res.on('data', c => d += c); res.on('end', () => resolve(JSON.parse(d)));
+    }).on('error', reject);
+  });
+  server.close();
+
+  console.log('\nB1 — GET /crossing/:id/live\n');
+  check('area echoed', body.area, 'LA');
+  check('ttlSecs from config', body.ttlSecs, 240);
+  check('serverTime is a number', typeof body.serverTime, 'number');
+  check('trains is an array', Array.isArray(body.trains), true);
+  check('endpoint lists the live train', body.trains.some(t => t.headcode === '2W20'), true);
+
+  console.log();
+  if (fail > 0) { console.error(`${fail} FAILED, ${pass} passed`); process.exit(1); }
+  else { console.log(`All ${pass} tests passed.`); }
+})().catch(err => { console.error('Test runner error:', err); process.exit(1); });

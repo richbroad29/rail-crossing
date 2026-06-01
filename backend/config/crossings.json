@@ -53,6 +53,8 @@
       "areaEntryLeadSecs": { "east": 150, "west": 112 }
     },
 
+    "live": { "ttlSecs": 240 },
+
     "feedbackUrl": "https://script.google.com/macros/s/AKfycbysyTa8ic8nSz2_-_wBKnrzss2DsNAnlIrFKYa9H_We1QrxRVXl1iKh6MvWSNdE7XjbAw/exec"
   }
 }

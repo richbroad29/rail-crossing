@@ -84,6 +84,29 @@ function createApi(crossingStates, port = 3000) {
         return;
       }
 
+      // B1: live train positions for a crossing: /crossing/:id/live
+      // Read-only feed for the observer app. `serverTime` lets the client
+      // measure device clock skew on every poll (no separate time endpoint).
+      const liveMatch = path.match(/^\/crossing\/([^/]+)\/live$/);
+      if (liveMatch) {
+        const id = liveMatch[1];
+        const state = crossingStates[id];
+        if (!state) {
+          res.writeHead(404);
+          res.end(JSON.stringify({ error: `Unknown crossing: ${id}` }));
+          return;
+        }
+        res.writeHead(200);
+        res.end(JSON.stringify({
+          crossingId: id,
+          area: state.config.td ? state.config.td.area || null : null,
+          serverTime: Date.now(),
+          ttlSecs: Math.round(state._getLiveTtlMs() / 1000),
+          trains: state.getLiveTrains()
+        }));
+        return;
+      }
+
       // Legacy compatibility: /api?station=PLD (for existing frontend)
       if (path === '/api') {
         const station = url.searchParams.get('station');
@@ -115,6 +138,7 @@ function createApi(crossingStates, port = 3000) {
           'GET /crossings',
           'GET /crossing/:id',
           'GET /crossing/:id/closures',
+          'GET /crossing/:id/live',
           'GET /api?station=PLD  (legacy compat)'
         ]
       }));
