@@ -35,6 +35,33 @@ The **frontend has no build step** — edit files, push to `main`, GitHub Pages 
 - **`main`** — what's live. Frontend-only, calls the VPS backend (see Architecture).
 - **`backend-v2`** — Node.js backend (`/backend` directory) running on Oracle Cloud VPS (`130.162.167.237`). Implements a three-layer data architecture: NWR CIF schedule baseline → LDBSVWS near-term refinement → NWR Train Describer feed for berth-step confirmation. **Deployed and serving the live frontend.** See Architecture for prediction-pipeline status of each source. Don't merge or deploy backend-v2 without explicit instruction from Rich.
 
+## Deploying the backend (backend-v2)
+
+Canonical, repeatable sequence — run on the VPS once `backend-v2` is pushed to
+origin. **Pushing to origin does NOT make changes live; the service must be
+restarted onto them.** Always end with the restart-and-verify steps.
+
+```bash
+cd ~/rail-crossing
+git rev-parse HEAD                              # note this — rollback point
+git fetch
+git log HEAD..origin/backend-v2 --oneline       # review incoming commits
+git merge --ff-only origin/backend-v2           # fast-forward only (see below)
+sudo systemctl restart rail-crossing            # ~90s reparse on boot
+sudo systemctl status rail-crossing --no-pager  # confirm "active (running)"
+```
+
+- **Use `--ff-only`, never `reset --hard`.** `reset --hard` silently discards
+  any local commits or uncommitted changes on the VPS to force a match with
+  origin. `--ff-only` refuses and errors out if histories have diverged, so a
+  problem surfaces loudly instead of being papered over. The VPS is pull-only
+  today, but if it ever holds a local change, `reset --hard` would delete it
+  without warning. Use `--ff-only` everywhere as the standard update step.
+- Rollback: `git reset --hard <HEAD-from-step-2> && sudo systemctl restart rail-crossing`
+  (the one place `reset --hard` is intentional — reverting to a known-good commit).
+- Fallback when local→GitHub push is blocked: git bundle + scp + `merge --ff-only`
+  (see the deploy-bundle note in memory).
+
 ## Architecture (current — `main`)
 
 ```
@@ -183,12 +210,16 @@ External services should be free unless the value clearly justifies a paid tier.
 - **Add a new crossing**: append entry to `shared/crossings.json`, create `<crossing-name>/index.html` mirroring `portslade/index.html`, call `initCrossing('<id>')`.
 - **Test changes**: open `portslade/index.html` directly in a browser (`open portslade/index.html` on macOS) — the worker URL is hard-coded so it works against live data.
 
+## Recently shipped (backend-v2, live 2026-05-31)
+
+- **Late-running CIF freight re-attachment** — a TD-sighted train whose scheduled crossing has passed (or is inside T−60s) now has `bestTime` re-projected from the sighting + `timing.areaEntryLeadSecs`, floored to the future, so it shows as imminent instead of expiring/vanishing. The lead values are a deliberate stopgap pending position-based triggering — **do not tune them** (see "Confidence-tier narrowing" below).
+- **Midnight-crossing CIF placement** — `analyseRoute` unwraps times across 00:00 and `londonMinsToDate` maps `mins ≥ 1440` to the correct next day, so overnight traversals appear at e.g. 00:05 instead of being dropped/mis-dated.
+- **Same-day STP=C cancellations** — the daily UPDATE extract (`toc-update-<dow>`) is now fetched + applied hourly on top of the full snapshot, so a cancellation suppresses its train within the hour. Logs `CIF update: suppressed N service(s) from update extract — …`. Validate against a live extract with `node scripts/validate-update.js`. Delete transactions are counted but not acted on (fail-safe).
+- **CR / TI / TA records** — assessed immaterial to Portslade (BLI1); counted + logged, not applied.
+
 ## Active work / pending items
 
-- **Confidence-tier narrowing via TD berth state** — TD sightings now flow into predictions (`tdSeen`/`tdSeenAt` on each CIF train) and drive the late-minute lock for Q-freight, but the per-berth `tdBerth` field (approach/protecting/clear) is still not populated. Setting it would unlock the ±90s → ±60s → ±30s → "imminent" confidence-window narrowing.
-- **Late-running CIF freight after the lock window** — when TD sights a CIF train >60 s after its scheduled time, `_mergeTrains` re-includes it, but its closure period is in the past and gets filtered by the renderer. To show "CLOSED, freight passing now" for late trains, update `bestTime` to the TD sighting timestamp when re-adding.
-- **Fix midnight-crossing bug in CIF** — CIF times past 24:00 (e.g., `2510` = 01:10 next day) are placed on today rather than tomorrow. Affects overnight freight/ECS only.
-- **Handle CIF cancellations (STP C)** — cancelled trains will appear in predictions until the next daily refresh at 04:00. Low priority.
+- **Confidence-tier narrowing via TD berth state** — TD sightings now flow into predictions (`tdSeen`/`tdSeenAt` on each CIF train) and drive the late-minute lock for Q-freight, but the per-berth `tdBerth` field (approach/protecting/clear) is still not populated. Setting it would unlock the ±90s → ±60s → ±30s → "imminent" confidence-window narrowing. This **position-based triggering** is intended to replace the `areaEntryLeadSecs` projection wholesale, which is why those lead values are not worth tuning.
 - **Retire the Cloudflare Worker** — one-week observation window started 11 May 2026. After that, decide whether to leave it as a permanent fallback or tear down the Workers project.
 - Ongoing calibration of `closeBefore` / `openAfter` / `consecutiveWindow` from feedback data
 - Potential expansion to more crossings once Portslade architecture is validated
