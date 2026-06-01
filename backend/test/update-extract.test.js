@@ -122,6 +122,8 @@ function uids(trains) {
   check('stats: one cancellation applied', stats.cancelled, 1);
   check('stats: one overlay applied', stats.overlays, 1);
   check('stats: one delete seen', stats.deletes, 1);
+  check('stats: cancelledIds names the suppressed service',
+    stats.cancelledIds.some(c => c.uid === 'X12345'), true);
 
   // Base must be untouched (idempotent re-apply).
   check('base predictions unchanged after apply', uids(base).has('X12345'), true);

@@ -383,7 +383,7 @@ function getLastParseStats() {
 // The base is never mutated and a fresh result is returned, so re-applying the
 // (latest) update each hour is idempotent from a clean baseline.
 async function applyUpdateExtract(updateFilePath, crossingsConfig, baseByCrossing) {
-  const stats = { records: 0, cancelled: 0, overlays: 0, deletes: 0, deleteUids: [] };
+  const stats = { records: 0, cancelled: 0, overlays: 0, deletes: 0, deleteUids: [], cancelledIds: [] };
   const crossingIds = Object.keys(crossingsConfig);
 
   // Rebuild the uid-keyed map from the base predictions (these already exclude
@@ -419,6 +419,11 @@ async function applyUpdateExtract(updateFilePath, crossingsConfig, baseByCrossin
         const existing = schedulesByUid.get(key);
         if (existing && stpRank('C') >= stpRank(existing.stp)) {
           schedulesByUid.set(key, { ...existing, stp: 'C' });
+          stats.cancelledIds.push({
+            uid, crossingId,
+            headcode: existing.headcode || null,
+            estimatedCrossingTime: existing.estimatedCrossingTime || null
+          });
           didCancel = true;
         }
       }
@@ -452,6 +457,15 @@ async function applyUpdateExtract(updateFilePath, crossingsConfig, baseByCrossin
     results[id].sort((a, b) => a.estimatedCrossingMins - b.estimatedCrossingMins);
   }
 
+  // Passive confirmation: one greppable line whenever real cancellations from
+  // the update extract are applied, naming the suppressed services so the live
+  // behaviour can be eyeballed in the logs (no need to catch one happening).
+  if (stats.cancelled > 0) {
+    const detail = stats.cancelledIds
+      .map(c => `${c.headcode || c.uid} (${c.crossingId} ~${c.estimatedCrossingTime || '?'})`)
+      .join(', ');
+    console.log(`CIF update: suppressed ${stats.cancelled} service(s) from update extract — ${detail}`);
+  }
   console.log(`CIF update applied: ${stats.cancelled} cancellation(s), ${stats.overlays} overlay(s), ${stats.deletes} delete(s) over ${stats.records} update record(s)`);
   return { trains: results, stats };
 }

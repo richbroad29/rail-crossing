@@ -17,9 +17,17 @@ const SCHEDULE_PAST_GRACE_MS = 10 * 60 * 1000;
 // Within this lead of the *scheduled* crossing, an un-sighted train is treated
 // as a no-show; a sighted train switches to sighting-based projection.
 const TD_LOCK_LEAD_MS = 60 * 1000;
-// Fallback "TD-area-entry → crossing" transit if config omits areaEntryLeadSecs.
-// Biased slightly low so projections fire early rather than late (catch-every-
-// closure). Westbound measured ~112s; eastbound longer — tune from TD logs.
+// Fallback "first TD sighting → crossing" lead if config omits areaEntryLeadSecs.
+// Biased low so projections fire early rather than late (catch-every-closure).
+// These are deliberately ROUGH and intentionally too short: the 'sighting' fires
+// when a headcode first appears ANYWHERE in area LA — often many berths (i.e.
+// minutes) before the crossing — so the true lead is larger and variable. (The
+// ~112s westbound figure these were seeded from is crossing-section occupancy,
+// not sighting-to-crossing.) Precision is not needed: this path only fires for
+// trains whose scheduled time has already passed, and the now+epsilon clamp
+// guarantees they show as imminent rather than expiring, so too-short only makes
+// the prediction fire early (the safe direction). This whole projection is a
+// stopgap pending position-based triggering — do NOT tune these against TD logs.
 const DEFAULT_AREA_ENTRY_LEAD_SECS = { east: 150, west: 112 };
 
 class CrossingState {
