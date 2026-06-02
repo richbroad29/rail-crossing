@@ -87,4 +87,25 @@ body{background:#0F172A;color:#E2E8F0;font-family:-apple-system,BlinkMacSystemFo
 .footer{text-align:center;font-size:9px;color:#475569;margin-top:6px}
 .hidden{display:none}
 
+/* v1.1 — approach schematic + plain-English identities */
+.strip{margin-bottom:12px}
+.strip:last-child{margin-bottom:0}
+.strip-dir{font-size:11px;font-weight:700;color:#CBD5E1;margin-bottom:5px}
+.strip-track{display:flex;align-items:stretch;gap:4px}
+.stage{flex:1;background:#0F172A;border:1px solid #1E293B;border-radius:8px;padding:6px 4px;min-height:54px;display:flex;flex-direction:column;gap:4px}
+.stage.passed{opacity:.7}
+.stage-l{font-size:9px;color:#94A3B8;text-transform:uppercase;letter-spacing:.5px;text-align:center}
+.stage-empty{text-align:center;color:#334155;font-size:14px}
+.xing{flex:0 0 18px;display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:800;color:#F59E0B;writing-mode:vertical-rl;text-orientation:mixed;letter-spacing:1px}
+.chip{background:#172554;border:1px solid #1E3A8A;border-radius:6px;padding:3px 5px;text-align:center;line-height:1.15}
+.chip-name{display:block;font-size:11px;font-weight:700;color:#BFDBFE;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chip-hc{display:block;font-size:9px;color:#7DA2D9;font-variant-numeric:tabular-nums}
+
+.pick-main{display:flex;flex-direction:column;gap:1px;min-width:0}
+.pick-id{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pick-sub{font-size:10px;color:#94A3B8}
+.pick-group{font-size:10px;color:#64748B;text-transform:uppercase;letter-spacing:.5px;margin:6px 2px 2px}
+.pick-toggle{font-size:12px;color:#7DA2D9;padding:9px 2px;cursor:pointer}
+.mono{font-variant-numeric:tabular-nums;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;color:#94A3B8}
+
 .toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:#334155;color:#fff;padding:10px 16px;border-radius:10px;font-size:13px;z-index:50;box-shadow:0 4px 16px rgba(0,0,0,.4)}

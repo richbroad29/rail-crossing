@@ -50,7 +50,7 @@
       <span class="attr-time" id="attrTime"></span>
     </div>
     <div class="attr-suggest" id="attrSuggest"></div>
-    <div class="attr-pick-label">Pick the train:</div>
+    <div class="attr-pick-label">Tap the train you saw cross, then Save:</div>
     <div id="attrPicker" class="attr-picker"></div>
     <div class="attr-conf">
       <span>Confidence:</span>
@@ -65,14 +65,18 @@
     </div>
   </div>
 
-  <!-- Live train view (B1 feed) -->
+  <!-- Approach schematic (B1 feed) — confirmed Portslade approach berths only -->
   <div class="section">
-    <div class="section-hdr">
-      <span>Live trains in area</span>
-      <span class="muted" id="liveCount"></span>
-    </div>
+    <div class="section-hdr"><span>On the Portslade approach</span></div>
+    <div id="approachView"><div class="empty">Waiting for feed…</div></div>
+    <div class="info-text">Schematic of the confirmed approach berths — not a map. A train at <b>Close</b> is the usual cause of a CLOSE; one that has <b>Just passed</b> usually triggers the OPEN.</div>
+  </div>
+
+  <!-- Other trains elsewhere in signalling area LA -->
+  <div class="section">
+    <div class="section-hdr"><span>Other trains in the area</span><span class="muted" id="elsewhereCount"></span></div>
     <div id="liveList"><div class="empty">Waiting for feed…</div></div>
-    <div class="info-text" id="approachNote">Approaching = on a confirmed Portslade approach berth. Other LA berths are shown but not assumed on-approach.</div>
+    <div class="info-text">In signalling area LA but not on a confirmed Portslade approach berth — usually not the cause of a barrier event.</div>
   </div>
 
   <!-- Category tally -->
