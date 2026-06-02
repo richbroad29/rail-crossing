@@ -45,6 +45,17 @@
     CHAININ[d] = { idx: idx, xi: xi };
   });
 
+  // Off-chain berths that nonetheless lead to the crossing, with the median
+  // observed seconds-to-crossing (derived from TD timestamps). Used only to order
+  // "Other trains in the area" by proximity — trains far out on the Portslade line
+  // (beyond the drawn chain) sort by this; trains on unrelated LA lines have no
+  // entry and fall back to recency. Seeded from one day; refine via derive-chain.
+  var BERTH_ETA = {
+    east: { '0020': 751, '0024': 860, '0203': 870, '0202': 903, '0026': 905, '0028': 995, '0040': 999, '0032': 1054, '0030': 1055, '0042': 1065, '0034': 1093, '0022': 1129, '0036': 1140, 'A030': 1146, '0038': 1157 },
+    west: {}
+  };
+  function offChainEta(d, berth) { var m = BERTH_ETA[d]; var v = m && m[berth]; return typeof v === 'number' ? v : null; }
+
   // ---- pure helpers ----
   function trainKind(hc) { if (!hc) return 'passenger'; var c = hc.charAt(0); if (c === '6' || c === '7') return 'freight'; if (c === '5') return 'ecs'; if (c === '3') return 'test'; return 'passenger'; }
   function dirWord(d) { return d === 'east' ? 'Eastbound' : d === 'west' ? 'Westbound' : 'Direction unknown'; }
@@ -141,6 +152,18 @@
   function toast(msg) { var e = $('toast'); e.textContent = msg; e.classList.remove('hidden'); clearTimeout(toast._t); toast._t = setTimeout(function () { e.classList.add('hidden'); }, 1800); }
   function correctedNow() { return Date.now() + clockOffsetMs; }
   function partition() { var a = [], r = []; liveTrains.forEach(function (t) { (isApproaching(t) ? a : r).push(t); }); return { appr: a, rest: r }; }
+  // Order off-chain trains by proximity: those with a derived time-to-crossing
+  // first (nearest → furthest), then trains with no path to Portslade by recency.
+  function byProximity(list) {
+    return list.slice().sort(function (a, b) {
+      var ea = offChainEta(a.direction, a.berth), eb = offChainEta(b.direction, b.berth);
+      if (ea != null && eb != null) return ea - eb;
+      if (ea != null) return -1;
+      if (eb != null) return 1;
+      var aa = a.ageSecs == null ? 1e9 : a.ageSecs, ba = b.ageSecs == null ? 1e9 : b.ageSecs;
+      return aa - ba;
+    });
+  }
 
   // ---- live feed poll (B1) ----
   function poll() {
@@ -205,7 +228,7 @@
     if (parts.rest.length) {
       var tog = el('div', 'pick-toggle', (showElsewhere ? '▾ ' : '▸ ') + 'Elsewhere in area (' + parts.rest.length + ')');
       tog.onclick = function () { showElsewhere = !showElsewhere; renderPicker(); }; box.appendChild(tog);
-      if (showElsewhere) parts.rest.forEach(function (t) { box.appendChild(pickRow(t)); });
+      if (showElsewhere) byProximity(parts.rest).forEach(function (t) { box.appendChild(pickRow(t)); });
     }
   }
   function saveAttr() {
@@ -306,12 +329,15 @@
     if (!liveTrains.some(isApproaching)) box.appendChild(el('div', 'info-text', 'No trains on the Portslade chain right now — they appear on a berth as they enter area LA.'));
   }
   function renderElsewhere() {
-    var rest = partition().rest; $('elsewhereCount').textContent = rest.length ? (rest.length + ' in wider area') : '';
+    var rest = byProximity(partition().rest);
+    $('elsewhereCount').textContent = rest.length ? (rest.length + ' in wider area') : '';
     var box = $('liveList');
     if (!rest.length) { box.innerHTML = '<div class="empty">Nothing else in the area.</div>'; return; }
     box.innerHTML = '';
     rest.forEach(function (t) {
-      box.appendChild(el('div', 'train', '<span class="dir">' + dirArrow(t.direction) + '</span><span class="pick-main"><span class="pick-id">' + identity(t) + '</span><span class="pick-sub">' + dirWord(t.direction) + '</span></span><span class="right"><span class="mono">' + t.headcode + '</span><br>' + (t.berth || '?') + ' · ' + ageStr(t) + '</span>'));
+      var eta = offChainEta(t.direction, t.berth);
+      var sub = dirWord(t.direction) + (eta != null ? ' · ~' + fmtEta(eta) + ' to crossing (est)' : '');
+      box.appendChild(el('div', 'train', '<span class="dir">' + dirArrow(t.direction) + '</span><span class="pick-main"><span class="pick-id">' + identity(t) + '</span><span class="pick-sub">' + sub + '</span></span><span class="right"><span class="mono">' + t.headcode + '</span><br>' + (t.berth || '?') + ' · ' + ageStr(t) + '</span>'));
     });
   }
 
