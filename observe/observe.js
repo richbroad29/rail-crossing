@@ -266,29 +266,44 @@
     $('offsetText').textContent = 'offset ' + fmtOffset(clockOffsetMs);
     $('pollAge').textContent = age != null ? ('feed ' + age + 's') : 'feed --';
   }
-  function gapPx(g) { return Math.max(14, Math.min(64, Math.round((g || 60) * 0.4))); }
+  function gapPx(g) { return Math.max(12, Math.min(60, Math.round((g || 60) * 0.4))); }
+  function splitChain(d) { var pre = [], post = [], x = false; CHAIN[d].forEach(function (n) { if (n.x) { x = true; return; } (x ? post : pre).push(n); }); return { pre: pre, post: post }; }
+  function trainsAt(d, b) { return liveTrains.filter(function (t) { return t.direction === d && t.berth === b; }); }
+  function nodeEl(d, n) {
+    var pills = trainsAt(d, n.b).map(function (t) { return '<span class="tpill">' + dirArrow(d) + ' ' + shortName(t) + '</span>'; }).join('');
+    return el('div', 'bnode' + (n.role ? ' role-' + n.role : ''),
+      '<span class="bdot"></span><span class="blabel">' + n.b + (n.role ? ' · ' + n.role : '') + '</span><span class="bpills">' + pills + '</span>');
+  }
+  // flow 'down' = train travels top→bottom (dwell in the upper node spaces to the
+  // next); 'up' = travels bottom→top (dwell in the lower node spaces to the next).
+  function colBand(d, nodes, flow) {
+    var col = el('div', 'xcol');
+    nodes.forEach(function (n, i) {
+      col.appendChild(nodeEl(d, n));
+      if (i < nodes.length - 1) { var g = flow === 'down' ? n.gap : nodes[i + 1].gap; var sp = el('div', 'bgap'); sp.style.height = gapPx(g) + 'px'; col.appendChild(sp); }
+    });
+    return col;
+  }
+  // Both directions share one horizontal BOUNDARY ROAD bar. Eastbound runs
+  // DOWN (approach above the bar, cleared below); westbound runs UP (approach
+  // below, cleared above) — so the two flows are mirror images meeting at the bar.
   function renderStrip() {
     var box = $('approachView'); box.innerHTML = '';
-    var anyTrain = false;
-    var row = el('div', 'strips');
-    ['east', 'west'].forEach(function (d) {
-      var col = el('div', 'stripcol');
-      col.appendChild(el('div', 'strip-dir', dirWord(d) + ' ' + dirArrow(d)));
-      var track = el('div', 'track');
-      CHAIN[d].forEach(function (n, i) {
-        if (n.x) { track.appendChild(el('div', 'xnode', '║ BOUNDARY RD ║')); return; }
-        var here = liveTrains.filter(function (t) { return t.direction === d && t.berth === n.b; });
-        if (here.length) anyTrain = true;
-        var node = el('div', 'bnode' + (n.role ? ' role-' + n.role : ''));
-        var pills = here.map(function (t) { return '<span class="tpill">' + dirArrow(d) + ' ' + shortName(t) + '</span>'; }).join('');
-        node.innerHTML = '<span class="bdot"></span><span class="blabel">' + n.b + (n.role ? ' · ' + n.role : '') + '</span><span class="bpills">' + pills + '</span>';
-        track.appendChild(node);
-        if (i < CHAIN[d].length - 1 && !CHAIN[d][i + 1].x) { var sp = el('div', 'bgap'); sp.style.height = gapPx(n.gap) + 'px'; track.appendChild(sp); }
-      });
-      col.appendChild(track); row.appendChild(col);
-    });
-    box.appendChild(row);
-    if (!anyTrain) box.appendChild(el('div', 'info-text', 'No trains on the Portslade chain right now — they will appear on a berth as they enter area LA.'));
+    var e = splitChain('east'), w = splitChain('west');
+    var head = el('div', 'xhead');
+    head.appendChild(el('div', 'xhcell', 'Eastbound ▼'));
+    head.appendChild(el('div', 'xhcell', 'Westbound ▲'));
+    box.appendChild(head);
+    var top = el('div', 'xband xtop');
+    top.appendChild(colBand('east', e.pre, 'down'));               // east approach (above, descending)
+    top.appendChild(colBand('west', w.post.slice().reverse(), 'up')); // west cleared (above)
+    box.appendChild(top);
+    box.appendChild(el('div', 'xbar', '║  BOUNDARY ROAD CROSSING  ║'));
+    var bot = el('div', 'xband xbot');
+    bot.appendChild(colBand('east', e.post, 'down'));              // east cleared (below)
+    bot.appendChild(colBand('west', w.pre.slice().reverse(), 'up'));  // west approach (below, ascending)
+    box.appendChild(bot);
+    if (!liveTrains.some(isApproaching)) box.appendChild(el('div', 'info-text', 'No trains on the Portslade chain right now — they appear on a berth as they enter area LA.'));
   }
   function renderElsewhere() {
     var rest = partition().rest; $('elsewhereCount').textContent = rest.length ? (rest.length + ' in wider area') : '';

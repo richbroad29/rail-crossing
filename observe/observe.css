@@ -87,11 +87,14 @@ body{background:#0F172A;color:#E2E8F0;font-family:-apple-system,BlinkMacSystemFo
 .footer{text-align:center;font-size:9px;color:#475569;margin-top:6px}
 .hidden{display:none}
 
-/* v1.2 — approach strip-map (berth chain spaced by typical journey time) */
-.strips{display:flex;gap:10px}
-.stripcol{flex:1;min-width:0}
-.strip-dir{font-size:11px;font-weight:700;color:#CBD5E1;margin-bottom:8px;text-align:center}
-.track{padding-left:2px}
+/* v1.2 strip-map; v1.3 — shared crossing bar, mirrored flows */
+.xhead{display:flex;gap:10px;margin-bottom:4px}
+.xhcell{flex:1;text-align:center;font-size:11px;font-weight:700;color:#CBD5E1}
+.xband{display:flex;gap:10px}
+.xband.xtop{align-items:flex-end}
+.xband.xbot{align-items:flex-start}
+.xcol{flex:1;min-width:0;display:flex;flex-direction:column}
+.xbar{background:#F59E0B;color:#0F172A;font-size:10px;font-weight:800;text-align:center;border-radius:5px;padding:4px 0;margin:5px 0;letter-spacing:1px}
 .bnode{display:flex;align-items:center;gap:6px;min-height:16px}
 .bdot{flex:0 0 9px;width:9px;height:9px;border-radius:50%;background:#334155;border:1px solid #475569}
 .blabel{font-size:9px;color:#64748B;font-variant-numeric:tabular-nums;white-space:nowrap}
@@ -100,7 +103,6 @@ body{background:#0F172A;color:#E2E8F0;font-family:-apple-system,BlinkMacSystemFo
 .role-approach .blabel,.role-protecting .blabel,.role-clear .blabel{color:#BFDBFE;font-weight:600}
 .role-clear .bdot{background:#475569;border-color:#64748B}
 .bgap{height:20px;margin-left:4px;border-left:2px dotted #334155}
-.xnode{font-size:9px;font-weight:800;color:#0F172A;background:#F59E0B;border-radius:4px;padding:3px 0;text-align:center;margin:4px 0}
 .tpill{display:inline-block;background:#172554;border:1px solid #2563EB;border-radius:5px;padding:1px 5px;font-size:10px;font-weight:700;color:#BFDBFE;white-space:nowrap}
 
 .pick-main{display:flex;flex-direction:column;gap:1px;min-width:0}
