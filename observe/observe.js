@@ -4,15 +4,15 @@
  *
  * Captures the human-observed CLOSE (red lights start) and OPEN (booms fully up)
  * instants at ms precision, attributes each to a single train from the live B1
- * feed, and stores everything locally (IndexedDB) for CSV/JSON export. It does
- * NOT predict and never writes to the backend (read-only on /crossing/:id/live).
+ * feed, and stores everything locally (IndexedDB) for CSV/JSON export. Read-only
+ * on the backend; offline-first (a tap stores the timestamp immediately).
  *
- * Capture is offline-first: a button tap stores the timestamp immediately and is
- * never blocked on the network. Attribution is added straight after.
- *
- * v1.1 — legibility pass: plain-English identities, a schematic approach strip
- * (confirmed berths only — NOT a geographic map; we don't have berth positions
- * yet, that's what this tool collects), and approaching-first attribution.
+ * v1.2 — approach STRIP-MAP. The berth chain + per-berth gaps below were derived
+ * purely from TD timestamps (from→to step sequence + median dwell per berth), so
+ * the diagram is spaced by typical JOURNEY TIME (not geographic distance — that
+ * needs speed we don't have). Summing the gaps to the crossing gives an estimated
+ * time-to-crossing. The chain is seeded from one day's log; re-derive over more
+ * days (ideally server-side) to refine the gaps — order is stable topology.
  */
 
 (function () {
@@ -20,67 +20,70 @@
   var CROSSING_ID = 'portslade';
   var POLL_MS = 2500;
 
-  // Confirmed Portslade approach berths (from shared/crossings.json / SMART).
-  // Embedded so capture + the attribution suggestion work offline. The wider
-  // berth→position mapping across all of LA is the separate berth-chain
-  // analysis — we deliberately only trust THESE berths for "on approach".
-  var BERTHS = {
-    east: { approach: '0006', protecting: '0004', clear: '0002' },
-    west: { approach: '0003', protecting: '0005', clear: '0007' }
+  // Derived berth chain toward/through the crossing. gap = median seconds a train
+  // dwells in that berth (≈ time to the next berth). role marks the confirmed
+  // Portslade berths; {x:true} is the crossing itself (after protecting).
+  var CHAIN = {
+    east: [
+      { b: '0016', gap: 132 }, { b: '0014', gap: 74 }, { b: '0012', gap: 37 },
+      { b: '0010', gap: 143 }, { b: '0008', gap: 75 }, { b: '0006', gap: 142, role: 'approach' },
+      { b: '0004', gap: 79, role: 'protecting' }, { x: true },
+      { b: '0002', gap: 115, role: 'clear' }, { b: 'T686', gap: 53 }, { b: 'T684' }
+    ],
+    west: [
+      { b: 'T682', gap: 90 }, { b: 'T677', gap: 126 }, { b: '0001', gap: 45 },
+      { b: '0003', gap: 36, role: 'approach' }, { b: '0005', gap: 115, role: 'protecting' }, { x: true },
+      { b: '0007', gap: 43, role: 'clear' }, { b: '0009', gap: 70 }, { b: '0011', gap: 140 },
+      { b: '0013', gap: 144 }, { b: '0015', gap: 84 }, { b: '0017', gap: 47 }
+    ]
   };
+  // Precompute, per direction: berth → node index, and the crossing index.
+  var CHAININ = {};
+  Object.keys(CHAIN).forEach(function (d) {
+    var idx = {}, xi = -1;
+    CHAIN[d].forEach(function (n, i) { if (n.x) xi = i; else idx[n.b] = i; });
+    CHAININ[d] = { idx: idx, xi: xi };
+  });
 
-  // ---- pure helpers (kept side-effect-free for clarity / future testing) ----
-
-  function trainKind(hc) {
-    if (!hc) return 'passenger';
-    var c = hc.charAt(0);
-    if (c === '6' || c === '7') return 'freight';
-    if (c === '5') return 'ecs';
-    if (c === '3') return 'test';
-    return 'passenger';
-  }
+  // ---- pure helpers ----
+  function trainKind(hc) { if (!hc) return 'passenger'; var c = hc.charAt(0); if (c === '6' || c === '7') return 'freight'; if (c === '5') return 'ecs'; if (c === '3') return 'test'; return 'passenger'; }
   function dirWord(d) { return d === 'east' ? 'Eastbound' : d === 'west' ? 'Westbound' : 'Direction unknown'; }
   function dirArrow(d) { return d === 'east' ? '▶' : d === 'west' ? '◀' : '·'; }
 
-  // Proximity of a train on a confirmed approach berth: stage + plain label +
-  // rank (0 = closest). null if the berth is not a confirmed Portslade berth.
+  // Sum of gaps from node index i up to (and including) the protecting berth —
+  // the estimated seconds from entering berth i to reaching the crossing.
+  function etaToCrossing(d, i) {
+    var c = CHAININ[d]; if (i < 0 || i >= c.xi) return 0;
+    var s = 0; for (var j = i; j < c.xi; j++) { var n = CHAIN[d][j]; s += (n.gap || 60); } return s;
+  }
+  // Position of a train on its chain: stage + plain label + etaSecs + rank.
+  // null if the berth isn't on the Portslade chain (→ "elsewhere in area").
   function proximity(berth, direction) {
-    var b = BERTHS[direction];
-    if (!b || !berth) return null;
-    if (berth === b.protecting) return { stage: 'close', label: 'Close — about to cross', rank: 0 };
-    if (berth === b.approach) return { stage: 'approach', label: 'Approaching', rank: 1 };
-    if (berth === b.clear) return { stage: 'passed', label: 'Just passed', rank: 2 };
-    return null;
+    var c = CHAININ[direction]; if (!c) return null;
+    var i = c.idx[berth]; if (i === undefined) return null;
+    if (i > c.xi) return { stage: 'passed', label: 'Just passed', etaSecs: null, rank: 9999, index: i };
+    var eta = etaToCrossing(direction, i);
+    var label = eta <= 25 ? 'At the crossing' : eta <= 90 ? 'Close (~' + fmtEta(eta) + ')' : 'Approaching (~' + fmtEta(eta) + ')';
+    return { stage: 'approach', label: label, etaSecs: eta, rank: eta, index: i };
   }
   function isApproaching(t) { return proximity(t.berth, t.direction) !== null; }
+  function fmtEta(s) { if (s == null) return ''; if (s < 60) return s + 's'; var m = Math.floor(s / 60), r = s % 60; return r ? (m + 'm' + r + 's') : (m + 'm'); }
 
-  // Plain-English headline for a train; falls back gracefully when un-timetabled.
   function identity(t) {
-    var kind = trainKind(t.headcode);
-    var hasOD = t.origin || t.destination;
+    var kind = trainKind(t.headcode), hasOD = t.origin || t.destination;
     var od = (t.origin || '?') + ' → ' + (t.destination || '?');
     if (kind === 'freight') return hasOD ? ('Freight · ' + od) : 'Freight (not in timetable)';
     if (kind === 'ecs') return hasOD ? ('Empty stock · ' + od) : 'Empty stock';
     return hasOD ? od : 'Train (not in timetable)';
   }
-  // Short name for a strip chip: destination first word, else headcode.
   function shortName(t) { return t.destination ? t.destination.split(/[ (,]/)[0] : t.headcode; }
 
-  // CLOSE → nearest approaching: confirmed approach berths only; protecting
-  // before approach, then freshest.
   function suggestForClose(trains) {
-    var cand = [];
-    for (var i = 0; i < trains.length; i++) {
-      var p = proximity(trains[i].berth, trains[i].direction);
-      if (!p || p.stage === 'passed') continue;
-      cand.push({ t: trains[i], rank: p.rank });
-    }
+    var cand = trains.filter(function (t) { var p = proximity(t.berth, t.direction); return p && p.stage === 'approach'; });
     if (!cand.length) return null;
-    cand.sort(function (a, b) { return a.rank - b.rank || (a.t.ageSecs || 0) - (b.t.ageSecs || 0); });
-    return cand[0].t;
+    cand.sort(function (a, b) { return proximity(a.berth, a.direction).rank - proximity(b.berth, b.direction).rank; });
+    return cand[0];
   }
-  // OPEN → just-cleared: a train on its clear berth, freshest; else most recent
-  // train still on the approach (just passing through).
   function suggestForOpen(trains) {
     var cleared = trains.filter(function (t) { var p = proximity(t.berth, t.direction); return p && p.stage === 'passed'; });
     if (cleared.length) { cleared.sort(function (a, b) { return (a.ageSecs || 0) - (b.ageSecs || 0); }); return cleared[0]; }
@@ -102,63 +105,44 @@
 
   function pad(n) { return n < 10 ? '0' + n : '' + n; }
   function hms(ms) { var d = new Date(ms); return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds()); }
-  function fmtOffset(ms) { var s = ms >= 0 ? '+' : '-'; var a = Math.abs(ms); return a < 1000 ? (s + a + 'ms') : (s + (a / 1000).toFixed(1) + 's'); }
+  function fmtOffset(ms) { var s = ms >= 0 ? '+' : '-', a = Math.abs(ms); return a < 1000 ? (s + a + 'ms') : (s + (a / 1000).toFixed(1) + 's'); }
   function ageStr(t) { return (t.ageSecs != null ? t.ageSecs + 's ago' : ''); }
 
   function csvCell(v) { if (v === null || v === undefined) return ''; var s = String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }
   function toCsv(records) {
     var cols = ['id', 'eventType', 'tCapturedDevice', 'tCorrected', 'tCorrectedISO', 'crossingId',
-      'headcode', 'direction', 'stopping', 'suggestedHeadcode', 'suggestionAccepted',
-      'confidence', 'episodeTrains', 'note', 'offsetMs', 'createdAt'];
+      'headcode', 'direction', 'stopping', 'suggestedHeadcode', 'suggestionAccepted', 'confidence', 'episodeTrains', 'note', 'offsetMs', 'createdAt'];
     var lines = [cols.join(',')];
     records.forEach(function (r) {
-      lines.push([
-        r.id, r.eventType, r.tCapturedDevice, r.tCorrected, new Date(r.tCorrected).toISOString(), r.crossingId,
+      lines.push([r.id, r.eventType, r.tCapturedDevice, r.tCorrected, new Date(r.tCorrected).toISOString(), r.crossingId,
         r.train ? r.train.headcode : '', r.train ? r.train.direction : '', r.train ? r.train.stopping : '',
         r.suggestedHeadcode || '', r.suggestionAccepted ? 'yes' : 'no', r.confidence || '',
-        (r.episodeTrains || []).join(' '), r.note || '', r.offsetMs, r.createdAt
-      ].map(csvCell).join(','));
+        (r.episodeTrains || []).join(' '), r.note || '', r.offsetMs, r.createdAt].map(csvCell).join(','));
     });
     return lines.join('\n');
   }
 
   // ---- IndexedDB ----
   var DB_NAME = 'crossing-observer', STORE = 'observations', db = null;
-  function openDb() {
-    return new Promise(function (resolve, reject) {
-      var req = indexedDB.open(DB_NAME, 1);
-      req.onupgradeneeded = function (e) { var d = e.target.result; if (!d.objectStoreNames.contains(STORE)) d.createObjectStore(STORE, { keyPath: 'id', autoIncrement: true }); };
-      req.onsuccess = function (e) { db = e.target.result; resolve(db); };
-      req.onerror = function () { reject(req.error); };
-    });
-  }
-  function tx(mode) { return db.transaction(STORE, mode).objectStore(STORE); }
-  function dbAdd(rec) { return new Promise(function (res, rej) { var r = tx('readwrite').add(rec); r.onsuccess = function () { res(r.result); }; r.onerror = function () { rej(r.error); }; }); }
-  function dbPut(rec) { return new Promise(function (res, rej) { var r = tx('readwrite').put(rec); r.onsuccess = function () { res(r.result); }; r.onerror = function () { rej(r.error); }; }); }
-  function dbDel(id) { return new Promise(function (res, rej) { var r = tx('readwrite').delete(id); r.onsuccess = function () { res(); }; r.onerror = function () { rej(r.error); }; }); }
-  function dbAll() { return new Promise(function (res, rej) { var r = tx('readonly').getAll(); r.onsuccess = function () { res(r.result || []); }; r.onerror = function () { rej(r.error); }; }); }
+  function openDb() { return new Promise(function (res, rej) { var q = indexedDB.open(DB_NAME, 1); q.onupgradeneeded = function (e) { var d = e.target.result; if (!d.objectStoreNames.contains(STORE)) d.createObjectStore(STORE, { keyPath: 'id', autoIncrement: true }); }; q.onsuccess = function (e) { db = e.target.result; res(db); }; q.onerror = function () { rej(q.error); }; }); }
+  function tx(m) { return db.transaction(STORE, m).objectStore(STORE); }
+  function dbAdd(r) { return new Promise(function (s, j) { var q = tx('readwrite').add(r); q.onsuccess = function () { s(q.result); }; q.onerror = function () { j(q.error); }; }); }
+  function dbPut(r) { return new Promise(function (s, j) { var q = tx('readwrite').put(r); q.onsuccess = function () { s(q.result); }; q.onerror = function () { j(q.error); }; }); }
+  function dbDel(i) { return new Promise(function (s, j) { var q = tx('readwrite').delete(i); q.onsuccess = function () { s(); }; q.onerror = function () { j(q.error); }; }); }
+  function dbAll() { return new Promise(function (s, j) { var q = tx('readonly').getAll(); q.onsuccess = function () { s(q.result || []); }; q.onerror = function () { j(q.error); }; }); }
 
   // ---- runtime state ----
   var liveTrains = [];
   var clockOffsetMs = 0, lastRtt = 0, lastPollAt = 0, lastPollOk = false;
-  var episodeSet = {};
-  var lastCaptureId = null;
-  var pending = null;
-  var showElsewhere = false;
+  var episodeSet = {}, lastCaptureId = null, pending = null, showElsewhere = false;
 
   function $(id) { return document.getElementById(id); }
   function el(tag, cls, html) { var e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; }
   function toast(msg) { var e = $('toast'); e.textContent = msg; e.classList.remove('hidden'); clearTimeout(toast._t); toast._t = setTimeout(function () { e.classList.add('hidden'); }, 1800); }
   function correctedNow() { return Date.now() + clockOffsetMs; }
+  function partition() { var a = [], r = []; liveTrains.forEach(function (t) { (isApproaching(t) ? a : r).push(t); }); return { appr: a, rest: r }; }
 
-  // split the live feed into approaching (confirmed berths) and elsewhere
-  function partition() {
-    var appr = [], rest = [];
-    liveTrains.forEach(function (t) { (isApproaching(t) ? appr : rest).push(t); });
-    return { appr: appr, rest: rest };
-  }
-
-  // ---- live feed poll (B1). Failure never blocks capture. ----
+  // ---- live feed poll (B1) ----
   function poll() {
     var t0 = Date.now();
     fetch(API_BASE + '/crossing/' + CROSSING_ID + '/live', { cache: 'no-store' })
@@ -169,8 +153,7 @@
         liveTrains = Array.isArray(data.trains) ? data.trains : [];
         liveTrains.forEach(function (t) { if (t.headcode) episodeSet[t.headcode] = true; });
         lastPollAt = Date.now(); lastPollOk = true;
-        renderApproach(); renderElsewhere(); renderStatus();
-        if (pending) renderPicker();
+        renderStrip(); renderElsewhere(); renderStatus(); if (pending) renderPicker();
       })
       .catch(function () { lastPollOk = false; renderStatus(); });
   }
@@ -180,7 +163,6 @@
     if (navigator.vibrate) navigator.vibrate(35);
     var btn = $(type === 'CLOSE' ? 'btnClose' : 'btnOpen');
     btn.classList.remove('flash'); void btn.offsetWidth; btn.classList.add('flash');
-
     var tDev = Date.now();
     var sug = type === 'CLOSE' ? suggestForClose(liveTrains) : suggestForOpen(liveTrains);
     var rec = {
@@ -195,63 +177,39 @@
 
   // ---- attribution ----
   function openAttr(rec) {
-    pending = {
-      id: rec.id, eventType: rec.eventType,
-      train: rec.train ? Object.assign({}, rec.train) : null,
-      confidence: rec.confidence, note: rec.note || '', suggestedHeadcode: rec.suggestedHeadcode
-    };
+    pending = { id: rec.id, eventType: rec.eventType, train: rec.train ? Object.assign({}, rec.train) : null, confidence: rec.confidence, note: rec.note || '', suggestedHeadcode: rec.suggestedHeadcode };
     $('attrTitle').textContent = 'Which train caused this ' + rec.eventType + '?';
     $('attrTime').textContent = hms(rec.tCorrected);
     var sug = rec.suggestedHeadcode ? liveTrains.filter(function (t) { return t.headcode === rec.suggestedHeadcode; })[0] : null;
-    if (sug) {
-      var p = proximity(sug.berth, sug.direction);
-      $('attrSuggest').innerHTML = 'Suggested: <b>' + identity(sug) + '</b><br>' + dirWord(sug.direction) +
-        (p ? ' · ' + p.label : '') + ' · <span class="mono">' + sug.headcode + '</span>';
-    } else {
-      $('attrSuggest').innerHTML = 'No clear approaching train — pick from the list, or mark Unknown.';
-    }
+    if (sug) { var p = proximity(sug.berth, sug.direction); $('attrSuggest').innerHTML = 'Suggested: <b>' + identity(sug) + '</b><br>' + dirWord(sug.direction) + (p ? ' · ' + p.label : '') + ' · <span class="mono">' + sug.headcode + '</span>'; }
+    else $('attrSuggest').innerHTML = 'No clear approaching train — pick from the list, or mark Unknown.';
     $('attrNote').value = pending.note;
-    renderConf(); renderPicker();
-    $('attrPanel').classList.remove('hidden');
-    $('attrPanel').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    renderConf(); renderPicker(); $('attrPanel').classList.remove('hidden'); $('attrPanel').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
   function renderConf() { var b = document.querySelectorAll('.conf-btn'); for (var i = 0; i < b.length; i++) b[i].classList.toggle('sel', b[i].dataset.conf === pending.confidence); }
-
   function pickRow(t) {
-    var sel = pending.train && pending.train.headcode === t.headcode;
-    var p = proximity(t.berth, t.direction);
+    var sel = pending.train && pending.train.headcode === t.headcode, p = proximity(t.berth, t.direction);
     var row = el('div', 'pick' + (sel ? ' sel' : '') + (t.headcode === pending.suggestedHeadcode ? ' suggested' : ''));
-    row.innerHTML =
-      '<span class="dir">' + dirArrow(t.direction) + '</span>' +
-      '<span class="pick-main"><span class="pick-id">' + identity(t) + '</span>' +
-      '<span class="pick-sub">' + dirWord(t.direction) + (p ? ' · ' + p.label : '') + '</span></span>' +
-      '<span class="meta"><span class="mono">' + t.headcode + '</span><br>' + (t.berth || '?') + ' · ' + ageStr(t) + '</span>';
+    row.innerHTML = '<span class="dir">' + dirArrow(t.direction) + '</span><span class="pick-main"><span class="pick-id">' + identity(t) + '</span><span class="pick-sub">' + dirWord(t.direction) + (p ? ' · ' + p.label : '') + '</span></span><span class="meta"><span class="mono">' + t.headcode + '</span><br>' + (t.berth || '?') + ' · ' + ageStr(t) + '</span>';
     row.onclick = function () { pending.train = { headcode: t.headcode, direction: t.direction, stopping: t.stopping }; renderPicker(); };
     return row;
   }
   function renderPicker() {
-    var box = $('attrPicker'); box.innerHTML = '';
-    var parts = partition();
+    var box = $('attrPicker'); box.innerHTML = ''; var parts = partition();
     if (!liveTrains.length) { box.innerHTML = '<div class="empty">No trains in feed — mark Unknown or add a note.</div>'; return; }
-    // approaching first, ordered closest → furthest, suggestion floated to top
     parts.appr.sort(function (a, b) {
-      if (a.headcode === pending.suggestedHeadcode) return -1;
-      if (b.headcode === pending.suggestedHeadcode) return 1;
-      var pa = proximity(a.berth, a.direction).rank, pb = proximity(b.berth, b.direction).rank;
-      return pa - pb || (a.ageSecs || 0) - (b.ageSecs || 0);
+      if (a.headcode === pending.suggestedHeadcode) return -1; if (b.headcode === pending.suggestedHeadcode) return 1;
+      return proximity(a.berth, a.direction).rank - proximity(b.berth, b.direction).rank;
     });
     if (parts.appr.length) { box.appendChild(el('div', 'pick-group', 'On the Portslade approach')); parts.appr.forEach(function (t) { box.appendChild(pickRow(t)); }); }
     if (parts.rest.length) {
       var tog = el('div', 'pick-toggle', (showElsewhere ? '▾ ' : '▸ ') + 'Elsewhere in area (' + parts.rest.length + ')');
-      tog.onclick = function () { showElsewhere = !showElsewhere; renderPicker(); };
-      box.appendChild(tog);
+      tog.onclick = function () { showElsewhere = !showElsewhere; renderPicker(); }; box.appendChild(tog);
       if (showElsewhere) parts.rest.forEach(function (t) { box.appendChild(pickRow(t)); });
     }
   }
-
   function saveAttr() {
-    if (!pending) return;
-    var id = pending.id;
+    if (!pending) return; var id = pending.id;
     dbAll().then(function (all) {
       var rec = all.filter(function (r) { return r.id === id; })[0]; if (!rec) return;
       rec.train = pending.train ? Object.assign({}, pending.train) : null;
@@ -264,14 +222,12 @@
   // ---- recent / tally / export ----
   function refreshLocal() { dbAll().then(function (all) { all.sort(function (a, b) { return b.createdAt - a.createdAt; }); renderRecent(all); renderTally(all); renderExport(all); }); }
   function renderRecent(all) {
-    var box = $('recentList'); var recent = all.slice(0, 6);
+    var box = $('recentList'), recent = all.slice(0, 6);
     if (!recent.length) { box.innerHTML = '<div class="empty">No captures yet.</div>'; return; }
     box.innerHTML = '';
     recent.forEach(function (r) {
       var who = r.train ? (r.train.headcode + ' ' + dirArrow(r.train.direction)) : (r.note ? 'note' : 'unknown');
-      var div = el('div', 'rec');
-      div.innerHTML = '<span class="tag ' + (r.eventType === 'CLOSE' ? 'tag-close' : 'tag-open') + '">' + r.eventType + '</span>' +
-        '<span class="rt">' + hms(r.tCorrected) + '</span><span class="rmeta">' + who + (r.confidence ? ' · ' + r.confidence : '') + '</span><span class="ractions"></span>';
+      var div = el('div', 'rec', '<span class="tag ' + (r.eventType === 'CLOSE' ? 'tag-close' : 'tag-open') + '">' + r.eventType + '</span><span class="rt">' + hms(r.tCorrected) + '</span><span class="rmeta">' + who + (r.confidence ? ' · ' + r.confidence : '') + '</span><span class="ractions"></span>');
       var act = div.querySelector('.ractions');
       var e = el('button', null, 'Edit'); e.onclick = function () { openAttr(r); }; act.appendChild(e);
       var d = el('button', null, 'Del'); d.onclick = function () { delObs(r.id); }; act.appendChild(d);
@@ -285,15 +241,10 @@
     Object.keys(CAT_LABELS).forEach(function (k) { box.appendChild(el('div', 'tally-cell', '<div class="tally-n">' + c[k] + '</div><div class="tally-l">' + CAT_LABELS[k] + '</div>')); });
     if (c.other) { var n = el('div', 'info-text', c.other + ' CLOSE event(s) unattributed/other'); n.style.gridColumn = '1 / -1'; box.appendChild(n); }
   }
-  function renderExport(all) {
-    $('storedCount').textContent = all.length + ' stored';
-    var notExp = all.filter(function (r) { return !r.exportedAt; }).length;
-    $('exportNote').textContent = notExp ? (notExp + ' not yet exported') : (all.length ? 'all exported' : 'nothing to export yet');
-  }
+  function renderExport(all) { $('storedCount').textContent = all.length + ' stored'; var ne = all.filter(function (r) { return !r.exportedAt; }).length; $('exportNote').textContent = ne ? (ne + ' not yet exported') : (all.length ? 'all exported' : 'nothing to export yet'); }
   function delObs(id) { dbDel(id).then(function () { if (lastCaptureId === id) lastCaptureId = null; refreshLocal(); toast('Removed'); }); }
   function undoLast() { if (lastCaptureId == null) { toast('Nothing to undo'); return; } delObs(lastCaptureId); }
-
-  function download(name, mime, text) { var b = new Blob([text], { type: mime }); var u = URL.createObjectURL(b); var a = el('a'); a.href = u; a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(u); }, 1000); }
+  function download(name, mime, text) { var b = new Blob([text], { type: mime }), u = URL.createObjectURL(b), a = el('a'); a.href = u; a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(u); }, 1000); }
   function stamp() { var d = new Date(); return d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '-' + pad(d.getHours()) + pad(d.getMinutes()); }
   function exportAs(kind) {
     dbAll().then(function (all) {
@@ -305,58 +256,47 @@
     });
   }
 
-  // ---- rendering: clock, status, approach strip, elsewhere ----
+  // ---- rendering: clock, status, strip-map, elsewhere ----
   function renderClock() { $('clock').textContent = hms(correctedNow()); }
   function renderStatus() {
-    var dot = $('netDot'), txt = $('netText');
-    var age = lastPollAt ? Math.round((Date.now() - lastPollAt) / 1000) : null;
+    var dot = $('netDot'), txt = $('netText'), age = lastPollAt ? Math.round((Date.now() - lastPollAt) / 1000) : null;
     if (!lastPollOk && age === null) { dot.className = 'dot dot-warn'; txt.textContent = 'connecting…'; }
     else if (!lastPollOk || (age != null && age > 8)) { dot.className = 'dot dot-bad'; txt.textContent = 'feed offline (capture still works)'; }
     else { dot.className = 'dot dot-ok'; txt.textContent = 'live'; }
     $('offsetText').textContent = 'offset ' + fmtOffset(clockOffsetMs);
     $('pollAge').textContent = age != null ? ('feed ' + age + 's') : 'feed --';
   }
-
-  function chip(t) { return '<div class="chip"><span class="chip-name">' + shortName(t) + '</span><span class="chip-hc">' + dirArrow(t.direction) + ' ' + t.headcode + '</span></div>'; }
-  function stageCell(label, trains, passed) {
-    var cell = el('div', 'stage' + (passed ? ' passed' : ''));
-    var html = '<div class="stage-l">' + label + '</div>';
-    html += trains.length ? trains.map(chip).join('') : '<div class="stage-empty">–</div>';
-    cell.innerHTML = html; return cell;
-  }
-  function renderApproach() {
+  function gapPx(g) { return Math.max(14, Math.min(64, Math.round((g || 60) * 0.4))); }
+  function renderStrip() {
     var box = $('approachView'); box.innerHTML = '';
-    var any = false;
-    [{ k: 'east', l: 'Eastbound ▶' }, { k: 'west', l: 'Westbound ◀' }].forEach(function (d) {
-      var ap = [], cl = [], ps = [];
-      liveTrains.forEach(function (t) {
-        if (t.direction !== d.k) return;
-        var p = proximity(t.berth, d.k); if (!p) return;
-        if (p.stage === 'approach') ap.push(t); else if (p.stage === 'close') cl.push(t); else ps.push(t);
+    var anyTrain = false;
+    var row = el('div', 'strips');
+    ['east', 'west'].forEach(function (d) {
+      var col = el('div', 'stripcol');
+      col.appendChild(el('div', 'strip-dir', dirWord(d) + ' ' + dirArrow(d)));
+      var track = el('div', 'track');
+      CHAIN[d].forEach(function (n, i) {
+        if (n.x) { track.appendChild(el('div', 'xnode', '║ BOUNDARY RD ║')); return; }
+        var here = liveTrains.filter(function (t) { return t.direction === d && t.berth === n.b; });
+        if (here.length) anyTrain = true;
+        var node = el('div', 'bnode' + (n.role ? ' role-' + n.role : ''));
+        var pills = here.map(function (t) { return '<span class="tpill">' + dirArrow(d) + ' ' + shortName(t) + '</span>'; }).join('');
+        node.innerHTML = '<span class="bdot"></span><span class="blabel">' + n.b + (n.role ? ' · ' + n.role : '') + '</span><span class="bpills">' + pills + '</span>';
+        track.appendChild(node);
+        if (i < CHAIN[d].length - 1 && !CHAIN[d][i + 1].x) { var sp = el('div', 'bgap'); sp.style.height = gapPx(n.gap) + 'px'; track.appendChild(sp); }
       });
-      if (ap.length || cl.length || ps.length) any = true;
-      var strip = el('div', 'strip', '<div class="strip-dir">' + d.l + '</div>');
-      var track = el('div', 'strip-track');
-      track.appendChild(stageCell('Approaching', ap));
-      track.appendChild(stageCell('Close', cl));
-      track.appendChild(el('div', 'xing', 'CROSSING'));
-      track.appendChild(stageCell('Just passed', ps, true));
-      strip.appendChild(track); box.appendChild(strip);
+      col.appendChild(track); row.appendChild(col);
     });
-    if (!any) box.innerHTML = '<div class="empty">No trains on the Portslade approach right now.</div>';
+    box.appendChild(row);
+    if (!anyTrain) box.appendChild(el('div', 'info-text', 'No trains on the Portslade chain right now — they will appear on a berth as they enter area LA.'));
   }
   function renderElsewhere() {
-    var rest = partition().rest;
-    $('elsewhereCount').textContent = rest.length ? (rest.length + ' in wider area') : '';
+    var rest = partition().rest; $('elsewhereCount').textContent = rest.length ? (rest.length + ' in wider area') : '';
     var box = $('liveList');
     if (!rest.length) { box.innerHTML = '<div class="empty">Nothing else in the area.</div>'; return; }
     box.innerHTML = '';
     rest.forEach(function (t) {
-      box.appendChild(el('div', 'train',
-        '<span class="dir">' + dirArrow(t.direction) + '</span>' +
-        '<span class="pick-main"><span class="pick-id">' + identity(t) + '</span>' +
-        '<span class="pick-sub">' + dirWord(t.direction) + '</span></span>' +
-        '<span class="right"><span class="mono">' + t.headcode + '</span><br>' + (t.berth || '?') + ' · ' + ageStr(t) + '</span>'));
+      box.appendChild(el('div', 'train', '<span class="dir">' + dirArrow(t.direction) + '</span><span class="pick-main"><span class="pick-id">' + identity(t) + '</span><span class="pick-sub">' + dirWord(t.direction) + '</span></span><span class="right"><span class="mono">' + t.headcode + '</span><br>' + (t.berth || '?') + ' · ' + ageStr(t) + '</span>'));
     });
   }
 
@@ -371,7 +311,6 @@
     $('exportJson').onclick = function () { exportAs('json'); };
     var cb = document.querySelectorAll('.conf-btn');
     for (var i = 0; i < cb.length; i++) cb[i].onclick = (function (b) { return function () { if (pending) { pending.confidence = b.dataset.conf; renderConf(); } }; })(cb[i]);
-
     renderClock(); setInterval(renderClock, 250);
     renderStatus(); setInterval(renderStatus, 1000);
     openDb().then(function () { refreshLocal(); }).catch(function (e) { toast('Storage error: ' + e.message); });
