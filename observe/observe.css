@@ -97,7 +97,11 @@ body{background:#0F172A;color:#E2E8F0;font-family:-apple-system,BlinkMacSystemFo
 .xbar{background:#F59E0B;color:#0F172A;font-size:10px;font-weight:800;text-align:center;border-radius:5px;padding:4px 0;margin:5px 0;letter-spacing:1px}
 .bnode{display:flex;align-items:center;gap:6px;min-height:16px}
 .bdot{flex:0 0 9px;width:9px;height:9px;border-radius:50%;background:#334155;border:1px solid #475569}
+.btext{display:flex;flex-direction:column;min-width:0}
 .blabel{font-size:9px;color:#64748B;font-variant-numeric:tabular-nums;white-space:nowrap}
+.bttc{font-size:8px;color:#475569;font-variant-numeric:tabular-nums;white-space:nowrap;line-height:1.35}
+.bttc b{color:#94A3B8;font-weight:700}
+.bttc .iqr{color:#475569}
 .bpills{display:flex;flex-wrap:wrap;gap:3px}
 .role-approach .bdot,.role-protecting .bdot{background:#3B82F6;border-color:#93C5FD;box-shadow:0 0 0 2px rgba(59,130,246,.25)}
 .role-approach .blabel,.role-protecting .blabel,.role-clear .blabel{color:#BFDBFE;font-weight:600}

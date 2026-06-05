@@ -13,6 +13,12 @@
  * needs speed we don't have). Summing the gaps to the crossing gives an estimated
  * time-to-crossing. The chain is seeded from one day's log; re-derive over more
  * days (ideally server-side) to refine the gaps — order is stable topology.
+ *
+ * v1.4 — each approach berth also carries a `ttc` {q1, med, q3}: the lower-
+ * quartile / median / upper-quartile seconds from a train ENTERING that berth to
+ * PASSING the crossing, measured over 28 days of TD logs (backend
+ * scripts/derive-ttc.js). Shown per berth on the map, and the median drives the
+ * live "approaching ~Nm" labels/ordering (falling back to summed gaps if absent).
  */
 
 (function () {
@@ -25,14 +31,23 @@
   // Portslade berths; {x:true} is the crossing itself (after protecting).
   var CHAIN = {
     east: [
-      { b: '0016', gap: 132 }, { b: '0014', gap: 74 }, { b: '0012', gap: 37 },
-      { b: '0010', gap: 143 }, { b: '0008', gap: 75 }, { b: '0006', gap: 142, role: 'approach' },
-      { b: '0004', gap: 79, role: 'protecting' }, { x: true },
+      { b: '0016', gap: 132, ttc: { q1: 613, med: 671, q3: 743 } },
+      { b: '0014', gap: 74, ttc: { q1: 479, med: 537, q3: 608 } },
+      { b: '0012', gap: 37, ttc: { q1: 402, med: 462, q3: 531 } },
+      { b: '0010', gap: 143, ttc: { q1: 362, med: 422, q3: 488 } },
+      { b: '0008', gap: 75, ttc: { q1: 201, med: 278, q3: 346 } },
+      { b: '0006', gap: 142, role: 'approach', ttc: { q1: 122, med: 206, q3: 270 } },
+      { b: '0004', gap: 79, role: 'protecting', ttc: { q1: 55, med: 64, q3: 122 } },
+      { x: true },
       { b: '0002', gap: 115, role: 'clear' }, { b: 'T686', gap: 53 }, { b: 'T684' }
     ],
     west: [
-      { b: 'T682', gap: 90 }, { b: 'T677', gap: 126 }, { b: '0001', gap: 45 },
-      { b: '0003', gap: 36, role: 'approach' }, { b: '0005', gap: 115, role: 'protecting' }, { x: true },
+      { b: 'T682', gap: 90 },
+      { b: 'T677', gap: 126, ttc: { q1: 311, med: 336, q3: 385 } },
+      { b: '0001', gap: 45, ttc: { q1: 185, med: 201, q3: 258 } },
+      { b: '0003', gap: 36, role: 'approach', ttc: { q1: 142, med: 152, q3: 164 } },
+      { b: '0005', gap: 115, role: 'protecting', ttc: { q1: 107, med: 115, q3: 125 } },
+      { x: true },
       { b: '0007', gap: 43, role: 'clear' }, { b: '0009', gap: 70 }, { b: '0011', gap: 140 },
       { b: '0013', gap: 144 }, { b: '0015', gap: 84 }, { b: '0017', gap: 47 }
     ]
@@ -73,12 +88,21 @@
     var c = CHAININ[direction]; if (!c) return null;
     var i = c.idx[berth]; if (i === undefined) return null;
     if (i > c.xi) return { stage: 'passed', label: 'Just passed', etaSecs: null, rank: 9999, index: i };
-    var eta = etaToCrossing(direction, i);
+    var node = CHAIN[direction][i];
+    // Prefer the empirical median time-to-crossing for this berth (28-day TD
+    // distribution); fall back to summed gaps for any berth without it.
+    var eta = (node.ttc && node.ttc.med != null) ? node.ttc.med : etaToCrossing(direction, i);
     var label = eta <= 25 ? 'At the crossing' : eta <= 90 ? 'Close (~' + fmtEta(eta) + ')' : 'Approaching (~' + fmtEta(eta) + ')';
     return { stage: 'approach', label: label, etaSecs: eta, rank: eta, index: i };
   }
   function isApproaching(t) { return proximity(t.berth, t.direction) !== null; }
-  function fmtEta(s) { if (s == null) return ''; if (s < 60) return s + 's'; var m = Math.floor(s / 60), r = s % 60; return r ? (m + 'm' + r + 's') : (m + 'm'); }
+  function fmtEta(s) { if (s == null) return ''; if (s < 60) return s + 's'; var m = Math.floor(s / 60), r = s % 60; return r ? (m + 'm' + (r < 10 ? '0' + r : r) + 's') : (m + 'm'); }
+  // Compact per-berth time-to-crossing: bold median + the lower–upper quartile range.
+  function fmtTtc(t) {
+    if (!t || t.med == null) return '';
+    var m = '<b>' + fmtEta(t.med) + '</b>';
+    return (t.q1 != null && t.q3 != null) ? (m + ' <span class="iqr">' + fmtEta(t.q1) + '–' + fmtEta(t.q3) + '</span>') : m;
+  }
 
   function identity(t) {
     var kind = trainKind(t.headcode), hasOD = t.origin || t.destination;
@@ -294,8 +318,9 @@
   function trainsAt(d, b) { return liveTrains.filter(function (t) { return t.direction === d && t.berth === b; }); }
   function nodeEl(d, n) {
     var pills = trainsAt(d, n.b).map(function (t) { return '<span class="tpill">' + dirArrow(d) + ' ' + shortName(t) + '</span>'; }).join('');
+    var ttc = n.ttc ? '<span class="bttc">' + fmtTtc(n.ttc) + '</span>' : '';
     return el('div', 'bnode' + (n.role ? ' role-' + n.role : ''),
-      '<span class="bdot"></span><span class="blabel">' + n.b + (n.role ? ' · ' + n.role : '') + '</span><span class="bpills">' + pills + '</span>');
+      '<span class="bdot"></span><span class="btext"><span class="blabel">' + n.b + (n.role ? ' · ' + n.role : '') + '</span>' + ttc + '</span><span class="bpills">' + pills + '</span>');
   }
   // flow 'down' = train travels top→bottom (dwell in the upper node spaces to the
   // next); 'up' = travels bottom→top (dwell in the lower node spaces to the next).
