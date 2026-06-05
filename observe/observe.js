@@ -19,6 +19,12 @@
  * PASSING the crossing, measured over 28 days of TD logs (backend
  * scripts/derive-ttc.js). Shown per berth on the map, and the median drives the
  * live "approaching ~Nm" labels/ordering (falling back to summed gaps if absent).
+ *
+ * v1.5 — cleared (post-crossing) berths carry `tac` {q1, med, q3}: seconds from
+ * PASSING the crossing to ENTERING that berth (same 28-day derivation). Rendered
+ * with a leading "+" (time SINCE the crossing) to distinguish from the approach
+ * countdown. The crossing reference for both is the train stepping out of the
+ * protecting berth — i.e. the TRAIN on the crossing, not the barrier.
  */
 
 (function () {
@@ -29,6 +35,9 @@
   // Derived berth chain toward/through the crossing. gap = median seconds a train
   // dwells in that berth (≈ time to the next berth). role marks the confirmed
   // Portslade berths; {x:true} is the crossing itself (after protecting).
+  // ttc = {q1,med,q3} seconds from ENTERING this approach berth to passing the
+  // crossing; tac = {q1,med,q3} seconds from passing the crossing to entering
+  // this cleared berth (both over 28 days of TD logs — backend derive-ttc.js).
   var CHAIN = {
     east: [
       { b: '0016', gap: 132, ttc: { q1: 613, med: 671, q3: 743 } },
@@ -39,7 +48,9 @@
       { b: '0006', gap: 142, role: 'approach', ttc: { q1: 122, med: 206, q3: 270 } },
       { b: '0004', gap: 79, role: 'protecting', ttc: { q1: 55, med: 64, q3: 122 } },
       { x: true },
-      { b: '0002', gap: 115, role: 'clear' }, { b: 'T686', gap: 53 }, { b: 'T684' }
+      { b: '0002', gap: 115, role: 'clear' },
+      { b: 'T686', gap: 53, tac: { q1: 107, med: 116, q3: 128 } },
+      { b: 'T684', tac: { q1: 159, med: 170, q3: 186 } }
     ],
     west: [
       { b: 'T682', gap: 90 },
@@ -48,8 +59,12 @@
       { b: '0003', gap: 36, role: 'approach', ttc: { q1: 142, med: 152, q3: 164 } },
       { b: '0005', gap: 115, role: 'protecting', ttc: { q1: 107, med: 115, q3: 125 } },
       { x: true },
-      { b: '0007', gap: 43, role: 'clear' }, { b: '0009', gap: 70 }, { b: '0011', gap: 140 },
-      { b: '0013', gap: 144 }, { b: '0015', gap: 84 }, { b: '0017', gap: 47 }
+      { b: '0007', gap: 43, role: 'clear' },
+      { b: '0009', gap: 70, tac: { q1: 41, med: 42, q3: 45 } },
+      { b: '0011', gap: 140, tac: { q1: 103, med: 111, q3: 181 } },
+      { b: '0013', gap: 144, tac: { q1: 198, med: 258, q3: 317 } },
+      { b: '0015', gap: 84, tac: { q1: 349, med: 412, q3: 467 } },
+      { b: '0017', gap: 47, tac: { q1: 437, med: 496, q3: 554 } }
     ]
   };
   // Precompute, per direction: berth → node index, and the crossing index.
@@ -97,10 +112,11 @@
   }
   function isApproaching(t) { return proximity(t.berth, t.direction) !== null; }
   function fmtEta(s) { if (s == null) return ''; if (s < 60) return s + 's'; var m = Math.floor(s / 60), r = s % 60; return r ? (m + 'm' + (r < 10 ? '0' + r : r) + 's') : (m + 'm'); }
-  // Compact per-berth time-to-crossing: bold median + the lower–upper quartile range.
-  function fmtTtc(t) {
+  // Compact per-berth crossing time: bold median + the lower–upper quartile range.
+  // after=true prefixes "+" (time SINCE the crossing) vs the approach countdown.
+  function fmtTtc(t, after) {
     if (!t || t.med == null) return '';
-    var m = '<b>' + fmtEta(t.med) + '</b>';
+    var m = '<b>' + (after ? '+' : '') + fmtEta(t.med) + '</b>';
     return (t.q1 != null && t.q3 != null) ? (m + ' <span class="iqr">' + fmtEta(t.q1) + '–' + fmtEta(t.q3) + '</span>') : m;
   }
 
@@ -318,7 +334,8 @@
   function trainsAt(d, b) { return liveTrains.filter(function (t) { return t.direction === d && t.berth === b; }); }
   function nodeEl(d, n) {
     var pills = trainsAt(d, n.b).map(function (t) { return '<span class="tpill">' + dirArrow(d) + ' ' + shortName(t) + '</span>'; }).join('');
-    var ttc = n.ttc ? '<span class="bttc">' + fmtTtc(n.ttc) + '</span>' : '';
+    var timing = n.ttc ? fmtTtc(n.ttc, false) : (n.tac ? fmtTtc(n.tac, true) : '');
+    var ttc = timing ? '<span class="bttc">' + timing + '</span>' : '';
     return el('div', 'bnode' + (n.role ? ' role-' + n.role : ''),
       '<span class="bdot"></span><span class="btext"><span class="blabel">' + n.b + (n.role ? ' · ' + n.role : '') + '</span>' + ttc + '</span><span class="bpills">' + pills + '</span>');
   }

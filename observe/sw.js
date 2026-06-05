@@ -7,7 +7,7 @@
  * network and simply fails gracefully when offline (capture never depends on it).
  */
 
-var CACHE = 'observer-v2';
+var CACHE = 'observer-v3';
 var SHELL = [
   './', './index.html', './observe.css', './observe.js', './manifest.webmanifest',
   '../shared/icon-180.png', '../shared/icon.svg'
