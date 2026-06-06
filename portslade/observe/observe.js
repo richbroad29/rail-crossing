@@ -144,7 +144,7 @@
   }
 
   function categoryOf(rec) {
-    if (rec.eventType !== 'CLOSE') return null;
+    if (rec.isSkip || rec.eventType !== 'CLOSE') return null;
     if (!rec.train) return 'other';
     if (rec.episodeTrains && rec.episodeTrains.length > 1) return 'consec';
     var d = rec.train.direction;
@@ -161,14 +161,17 @@
 
   function csvCell(v) { if (v === null || v === undefined) return ''; var s = String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }
   function toCsv(records) {
-    var cols = ['id', 'eventType', 'tCapturedDevice', 'tCorrected', 'tCorrectedISO', 'crossingId',
-      'headcode', 'direction', 'stopping', 'suggestedHeadcode', 'suggestionAccepted', 'confidence', 'episodeTrains', 'note', 'offsetMs', 'createdAt'];
+    var cols = ['id', 'eventType', 'observed', 'isSkip', 'tCapturedDevice', 'tCorrected', 'tCorrectedISO', 'crossingId',
+      'headcode', 'direction', 'stopping', 'suggestedHeadcode', 'suggestionAccepted', 'confidence', 'priorState',
+      'episodeIndex', 'episodeRole', 'durationMs', 'hasSkip', 'episodeTrains', 'snapshotCount', 'note', 'deleted', 'createdAt'];
     var lines = [cols.join(',')];
     records.forEach(function (r) {
-      lines.push([r.id, r.eventType, r.tCapturedDevice, r.tCorrected, new Date(r.tCorrected).toISOString(), r.crossingId,
+      lines.push([r.id, r.eventType, r.observed === false ? 'no' : 'yes', r.isSkip ? 'yes' : 'no',
+        r.tCapturedDevice, r.tCorrected, r.tCorrected ? new Date(r.tCorrected).toISOString() : '', r.crossingId,
         r.train ? r.train.headcode : '', r.train ? r.train.direction : '', r.train ? r.train.stopping : '',
-        r.suggestedHeadcode || '', r.suggestionAccepted ? 'yes' : 'no', r.confidence || '',
-        (r.episodeTrains || []).join(' '), r.note || '', r.offsetMs, r.createdAt].map(csvCell).join(','));
+        r.suggestedHeadcode || '', r.suggestionAccepted ? 'yes' : 'no', r.confidence || '', r.priorState || '',
+        r.episodeIndex || '', r.episodeRole || '', r.durationMs != null ? r.durationMs : '', r.hasSkip ? 'yes' : 'no',
+        (r.episodeTrains || []).join(' '), (r.liveSnapshot || []).length, r.note || '', r.deleted ? 'yes' : '', r.createdAt].map(csvCell).join(','));
     });
     return lines.join('\n');
   }
@@ -186,6 +189,8 @@
   var liveTrains = [];
   var clockOffsetMs = 0, lastRtt = 0, lastPollAt = 0, lastPollOk = false;
   var episodeSet = {}, lastCaptureId = null, pending = null, showElsewhere = false;
+  var barrierUp = null;                          // null = unknown (ask arrival state)
+  var ARRIVAL_KEY = 'observer-arrival-' + CROSSING_ID;
 
   function $(id) { return document.getElementById(id); }
   function el(tag, cls, html) { var e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; }
@@ -221,21 +226,74 @@
       .catch(function () { lastPollOk = false; renderStatus(); });
   }
 
-  // ---- capture ----
-  function capture(type) {
+  // ---- capture (single alternating action) ----
+  // The barrier is a 2-state machine; the one button always offers the only
+  // valid next transition. barrierUp===null means we don't yet know the state
+  // (fresh log) and must ask for it on arrival.
+  function buildSnapshot() {
+    return liveTrains.map(function (t) {
+      return { headcode: t.headcode, berth: t.berth, fromBerth: t.fromBerth, direction: t.direction, stopping: t.stopping, ageSecs: t.ageSecs };
+    });
+  }
+  function setArrival(up) {
+    barrierUp = up; try { localStorage.setItem(ARRIVAL_KEY, up ? 'up' : 'down'); } catch (e) { }
+    renderCaptureControls(); toast('Barrier set ' + (up ? 'UP ▲' : 'DOWN ▼'));
+  }
+  function capture() {
+    if (barrierUp === null) { toast('First set the barrier state on arrival'); return; }
+    var type = barrierUp ? 'CLOSE' : 'OPEN';
     if (navigator.vibrate) navigator.vibrate(35);
-    var btn = $(type === 'CLOSE' ? 'btnClose' : 'btnOpen');
-    btn.classList.remove('flash'); void btn.offsetWidth; btn.classList.add('flash');
+    var btn = $('btnAction'); btn.classList.remove('flash'); void btn.offsetWidth; btn.classList.add('flash');
     var tDev = Date.now();
     var sug = type === 'CLOSE' ? suggestForClose(liveTrains) : suggestForOpen(liveTrains);
     var rec = {
-      eventType: type, tCapturedDevice: tDev, tCorrected: tDev + clockOffsetMs, crossingId: CROSSING_ID,
+      eventType: type, observed: true, isSkip: false, priorState: barrierUp ? 'up' : 'down',
+      tCapturedDevice: tDev, tCorrected: tDev + clockOffsetMs, crossingId: CROSSING_ID,
       train: sug ? { headcode: sug.headcode, direction: sug.direction, stopping: sug.stopping } : null,
       suggestedHeadcode: sug ? sug.headcode : null, suggestionAccepted: false, confidence: null,
-      episodeTrains: type === 'OPEN' ? Object.keys(episodeSet) : [], note: '', offsetMs: clockOffsetMs, createdAt: Date.now()
+      episodeTrains: type === 'OPEN' ? Object.keys(episodeSet) : [], liveSnapshot: buildSnapshot(),
+      note: '', offsetMs: clockOffsetMs, createdAt: Date.now()
     };
     if (type === 'CLOSE') { episodeSet = {}; liveTrains.forEach(function (t) { if (t.headcode) episodeSet[t.headcode] = true; }); }
+    barrierUp = (type === 'OPEN');               // optimistic flip; refreshLocal reconciles from DB
+    try { localStorage.removeItem(ARRIVAL_KEY); } catch (e) { }
+    renderCaptureControls();
     dbAdd(rec).then(function (id) { rec.id = id; lastCaptureId = id; openAttr(rec); refreshLocal(); });
+  }
+  // Skip = "a transition happened here I didn't capture": logs the expected event
+  // as UNOBSERVED (time approximate, no train) and advances the state.
+  function skip() {
+    if (barrierUp === null) { toast('First set the barrier state on arrival'); return; }
+    var type = barrierUp ? 'CLOSE' : 'OPEN';
+    if (navigator.vibrate) navigator.vibrate([20, 40, 20]);
+    var tDev = Date.now();
+    var rec = {
+      eventType: type, observed: false, isSkip: true, priorState: barrierUp ? 'up' : 'down',
+      tCapturedDevice: tDev, tCorrected: tDev + clockOffsetMs, crossingId: CROSSING_ID,
+      train: null, suggestedHeadcode: null, suggestionAccepted: false, confidence: null,
+      episodeTrains: type === 'OPEN' ? Object.keys(episodeSet) : [], liveSnapshot: buildSnapshot(),
+      note: 'missed (skipped) — time approximate', offsetMs: clockOffsetMs, createdAt: Date.now()
+    };
+    if (type === 'CLOSE') { episodeSet = {}; liveTrains.forEach(function (t) { if (t.headcode) episodeSet[t.headcode] = true; }); }
+    barrierUp = (type === 'OPEN');
+    try { localStorage.removeItem(ARRIVAL_KEY); } catch (e) { }
+    renderCaptureControls();
+    dbAdd(rec).then(function (id) { rec.id = id; lastCaptureId = id; refreshLocal(); toast('Marked a missed ' + type); });
+  }
+  function renderCaptureControls() {
+    var arrival = $('arrivalPrompt'), main = $('capMain');
+    if (!arrival || !main) return;
+    if (barrierUp === null) { arrival.classList.remove('hidden'); main.classList.add('hidden'); return; }
+    arrival.classList.add('hidden'); main.classList.remove('hidden');
+    var type = barrierUp ? 'CLOSE' : 'OPEN', btn = $('btnAction');
+    btn.classList.toggle('is-close', type === 'CLOSE');
+    btn.classList.toggle('is-open', type === 'OPEN');
+    $('capLabel').textContent = type;
+    $('capSub').textContent = type === 'CLOSE' ? 'red lights start — barrier going down' : 'booms fully up — barrier going up';
+    $('stateInd').innerHTML = barrierUp
+      ? 'Barrier is <b class="up">UP ▲</b> — tap when the red lights start'
+      : 'Barrier is <b class="down">DOWN ▼</b> — tap when the booms are fully up';
+    $('btnSkip').textContent = 'Missed the ' + type + ' — skip ▸';
   }
 
   // ---- attribution ----
@@ -282,17 +340,59 @@
     });
   }
 
+  // ---- state / episodes ----
+  function activeOf(all) { return all.filter(function (r) { return !r.deleted; }); }
+  function chrono(list) { return list.slice().sort(function (a, b) { return a.createdAt - b.createdAt; }); }
+  // Current barrier state = the resulting state of the last event (every event,
+  // observed or skipped, sets a definite state by its type). Empty log → arrival
+  // memory (localStorage), else unknown.
+  function recomputeState(ac) {
+    if (!ac.length) { var s = null; try { s = localStorage.getItem(ARRIVAL_KEY); } catch (e) { } barrierUp = s === 'up' ? true : s === 'down' ? false : null; return; }
+    barrierUp = ac[ac.length - 1].eventType === 'OPEN';
+  }
+  // Pair CLOSE→OPEN into closure episodes → {id: {episodeIndex, role, durationMs,
+  // hasSkip}}. An OPEN with no preceding CLOSE (barrier already down on arrival)
+  // is its own episode with unknown duration.
+  function computeEpisodes(ac) {
+    var byId = {}, idx = 0, cur = null;
+    ac.forEach(function (r) {
+      if (r.eventType === 'CLOSE') {
+        cur = { i: ++idx, closeId: r.id, closeT: r.tCorrected, hasSkip: !!r.isSkip };
+        byId[r.id] = { episodeIndex: cur.i, role: 'close', durationMs: null, hasSkip: cur.hasSkip };
+      } else if (cur) {
+        if (r.isSkip) cur.hasSkip = true;
+        var dur = (cur.closeT != null && r.tCorrected != null) ? (r.tCorrected - cur.closeT) : null;
+        byId[r.id] = { episodeIndex: cur.i, role: 'open', durationMs: dur, hasSkip: cur.hasSkip };
+        if (byId[cur.closeId]) byId[cur.closeId].hasSkip = cur.hasSkip;
+        cur = null;
+      } else {
+        byId[r.id] = { episodeIndex: ++idx, role: 'open', durationMs: null, hasSkip: !!r.isSkip };
+      }
+    });
+    return byId;
+  }
+  function fmtDur(ms) { if (ms == null) return ''; var s = Math.round(ms / 1000); if (s < 60) return s + 's'; var m = Math.floor(s / 60), r = s % 60; return m + 'm' + (r < 10 ? '0' + r : r) + 's'; }
+
   // ---- recent / tally / export ----
-  function refreshLocal() { dbAll().then(function (all) { all.sort(function (a, b) { return b.createdAt - a.createdAt; }); renderRecent(all); renderTally(all); renderExport(all); }); }
-  function renderRecent(all) {
-    var box = $('recentList'), recent = all.slice(0, 6);
+  function refreshLocal() {
+    dbAll().then(function (all) {
+      var active = activeOf(all), ac = chrono(active), ep = computeEpisodes(ac);
+      recomputeState(ac); renderCaptureControls();
+      renderRecent(active.slice().sort(function (a, b) { return b.createdAt - a.createdAt; }), ep);
+      renderTally(active); renderExport(all);
+    });
+  }
+  function renderRecent(all, ep) {
+    var box = $('recentList'), recent = all.slice(0, 8);
     if (!recent.length) { box.innerHTML = '<div class="empty">No captures yet.</div>'; return; }
     box.innerHTML = '';
     recent.forEach(function (r) {
-      var who = r.train ? (r.train.headcode + ' ' + dirArrow(r.train.direction)) : (r.note ? 'note' : 'unknown');
-      var div = el('div', 'rec', '<span class="tag ' + (r.eventType === 'CLOSE' ? 'tag-close' : 'tag-open') + '">' + r.eventType + '</span><span class="rt">' + hms(r.tCorrected) + '</span><span class="rmeta">' + who + (r.confidence ? ' · ' + r.confidence : '') + '</span><span class="ractions"></span>');
+      var m = ep[r.id] || {};
+      var who = r.isSkip ? 'missed — not observed' : (r.train ? (r.train.headcode + ' ' + dirArrow(r.train.direction)) : (r.note ? 'note' : 'unknown'));
+      var dur = (m.role === 'open' && m.durationMs != null) ? ' · closed ' + fmtDur(m.durationMs) : '';
+      var div = el('div', 'rec' + (r.isSkip ? ' rec-skip' : ''), '<span class="tag ' + (r.eventType === 'CLOSE' ? 'tag-close' : 'tag-open') + '">' + (r.isSkip ? 'SKIP' : r.eventType) + '</span><span class="rt">' + (r.isSkip ? '~' : '') + hms(r.tCorrected) + '</span><span class="rmeta">' + who + (r.confidence ? ' · ' + r.confidence : '') + dur + '</span><span class="ractions"></span>');
       var act = div.querySelector('.ractions');
-      var e = el('button', null, 'Edit'); e.onclick = function () { openAttr(r); }; act.appendChild(e);
+      if (!r.isSkip) { var e = el('button', null, 'Edit'); e.onclick = function () { openAttr(r); }; act.appendChild(e); }
       var d = el('button', null, 'Del'); d.onclick = function () { delObs(r.id); }; act.appendChild(d);
       box.appendChild(div);
     });
@@ -304,8 +404,20 @@
     Object.keys(CAT_LABELS).forEach(function (k) { box.appendChild(el('div', 'tally-cell', '<div class="tally-n">' + c[k] + '</div><div class="tally-l">' + CAT_LABELS[k] + '</div>')); });
     if (c.other) { var n = el('div', 'info-text', c.other + ' CLOSE event(s) unattributed/other'); n.style.gridColumn = '1 / -1'; box.appendChild(n); }
   }
-  function renderExport(all) { $('storedCount').textContent = all.length + ' stored'; var ne = all.filter(function (r) { return !r.exportedAt; }).length; $('exportNote').textContent = ne ? (ne + ' not yet exported') : (all.length ? 'all exported' : 'nothing to export yet'); }
-  function delObs(id) { dbDel(id).then(function () { if (lastCaptureId === id) lastCaptureId = null; refreshLocal(); toast('Removed'); }); }
+  function renderExport(all) {
+    var active = activeOf(all), del = all.length - active.length;
+    $('storedCount').textContent = active.length + ' stored' + (del ? (' · ' + del + ' removed') : '');
+    var ne = active.filter(function (r) { return !r.exportedAt; }).length;
+    $('exportNote').textContent = ne ? (ne + ' not yet exported') : (all.length ? 'all exported' : 'nothing to export yet');
+  }
+  // Soft-delete: never erase — mark the record so the export keeps a full trail.
+  function delObs(id) {
+    dbAll().then(function (all) {
+      var rec = all.filter(function (r) { return r.id === id; })[0]; if (!rec) return;
+      rec.deleted = true; rec.deletedAt = Date.now();
+      dbPut(rec).then(function () { if (lastCaptureId === id) lastCaptureId = null; refreshLocal(); toast('Removed (kept in export)'); });
+    });
+  }
   function undoLast() { if (lastCaptureId == null) { toast('Nothing to undo'); return; } delObs(lastCaptureId); }
   function download(name, mime, text) { var b = new Blob([text], { type: mime }), u = URL.createObjectURL(b), a = el('a'); a.href = u; a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(u); }, 1000); }
   function stamp() { var d = new Date(); return d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '-' + pad(d.getHours()) + pad(d.getMinutes()); }
@@ -313,8 +425,13 @@
     dbAll().then(function (all) {
       if (!all.length) { toast('Nothing to export'); return; }
       all.sort(function (a, b) { return a.createdAt - b.createdAt; });
-      if (kind === 'csv') download('observer-' + CROSSING_ID + '-' + stamp() + '.csv', 'text/csv', toCsv(all));
-      else download('observer-' + CROSSING_ID + '-' + stamp() + '.json', 'application/json', JSON.stringify(all, null, 2));
+      var ep = computeEpisodes(chrono(activeOf(all)));   // derive episode links / durations at export time
+      var enriched = all.map(function (r) {
+        var m = ep[r.id] || {};
+        return Object.assign({}, r, { episodeIndex: m.episodeIndex || null, episodeRole: m.role || null, durationMs: m.durationMs != null ? m.durationMs : null, hasSkip: !!m.hasSkip });
+      });
+      if (kind === 'csv') download('observer-' + CROSSING_ID + '-' + stamp() + '.csv', 'text/csv', toCsv(enriched));
+      else download('observer-' + CROSSING_ID + '-' + stamp() + '.json', 'application/json', JSON.stringify(enriched, null, 2));
       var now = Date.now(); Promise.all(all.map(function (r) { r.exportedAt = now; return dbPut(r); })).then(refreshLocal);
     });
   }
@@ -385,8 +502,10 @@
 
   // ---- init ----
   function init() {
-    $('btnClose').onclick = function () { capture('CLOSE'); };
-    $('btnOpen').onclick = function () { capture('OPEN'); };
+    $('btnAction').onclick = capture;
+    $('btnSkip').onclick = skip;
+    $('arrUp').onclick = function () { setArrival(true); };
+    $('arrDown').onclick = function () { setArrival(false); };
     $('attrSave').onclick = saveAttr;
     $('attrUnknown').onclick = function () { if (pending) { pending.train = null; renderPicker(); } };
     $('undoBtn').onclick = undoLast;

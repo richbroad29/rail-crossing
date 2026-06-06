@@ -31,16 +31,22 @@
     </div>
   </div>
 
-  <!-- Capture: timestamp first, attribution second. Tap is never blocked. -->
-  <div class="capture">
-    <button class="cap-btn cap-close" id="btnClose">
-      <span class="cap-label">CLOSE</span>
-      <span class="cap-sub">red lights start</span>
+  <!-- Capture: single alternating button (timestamp at tap) + skip. The button
+       always offers the only valid next event for the current barrier state. -->
+  <div class="arrival hidden" id="arrivalPrompt">
+    <div class="arrival-q">When you arrived, was the barrier…</div>
+    <div class="arrival-btns">
+      <button class="arr-btn arr-up" id="arrUp"><span class="arr-ico">▲</span>UP (open)</button>
+      <button class="arr-btn arr-down" id="arrDown"><span class="arr-ico">▼</span>DOWN (closed)</button>
+    </div>
+  </div>
+  <div class="cap-main hidden" id="capMain">
+    <div class="state-ind" id="stateInd"></div>
+    <button class="cap-btn cap-action is-close" id="btnAction">
+      <span class="cap-label" id="capLabel">CLOSE</span>
+      <span class="cap-sub" id="capSub">red lights start</span>
     </button>
-    <button class="cap-btn cap-open" id="btnOpen">
-      <span class="cap-label">OPEN</span>
-      <span class="cap-sub">booms fully up</span>
-    </button>
+    <button class="cap-skip" id="btnSkip">Missed one — skip ▸</button>
   </div>
 
   <!-- Attribution panel — opens on capture, pre-filled with the suggestion. -->

@@ -11,16 +11,31 @@ body{background:#0F172A;color:#E2E8F0;font-family:-apple-system,BlinkMacSystemFo
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;vertical-align:middle;margin-right:3px}
 .dot-ok{background:#22C55E}.dot-warn{background:#F59E0B}.dot-bad{background:#EF4444}
 
-/* Capture buttons — large, one-handed, never blocked on network */
-.capture{display:flex;gap:10px;margin-bottom:14px}
-.cap-btn{flex:1;border:none;border-radius:16px;padding:22px 8px;display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer;color:#fff;font-family:inherit;min-height:96px;transition:transform .05s}
+/* Capture — single alternating button (large, one-handed) + skip */
+.cap-btn{border:none;border-radius:16px;padding:22px 8px;display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer;color:#fff;font-family:inherit;min-height:96px;transition:transform .05s}
 .cap-btn:active{transform:scale(.97)}
-.cap-label{font-size:26px;font-weight:800;letter-spacing:1px}
+.cap-label{font-size:30px;font-weight:800;letter-spacing:1px}
 .cap-sub{font-size:11px;opacity:.85}
-.cap-close{background:#B91C1C}
-.cap-open{background:#15803D}
 .cap-btn.flash{animation:flash .4s ease}
 @keyframes flash{0%{filter:brightness(2)}100%{filter:brightness(1)}}
+
+.cap-main{margin-bottom:14px}
+.cap-action{width:100%;min-height:104px}
+.cap-action.is-close{background:#B91C1C}
+.cap-action.is-open{background:#15803D}
+.state-ind{font-size:12px;color:#94A3B8;text-align:center;margin-bottom:8px}
+.state-ind b.up{color:#6EE7B7}.state-ind b.down{color:#FCA5A5}
+.cap-skip{width:100%;margin-top:10px;padding:13px;border-radius:12px;border:1px dashed #475569;background:#0F172A;color:#CBD5E1;font-size:13px;font-weight:600;cursor:pointer}
+.cap-skip:active{background:#1E293B}
+
+/* Arrival state prompt — shown only when the barrier state is unknown */
+.arrival{background:#1E293B;border-radius:16px;padding:16px;margin-bottom:14px;border:1px solid #334155}
+.arrival-q{font-size:13px;color:#CBD5E1;text-align:center;margin-bottom:12px;font-weight:600}
+.arrival-btns{display:flex;gap:10px}
+.arr-btn{flex:1;padding:18px 8px;border-radius:12px;border:1px solid #334155;background:#0F172A;color:#E2E8F0;font-size:15px;font-weight:700;cursor:pointer;display:flex;flex-direction:column;gap:5px;align-items:center}
+.arr-btn:active{transform:scale(.97)}
+.arr-up{border-color:#15803D}.arr-down{border-color:#B91C1C}
+.arr-ico{font-size:20px}
 
 .section{background:#1E293B;border-radius:12px;padding:12px;margin-bottom:14px}
 .section-hdr{font-size:12px;font-weight:600;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center}
@@ -79,6 +94,8 @@ body{background:#0F172A;color:#E2E8F0;font-family:-apple-system,BlinkMacSystemFo
 .rec .rmeta{color:#94A3B8;font-size:11px}
 .rec .ractions{margin-left:auto;display:flex;gap:6px}
 .rec .ractions button{font-size:10px;padding:4px 8px;border-radius:6px;border:1px solid #334155;background:#0F172A;color:#CBD5E1;cursor:pointer}
+.rec.rec-skip{opacity:.85;border-style:dashed}
+.rec.rec-skip .tag{background:#334155;color:#CBD5E1}
 
 .export-row{display:flex;gap:8px}
 .setup-btn{flex:1;padding:11px;border-radius:8px;border:1px solid #334155;background:#0F172A;color:#E2E8F0;font-size:12px;font-weight:600;text-align:center;cursor:pointer}
