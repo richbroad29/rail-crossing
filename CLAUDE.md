@@ -26,7 +26,7 @@ siri.js                          Scriptable iOS integration (separate, mirrors t
 feedback-update-instructions.md  Notes on the feedback system
 README.md                        Almost empty
 worker/                          Cloudflare Worker source (wrangler.jsonc + src/worker.js)
-observe/                         Barrier-observation PWA — field data-collection tool (separate app, /observe/)
+portslade/observe/               Barrier-observation PWA — field data-collection tool (separate app, /portslade/observe/)
 ```
 
 The **frontend has no build step** — edit files, push to `main`, GitHub Pages deploys within ~1 minute. The **worker requires a separate deploy step**: `cd worker && npx wrangler deploy`.
@@ -106,9 +106,9 @@ The frontend renders four-state freight labels by descending confidence: `confir
 
 Feedback flow: when the user reports a wrong prediction, the frontend POSTs to a Google Apps Script URL (in `crossings.json` → `feedbackUrl`), which appends a row to a Google Sheet.
 
-## Observer app (`/observe/`)
+## Observer app (`/portslade/observe/`)
 
-A separate installable PWA (`observe/`, deployed on `main` via GitHub Pages) for on-site collection of real barrier event timestamps — **step 1 of position-based closure triggering**, not a prediction surface. It is read-only on train data and (v1) writes only to local device storage.
+A separate installable PWA (`portslade/observe/`, live at https://richbroad29.github.io/rail-crossing/portslade/observe/ , deployed on `main` via GitHub Pages) for on-site collection of real barrier event timestamps — **step 1 of position-based closure triggering**, not a prediction surface. It is read-only on train data and (v1) writes only to local device storage.
 
 - Polls the backend's **B1 live endpoint** `GET /crossing/:id/live` (~2.5s) for trains currently in TD area LA. The endpoint feeds the observer the per-train `{ headcode, berth, fromBerth, event, direction, stopping, origin, destination, lastSeen, ageSecs }` plus `serverTime` (for device clock-offset). B1 lives in `backend-v2`: `td-listener` emits the berth, `crossing-state.recordTdBerth`/`getLiveTrains` keep a TTL-pruned `liveTrains` map (config `live.ttlSecs`), `api.js` serves it. Direction is from a headcode→LDB/CIF join (`"unknown"` if no match); `stopping` is `true` only if on the PLD board, else `"unknown"` (never `false`).
 - Captures **two events only** — CLOSE (red lights start) / OPEN (booms fully up) — each attributed to a **single** train: CLOSE → nearest *approaching* train, OPEN → *just-cleared* train. Attribution leans on direction + the **confirmed Portslade approach berths only** (`berths.east/west` in `shared/crossings.json`), never raw berth proximity across all of LA (that mapping is the later berth-chain analysis).
