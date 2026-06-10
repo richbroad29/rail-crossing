@@ -1,6 +1,8 @@
 const NR_ENDPOINT = 'https://lite.realtime.nationalrail.co.uk/OpenLDBWS/ldb12.asmx';
 const NR_ENDPOINT_SV = 'https://lite.realtime.nationalrail.co.uk/OpenLDBSVWS/ldbsv12.asmx';
 const ALLOWED_ORIGINS = [
+  'https://railcrossing.uk',
+  'https://www.railcrossing.uk',
   'https://richbroad29.github.io',
   'http://localhost',
   'http://127.0.0.1'

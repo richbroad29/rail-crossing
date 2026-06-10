@@ -6,7 +6,7 @@ This is **Rich's** project. Rich is tech-competent but not a developer. Read thi
 
 A web app that predicts when UK level crossing barriers will be closed, using real-time and scheduled train data. Currently focused on the **Boundary Road** crossing in Portslade, West Sussex (an MCB-CCTV crossing on the West Coastway line). Architecture is designed to scale to additional crossings.
 
-Live at: https://richbroad29.github.io/rail-crossing/
+Live at: https://railcrossing.uk/
 
 Goals, in order of priority:
 1. Catch every closure (including freight)
@@ -108,7 +108,7 @@ Feedback flow: when the user reports a wrong prediction, the frontend POSTs to a
 
 ## Observer app (`/portslade/observe/`)
 
-A separate installable PWA (`portslade/observe/`, live at https://richbroad29.github.io/rail-crossing/portslade/observe/ , deployed on `main` via GitHub Pages) for on-site collection of real barrier event timestamps — **step 1 of position-based closure triggering**, not a prediction surface. It is read-only on train data and (v1) writes only to local device storage.
+A separate installable PWA (`portslade/observe/`, live at https://railcrossing.uk/portslade/observe/ , deployed on `main` via GitHub Pages) for on-site collection of real barrier event timestamps — **step 1 of position-based closure triggering**, not a prediction surface. It is read-only on train data and (v1) writes only to local device storage.
 
 - Polls the backend's **B1 live endpoint** `GET /crossing/:id/live` (~2.5s) for trains currently in TD area LA. The endpoint feeds the observer the per-train `{ headcode, berth, fromBerth, event, direction, stopping, origin, destination, lastSeen, ageSecs }` plus `serverTime` (for device clock-offset). B1 lives in `backend-v2`: `td-listener` emits the berth, `crossing-state.recordTdBerth`/`getLiveTrains` keep a TTL-pruned `liveTrains` map (config `live.ttlSecs`), `api.js` serves it. Direction is from a headcode→LDB/CIF join (`"unknown"` if no match); `stopping` is `true` only if on the PLD board, else `"unknown"` (never `false`).
 - Captures **two events only** — CLOSE (red lights start) / OPEN (booms fully up) — each attributed to a **single** train: CLOSE → nearest *approaching* train, OPEN → *just-cleared* train. Attribution leans on direction + the **confirmed Portslade approach berths only** (`berths.east/west` in `shared/crossings.json`), never raw berth proximity across all of LA (that mapping is the later berth-chain analysis).
@@ -163,7 +163,7 @@ These are also the values in `crossings.json` → `berths.east/west.approach/pro
 
 ## External services and credentials
 
-- **GitHub Pages** — auto-deploys `main` to `richbroad29.github.io/rail-crossing/`
+- **GitHub Pages** — auto-deploys `main` to the custom domain `railcrossing.uk` (apex; `CNAME` file in repo root). The old `richbroad29.github.io/rail-crossing/` URL 301-redirects to it.
 - **Oracle Cloud VPS** (`130.162.167.237`, Ubuntu, Node 20) — runs backend-v2 under systemd (`rail-crossing.service`) and Caddy (reverse proxy + Let's Encrypt). **Note:** Ubuntu image has host-level iptables that REJECT inbound besides 22 — opening a port needs BOTH the OCI Security List and `iptables -I INPUT <pos> ... -j ACCEPT` before the REJECT, persisted with `netfilter-persistent save`.
 - **DuckDNS** — free dynamic-DNS subdomain `railcrossing.duckdns.org` → VPS IP. Kept alive by cron on VPS (`crontab -l` shows the update URL with token).
 - **Caddy** on VPS — `/etc/caddy/Caddyfile`, systemd-managed, auto-renewing Let's Encrypt cert.

@@ -28,7 +28,7 @@
  */
 
 (function () {
-  var API_BASE = 'https://railcrossing.duckdns.org';
+  var API_BASE = 'https://api.railcrossing.uk';
   var CROSSING_ID = 'portslade';
   var POLL_MS = 2500;
 

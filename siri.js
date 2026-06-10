@@ -1,7 +1,7 @@
 async function main() {
 
 var API_BASE = 'https://rail-crossing-api.richardbroad29.workers.dev';
-var CONFIG_URL = 'https://richbroad29.github.io/rail-crossing/shared/crossings.json';
+var CONFIG_URL = 'https://railcrossing.uk/shared/crossings.json';
 
 var cfgReq = new Request(CONFIG_URL);
 var allConfig = JSON.parse(await cfgReq.loadString());

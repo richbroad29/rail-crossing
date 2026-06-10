@@ -91,7 +91,7 @@ AE: Param Consecutive Window (mins)
 
 ## Step 4: Test It
 
-1. Open your crossing app: https://richbroad29.github.io/rail-crossing/portslade/
+1. Open your crossing app: https://railcrossing.uk/portslade/
 2. Wait for it to load live data
 3. Tap **"Barriers Closing Now"**
 4. Check your Google Sheet — a new row should appear in the "Feedback v2" tab with all 31 columns populated

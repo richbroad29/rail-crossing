@@ -3,11 +3,11 @@
  * Service worker for the Crossing Observer PWA — offline-first app shell.
  * Shell (same-origin) is cache-first with a background refresh, so the app
  * launches and captures with no network. The live B1 feed is cross-origin
- * (railcrossing.duckdns.org) and is NOT intercepted — it always hits the
+ * (api.railcrossing.uk) and is NOT intercepted — it always hits the
  * network and simply fails gracefully when offline (capture never depends on it).
  */
 
-var CACHE = 'observer-v5';
+var CACHE = 'observer-v6';
 var SHELL = [
   './', './index.html', './observe.css', './observe.js', './manifest.webmanifest',
   '../../shared/icon-180.png', '../../shared/icon.svg'

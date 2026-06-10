@@ -1,5 +1,5 @@
-var API_BASE = 'https://railcrossing.duckdns.org';
-var BASE_URL = 'https://richbroad29.github.io/rail-crossing/';
+var API_BASE = 'https://api.railcrossing.uk';
+var BASE_URL = 'https://railcrossing.uk/';
 
 var CFG = null;
 var trains = [];
