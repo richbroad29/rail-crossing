@@ -1,0 +1,7 @@
+# The backend lives on the `backend-v2` branch. Its working-tree copy here is an
+# artifact of branch-switching and must NEVER be committed to `main` — it holds
+# secrets (backend/.env), dependencies, and runtime data/logs.
+backend/
+
+# Dependencies
+node_modules/
