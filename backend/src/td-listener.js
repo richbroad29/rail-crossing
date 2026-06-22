@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { EventEmitter } = require('events');
 const { londonDateStamp } = require('./time-utils');
+const { SClassDecoder, parseDataBytes } = require('./sclass-decoder');
 
 // Single shared emitter — index.js wires its 'sighting' events into each
 // crossing-state's recordTdSighting method.
@@ -18,8 +19,27 @@ const LOG_DIR = path.join(__dirname, '..', 'data', 'logs', 'td');
 
 const RELEVANT_MSG_TYPES = new Set(['CA_MSG', 'CB_MSG', 'CC_MSG']);
 
+// --- S-Class (additive) — barrier-state capture for the configured describer
+// areas (e.g. BM/Yapton), decoded ALONGSIDE (never instead of) the LA C-Class
+// path. S-Class types are disjoint from C-Class, so the two never interfere.
+const S_CLASS_MSG_TYPES = new Set(['SF_MSG', 'SG_MSG', 'SH_MSG']);
+const SCLASS_LOG_DIR = path.join(__dirname, '..', 'data', 'logs', 'sclass');
+
+let decoder = null; // null => S-Class disabled (no/invalid config); LA path unaffected
+try {
+  const sclassConfig = require('../config/sclass.json');
+  const d = new SClassDecoder(sclassConfig);
+  const areas = Object.keys(d.areas);
+  if (areas.length) { decoder = d; console.log(`S-Class decode enabled for area(s): ${areas.join(', ')}`); }
+  else console.log('S-Class config has no areas — decode disabled');
+} catch (e) {
+  console.warn('S-Class decode disabled (config load failed):', e.message);
+}
+
 let messagesReceived = 0;
 let eventsLogged = 0;
+let sclassRawLogged = 0;
+let sclassEventsLogged = 0;
 let connectAttempts = 0;
 let lastSummaryAt = Date.now();
 
@@ -38,6 +58,55 @@ function writeEvent(evt) {
   });
 }
 
+// ---- S-Class capture (additive) ----
+function sclassRawFile() { return path.join(SCLASS_LOG_DIR, `sclass-${londonDateStamp()}.jsonl`); }
+function barrierFile() { return path.join(SCLASS_LOG_DIR, `barrier-${londonDateStamp()}.jsonl`); }
+
+function appendJsonl(file, obj, label) {
+  ensureDir(SCLASS_LOG_DIR);
+  fs.appendFile(file, JSON.stringify(obj) + '\n', err => {
+    if (err) console.error(`${label} write failed:`, err.message);
+  });
+}
+
+// Decode one S-Class message into barrier phase events: log the raw message (for
+// re-derivation and hunting L() functions not yet in the map), log/emit any
+// decoded CLOSE/OPEN events, and emit 'barrier' for downstream consumers.
+// Bounded to areas present in config (BM). Does not touch the C-Class path.
+function handleSClass(type, msg) {
+  if (!decoder) return;
+  const area = msg && msg.area_id;
+  if (!area || !decoder.hasArea(area)) return;
+  const addrHex = msg.address;
+  const dataHex = msg.data;
+  if (addrHex == null || dataHex == null) return;
+  const msgType = msg.msg_type || type.replace('_MSG', '');
+
+  // Server-receive time is authoritative for the barrier event; feedTime keeps
+  // the signalling-system time too, so the join to C-Class (which logs feed
+  // time) can use a common clock when needed.
+  const ts = new Date().toISOString();
+  const fms = Number(msg.time);
+  const feedTime = Number.isFinite(fms) && fms > 0 ? new Date(fms).toISOString() : null;
+
+  const bytes = parseDataBytes(dataHex);
+  const startAddr = parseInt(addrHex, 16);
+  if (Number.isInteger(startAddr) && bytes && decoder.shouldLogRaw(area, startAddr, bytes.length)) {
+    appendJsonl(sclassRawFile(), { ts, feedTime, area, msgType, address: addrHex, data: dataHex }, 'S-Class raw log');
+    sclassRawLogged++;
+  }
+
+  const events = decoder.apply(area, msgType, addrHex, dataHex, { ts, feedTime });
+  for (const ev of events) {
+    appendJsonl(barrierFile(), ev, 'Barrier log');
+    sclassEventsLogged++;
+    emitter.emit('barrier', ev);
+    if (ev.kind === 'CLOSE' || ev.kind === 'OPEN') {
+      console.log(`S-Class ${ev.area}/${ev.crossing} ${ev.kind} (${ev.phase})${ev.recovered ? ' [recovered]' : ''} @ ${ev.ts}`);
+    }
+  }
+}
+
 function processMessage(body) {
   let parsed;
   try { parsed = JSON.parse(body); }
@@ -47,6 +116,11 @@ function processMessage(body) {
   messagesReceived++;
   for (const wrapper of parsed) {
     for (const [type, msg] of Object.entries(wrapper)) {
+      // S-Class (additive; configured areas only). Handled independently of the
+      // C-Class path below — SF/SG/SH never overlap CA/CB/CC, so this leaves the
+      // LA C-Class capture/sighting flow exactly as it was.
+      if (S_CLASS_MSG_TYPES.has(type)) { handleSClass(type, msg); continue; }
+
       if (!RELEVANT_MSG_TYPES.has(type)) continue;
       if (!msg || msg.area_id !== TARGET_AREA) continue;
       const ms = Number(msg.time);
@@ -79,9 +153,13 @@ function processMessage(body) {
 
   const now = Date.now();
   if (now - lastSummaryAt > 300000) {
-    console.log(`TD listener: ${messagesReceived} msgs received, ${eventsLogged} LA events logged (last 5 min)`);
+    console.log(`TD listener: ${messagesReceived} msgs received, ${eventsLogged} LA events logged` +
+      (decoder ? `, ${sclassRawLogged} S-Class raw + ${sclassEventsLogged} barrier events` : '') +
+      ` (last 5 min)`);
     messagesReceived = 0;
     eventsLogged = 0;
+    sclassRawLogged = 0;
+    sclassEventsLogged = 0;
     lastSummaryAt = now;
   }
 }
@@ -138,7 +216,9 @@ function start() {
     return;
   }
   ensureDir(LOG_DIR);
-  console.log(`TD listener starting: area=${TARGET_AREA}, log dir=${LOG_DIR}`);
+  if (decoder) ensureDir(SCLASS_LOG_DIR);
+  console.log(`TD listener starting: C-Class area=${TARGET_AREA}, log dir=${LOG_DIR}` +
+    (decoder ? `; S-Class area(s)=${Object.keys(decoder.areas).join(',')}, log dir=${SCLASS_LOG_DIR}` : ''));
   connect();
 }
 

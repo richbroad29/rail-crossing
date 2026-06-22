@@ -7,6 +7,7 @@ const { createApi } = require('./api');
 const logger = require('./logger');
 const tdListener = require('./td-listener');
 const tdRotation = require('./td-rotation');
+const sclassRotation = require('./sclass-rotation');
 const cifFetcher = require('./cif-fetcher');
 const corpusFetcher = require('./corpus-fetcher');
 const { computeRunRates } = require('./run-rate');
@@ -264,6 +265,7 @@ async function main() {
   });
   tdListener.start();
   tdRotation.start();
+  sclassRotation.start(); // bound + rotate the new S-Class logs alongside the TD logs
 
   // Initial LDB poll
   await pollAll();

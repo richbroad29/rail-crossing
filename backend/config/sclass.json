@@ -1,0 +1,23 @@
+{
+  "_comment": "S-Class (signalling-state) decode config. STRICTLY ADDITIVE to the C-Class TD path — these areas/types are decoded in ADDITION to the existing LA CA/CB/CC capture, never replacing it. Bits use SOP-style byte:bit numbering with bit 0 = LSB (so bit 7 = 0x80). Sources: user-contributed BM map (July 2024) + Open Rail Data wiki. Add more areas/crossings here as they are confirmed — describer->byte:bit->crossing mappings live ONLY in config, never in code.",
+
+  "areas": {
+    "BM": {
+      "name": "Barnham",
+      "logRaw": "all",
+      "_logRaw_note": "'all' = log every S-Class message for this area (lets us re-derive and hunt for L() functions not yet in the map). 'watched' = log only messages touching a watched byte (lower volume). Decoded barrier events are logged regardless.",
+      "crossings": {
+        "YN": {
+          "name": "Yapton",
+          "type": "MCB-CCTV",
+          "_note": "YN=Yapton is the only L() in the July-2024 BM map; the byte09<->Yapton physical binding is confirmed by berth-step correlation in Phase 1 capture.",
+          "bits": {
+            "raised":  { "byte": "09", "bit": 7, "_fn": "L(YN)(UP)    — barriers raised, road OPEN" },
+            "lowered": { "byte": "09", "bit": 6, "_fn": "L(YN)(DN)    — barriers lowered, road CLOSED" },
+            "failed":  { "byte": "09", "bit": 5, "_fn": "L(YN)(FAILD) — crossing fault" }
+          }
+        }
+      }
+    }
+  }
+}
