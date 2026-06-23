@@ -2,9 +2,10 @@
 
 // Bounded, rotated store for the S-Class logs, mirroring td-rotation.js so the
 // new capture cannot grow without limit. Kept as a separate module (rather than
-// editing td-rotation) so the live C-Class log path is untouched. Handles both
-// the raw `sclass-YYYY-MM-DD.jsonl` and decoded `barrier-YYYY-MM-DD.jsonl` files
-// in data/logs/sclass/: gzip after 7 days, prune after 180 days.
+// editing td-rotation) so the live C-Class log path is untouched. Handles the
+// raw `sclass-YYYY-MM-DD.jsonl`, decoded `barrier-YYYY-MM-DD.jsonl`, and area-
+// tagged `cclass-<AREA>-YYYY-MM-DD.jsonl` files in data/logs/sclass/: gzip after
+// 7 days, prune after 180 days.
 
 const fs = require('fs');
 const path = require('path');
@@ -16,7 +17,7 @@ const GZIP_AFTER_DAYS = 7;
 const PRUNE_AFTER_DAYS = 180;
 
 function parseDateFromName(name) {
-  const m = name.match(/^(?:sclass|barrier)-(\d{4}-\d{2}-\d{2})\.jsonl(\.gz)?$/);
+  const m = name.match(/^(?:sclass|barrier|cclass-[A-Za-z0-9]+)-(\d{4}-\d{2}-\d{2})\.jsonl(\.gz)?$/);
   if (!m) return null;
   return new Date(m[1] + 'T00:00:00Z');
 }

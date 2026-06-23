@@ -36,8 +36,18 @@ try {
   console.warn('S-Class decode disabled (config load failed):', e.message);
 }
 
+// C-Class berth steps for the S-Class areas (BM) are captured too: we need the
+// BM berth chain to confirm YN and for the Phase 2 join, and the real-time feed
+// cannot be backfilled — so it must start with this window. Captured to a
+// SEPARATE, area-tagged log (never the LA td log) and NEVER emitted as a
+// 'sighting' (those drive Portslade prediction state, which stays LA-only).
+// Excludes TARGET_AREA so the LA C-Class path is never diverted here, even if
+// LA were later added to the S-Class map.
+const CCLASS_EXTRA_AREAS = new Set(decoder ? Object.keys(decoder.areas).filter(a => a !== TARGET_AREA) : []);
+
 let messagesReceived = 0;
 let eventsLogged = 0;
+let cclassExtraLogged = 0;
 let sclassRawLogged = 0;
 let sclassEventsLogged = 0;
 let connectAttempts = 0;
@@ -61,6 +71,7 @@ function writeEvent(evt) {
 // ---- S-Class capture (additive) ----
 function sclassRawFile() { return path.join(SCLASS_LOG_DIR, `sclass-${londonDateStamp()}.jsonl`); }
 function barrierFile() { return path.join(SCLASS_LOG_DIR, `barrier-${londonDateStamp()}.jsonl`); }
+function cclassFile(area) { return path.join(SCLASS_LOG_DIR, `cclass-${area}-${londonDateStamp()}.jsonl`); }
 
 function appendJsonl(file, obj, label) {
   ensureDir(SCLASS_LOG_DIR);
@@ -107,6 +118,27 @@ function handleSClass(type, msg) {
   }
 }
 
+// Capture a C-Class berth step for an extra (S-Class) area — e.g. BM — to a
+// separate, area-tagged log. Builds the SAME event shape as the LA path (so the
+// BM log is format-compatible for the Phase 2 join, using feed time as the LA
+// td log does), but writes only to cclass-<area>-<date>.jsonl and emits no
+// 'sighting'. The LA path's own statements are left exactly as they were.
+function handleCClassExtra(type, msg) {
+  const ms = Number(msg.time);
+  const ts = Number.isFinite(ms) && ms > 0 ? new Date(ms).toISOString() : new Date().toISOString();
+  const evt = {
+    ts,
+    area: msg.area_id,
+    event: msg.msg_type || type.replace('_MSG', ''),
+    desc: msg.descr || null,
+    from: msg.from || null,
+    to: msg.to || null,
+    trust_uid: null
+  };
+  appendJsonl(cclassFile(msg.area_id), evt, `${msg.area_id} C-Class log`);
+  cclassExtraLogged++;
+}
+
 function processMessage(body) {
   let parsed;
   try { parsed = JSON.parse(body); }
@@ -120,6 +152,13 @@ function processMessage(body) {
       // C-Class path below — SF/SG/SH never overlap CA/CB/CC, so this leaves the
       // LA C-Class capture/sighting flow exactly as it was.
       if (S_CLASS_MSG_TYPES.has(type)) { handleSClass(type, msg); continue; }
+
+      // C-Class berth steps for the extra S-Class areas (BM): separate, area-
+      // tagged log only — no 'sighting', never the LA td log. TARGET_AREA is
+      // excluded from the set, so LA falls through to the unchanged block below.
+      if (RELEVANT_MSG_TYPES.has(type) && msg && CCLASS_EXTRA_AREAS.has(msg.area_id)) {
+        handleCClassExtra(type, msg); continue;
+      }
 
       if (!RELEVANT_MSG_TYPES.has(type)) continue;
       if (!msg || msg.area_id !== TARGET_AREA) continue;
@@ -154,10 +193,11 @@ function processMessage(body) {
   const now = Date.now();
   if (now - lastSummaryAt > 300000) {
     console.log(`TD listener: ${messagesReceived} msgs received, ${eventsLogged} LA events logged` +
-      (decoder ? `, ${sclassRawLogged} S-Class raw + ${sclassEventsLogged} barrier events` : '') +
+      (decoder ? `, ${cclassExtraLogged} BM C-Class + ${sclassRawLogged} S-Class raw + ${sclassEventsLogged} barrier events` : '') +
       ` (last 5 min)`);
     messagesReceived = 0;
     eventsLogged = 0;
+    cclassExtraLogged = 0;
     sclassRawLogged = 0;
     sclassEventsLogged = 0;
     lastSummaryAt = now;
@@ -218,7 +258,7 @@ function start() {
   ensureDir(LOG_DIR);
   if (decoder) ensureDir(SCLASS_LOG_DIR);
   console.log(`TD listener starting: C-Class area=${TARGET_AREA}, log dir=${LOG_DIR}` +
-    (decoder ? `; S-Class area(s)=${Object.keys(decoder.areas).join(',')}, log dir=${SCLASS_LOG_DIR}` : ''));
+    (decoder ? `; capturing S-Class + C-Class for area(s) ${Object.keys(decoder.areas).join(',')} -> ${SCLASS_LOG_DIR}` : ''));
   connect();
 }
 
