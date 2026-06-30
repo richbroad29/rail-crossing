@@ -1,6 +1,8 @@
 {
   "_comment": "S-Class (signalling-state) decode config. STRICTLY ADDITIVE to the C-Class TD path — these areas/types are decoded in ADDITION to the existing LA CA/CB/CC capture, never replacing it. Bits use SOP-style byte:bit numbering with bit 0 = LSB (so bit 7 = 0x80). Sources: user-contributed BM map (July 2024) + Open Rail Data wiki. Add more areas/crossings here as they are confirmed — describer->byte:bit->crossing mappings live ONLY in config, never in code.",
 
+  "_collection_note": "Areas other than BM are collection-only: logRaw:'all' with no crossings yet. They bank raw S-Class + C-Class so each barrier byte can be hunted offline (as BM/byte09/Yapton was), and emit ZERO barrier events until a crossing's byte:bit is added. Once a byte is confirmed, add its crossing block and flip that area to logRaw:'watched' to cut volume. The 12 areas are the LXG-positive describers from the Open Rail Data describer list (10 Apr 2026 snapshot): BM, X7, RT, EN, EH, HG, EK, B3, BU, Q3, Q5, EA.",
+
   "areas": {
     "BM": {
       "name": "Barnham",
@@ -18,6 +20,17 @@
           }
         }
       }
-    }
+    },
+    "X7": { "name": "TBROC East Sussex MCS",        "logRaw": "all", "crossings": {} },
+    "RT": { "name": "Marston Vale MCS",             "logRaw": "all", "crossings": {} },
+    "EN": { "name": "Cambridge IECC (Ely-Norwich)", "logRaw": "all", "crossings": {} },
+    "EH": { "name": "Eastleigh",                    "logRaw": "all", "crossings": {} },
+    "HG": { "name": "Harrogate IECC",               "logRaw": "all", "crossings": {} },
+    "EK": { "name": "East Kent MCS",                "logRaw": "all", "crossings": {} },
+    "B3": { "name": "BAROC Farncombe Scalable",     "logRaw": "all", "crossings": {} },
+    "BU": { "name": "EMCC Burton Area",             "logRaw": "all", "crossings": {} },
+    "Q3": { "name": "ROROC West Anglia Area IECC",  "logRaw": "all", "crossings": {} },
+    "Q5": { "name": "ROROC LT&S (Main) Area IECC",  "logRaw": "all", "crossings": {} },
+    "EA": { "name": "Edinburgh SCC IECC A",         "logRaw": "all", "crossings": {} }
   }
 }
