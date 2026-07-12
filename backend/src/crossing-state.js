@@ -30,6 +30,22 @@ const TD_LOCK_LEAD_MS = 60 * 1000;
 // stopgap pending position-based triggering — do NOT tune these against TD logs.
 const DEFAULT_AREA_ENTRY_LEAD_SECS = { east: 150, west: 112 };
 
+// --- TD-triggered open (clear-step anchor) ---
+// When TD shows a train performing the crossing CLEAR step (config td.<dir>.clear),
+// the barrier's OPEN is anchored to that physical event + a per-direction/class lag
+// (timing.openLagSecs), rather than the bestTime + openAfter fallback. Opening is
+// deterministic — the barrier auto-raises on the departure-side track circuit
+// clearing — so the clear step is ground truth. Recorded clear steps expire after
+// this TTL (checked on both write and read) so a headcode reused later in the day
+// can never match a stale crossing from earlier on.
+const CLEAR_STEP_TTL_MS = 20 * 60 * 1000;
+// While a TD-sighted train has NOT yet performed its clear step, the closure must
+// never end (the train hasn't physically cleared). Its end is floored this far into
+// the future so the barrier stays closed/pending until the real clear step lands.
+// Bounded in practice by the merged-list drop grace, so a sighted no-show can't hold
+// the barrier indefinitely.
+const OPEN_HOLD_FLOOR_MS = 60 * 1000;
+
 class CrossingState {
   constructor(crossingId, config) {
     this.id = crossingId;
@@ -53,6 +69,12 @@ class CrossingState {
     // — used to upgrade Q-freight predictions from "may not run" to confirmed.
     this.tdSeenToday = new Map();
     this.tdSeenDay = null; // ISO date string for which tdSeenToday applies
+
+    // headcode → { ts(ms), direction } of the train's most recent CROSSING CLEAR
+    // step (config td.<dir>.clear). Drives TD-triggered open: a period's end is
+    // anchored to its FINAL train's clear step + openLagSecs. Pruned by TTL so a
+    // reused headcode can't match a stale crossing from earlier in the day.
+    this.clearStepSeen = new Map();
 
     // Computed state
     this.closurePeriods = [];
@@ -98,6 +120,38 @@ class CrossingState {
       event: evt.event || null,
       lastSeen: ms
     });
+  }
+
+  // TD-triggered open: record a train performing the crossing CLEAR step. Only the
+  // configured clear transitions (td.eastbound.clear / td.westbound.clear) count;
+  // every other berth step is ignored here (the B1 live map handles those). Unlike
+  // recordTdBerth, a clear step moves a closure's END, so this DOES recompute.
+  recordTdClearStep(evt) {
+    if (!evt || !evt.headcode || !evt.from || !evt.to) return;
+    const direction = this._matchClearStep(evt.from, evt.to);
+    if (!direction) return;
+    const ms = evt.ts ? new Date(evt.ts).getTime() : Date.now();
+    if (!Number.isFinite(ms)) return;
+    this.clearStepSeen.set(evt.headcode, { ts: ms, direction });
+    this._pruneClearSteps(ms);
+    this._recompute();
+  }
+
+  // Which direction's crossing clear step (from→to) is, or null if it isn't one.
+  _matchClearStep(from, to) {
+    const td = this.config && this.config.td;
+    if (!td) return null;
+    const e = td.eastbound && td.eastbound.clear;
+    if (e && e.from === from && e.to === to) return 'east';
+    const w = td.westbound && td.westbound.clear;
+    if (w && w.from === from && w.to === to) return 'west';
+    return null;
+  }
+
+  _pruneClearSteps(nowMs) {
+    for (const [headcode, s] of this.clearStepSeen) {
+      if (nowMs - s.ts > CLEAR_STEP_TTL_MS) this.clearStepSeen.delete(headcode);
+    }
   }
 
   // TTL (ms) after which a train that hasn't stepped is dropped from the live
@@ -327,7 +381,7 @@ class CrossingState {
   }
 
   // Compute closure periods from merged train list
-  _computeClosures(trains) {
+  _computeClosures(trains, now = new Date()) {
     if (!trains.length) return [];
 
     const periods = [];
@@ -349,8 +403,8 @@ class CrossingState {
         end = new Date(Math.max(end.getTime(), openTime.getTime()));
         currentTrains.push(t);
       } else {
-        // New period
-        periods.push(this._makePeriod(start, end, currentTrains));
+        // New period — anchor the finalised period's end to its final train's clear step
+        periods.push(this._makePeriod(start, this._anchorEndToClearStep(end, currentTrains, now), currentTrains));
         start = closeTime;
         end = openTime;
         currentTrains = [t];
@@ -358,7 +412,7 @@ class CrossingState {
     }
 
     if (start) {
-      periods.push(this._makePeriod(start, end, currentTrains));
+      periods.push(this._makePeriod(start, this._anchorEndToClearStep(end, currentTrains, now), currentTrains));
     }
 
     return periods;
@@ -419,12 +473,60 @@ class CrossingState {
     return oa || 0.5;
   }
 
+  // Per-direction/class OPEN lag (seconds) applied AFTER the TD clear step. Config
+  // timing.openLagSecs.<direction>.<passenger|freight>. Class is 'freight' only for
+  // trainType 'freight'; ECS and non-stopping passenger use the 'passenger' value
+  // (interim, errs late = safe for an opener). Returns null when unconfigured, which
+  // disables the clear-step anchor for the crossing (pure bestTime fallback).
+  _getOpenLagSecs(direction, trainType) {
+    const cfg = this.timing && this.timing.openLagSecs;
+    if (!cfg || typeof cfg !== 'object') return null;
+    const byDir = cfg[direction];
+    if (!byDir || typeof byDir !== 'object') return null;
+    const cls = trainType === 'freight' ? 'freight' : 'passenger';
+    const secs = byDir[cls];
+    return typeof secs === 'number' ? secs : null;
+  }
+
+  // Anchor a finalised period's END to the TD clear step of its FINAL train.
+  //  - Cleared (clear step recorded, fresh): end = clearStep + openLagSecs[dir][class].
+  //    Overrides the bestTime-based end in BOTH directions — earlier if the train ran
+  //    early, later if it ran late (the late-running extend is the point of the feature).
+  //  - Sighted but NOT yet cleared: never open before it clears — hold the end to the
+  //    near future (floored), even if the bestTime-based end has already passed.
+  //  - Not TD-sighted: unchanged (bestTime + openAfter fallback).
+  // Only the FINAL train is consulted, so an intermediate train's clear step in a
+  // merged period can neither shorten nor open the period. Gated entirely on
+  // timing.openLagSecs, so crossings without it keep the pure fallback behaviour.
+  // The merge grouping upstream still uses the raw bestTime ends, so a late-running
+  // extend here only stretches this period's tail (it won't re-group followers).
+  _anchorEndToClearStep(end, trains, now) {
+    if (!this.timing || !this.timing.openLagSecs) return end;
+    const finalTrain = trains[trains.length - 1];
+    if (!finalTrain || !finalTrain.headcode) return end;
+
+    const cleared = this.clearStepSeen.get(finalTrain.headcode);
+    if (cleared && (now.getTime() - cleared.ts) <= CLEAR_STEP_TTL_MS) {
+      const lagSecs = this._getOpenLagSecs(finalTrain.direction, finalTrain.trainType);
+      if (lagSecs != null) return new Date(cleared.ts + lagSecs * 1000);
+      return end; // configured direction/class missing a value — safe fallback
+    }
+
+    // No fresh clear step. If the train is confirmed live (TD-sighted today), the
+    // barrier can't have opened yet — hold the closure open until the clear step.
+    if (this.tdSeenToday.has(finalTrain.headcode)) {
+      const floorMs = now.getTime() + OPEN_HOLD_FLOOR_MS;
+      if (end.getTime() < floorMs) return new Date(floorMs);
+    }
+    return end;
+  }
+
   // Recompute everything
   _recompute() {
-    const merged = this._mergeTrains();
-    this.closurePeriods = this._computeClosures(merged);
-
     const now = new Date();
+    const merged = this._mergeTrains();
+    this.closurePeriods = this._computeClosures(merged, now);
+
     const oldState = this.state;
 
     // Determine current state

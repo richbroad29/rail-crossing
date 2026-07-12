@@ -49,6 +49,11 @@
     "timing": {
       "closeBefore": { "east": 1.5, "west": 2.5 },
       "openAfter":   { "east": 0.5, "west": 0.5 },
+      "openLagSecs": {
+        "_comment": "Anchored to TD clear-step time, NOT bestTime. Derived from 24 Jun 2026 observer session cross-checked against FOI (auto-raise on FM/AC track-circuit clear). passenger east n=4 (obs 36-43s, 45 adopted with safety margin); passenger west n=6 (obs 15-23s); freight east n=2; freight west n=0 DELIBERATE GUESS.",
+        "east": { "passenger": 45, "freight": 70 },
+        "west": { "passenger": 18, "freight": 30 }
+      },
       "consecutiveWindow": 1.5,
       "areaEntryLeadSecs": { "east": 150, "west": 112 }
     },

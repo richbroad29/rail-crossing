@@ -261,6 +261,7 @@ async function main() {
     for (const state of Object.values(crossingStates)) {
       state.recordTdSighting(s.headcode, s.ts);
       state.recordTdBerth(s); // B1: feed the live-position map (berth in payload)
+      state.recordTdClearStep(s); // TD-triggered open: anchor closure end to the crossing clear step
     }
   });
   tdListener.start();
