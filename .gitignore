@@ -1,0 +1,8 @@
+# macOS
+.DS_Store
+
+# Local analysis/data working copies (captured logs + derived CSVs — not source)
+/analysis-data/
+
+# Old Cloudflare Worker — tracked on `main`; only a local working copy lives here
+/worker/
