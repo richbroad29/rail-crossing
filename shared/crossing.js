@@ -4,6 +4,7 @@ var BASE_URL = 'https://railcrossing.uk/';
 var CFG = null;
 var trains = [];
 var closurePeriods = [];
+var vpsClosures = []; // raw backend-computed closures from the last fetch (authoritative timing)
 var nextCloseTime = null;
 var nextOpenTime = null;
 var apiMode = 'loading';
@@ -229,11 +230,13 @@ function deduplicateTrains(trainList) {
 
 async function fetchNationalRail() {
   lastError = '';
+  vpsClosures = [];
   try {
     var url = API_BASE + '/crossing/' + crossingId;
     var response = await fetch(url);
     if (!response.ok) throw new Error('HTTP ' + response.status);
     var data = await response.json();
+    vpsClosures = data.upcomingClosures || [];
     return parseVpsResponse(data);
   } catch(e) {
     console.error('VPS API error:', e);
@@ -304,6 +307,51 @@ function computeClosures(trainList) {
     else { var pb = {start:cs, end:ce, trains:ct}; pb.window = getWindowTier(pb); periods.push(pb); cs = cl; ce = op; ct = [t]; }
   }
   if (cs) { var pf = {start:cs, end:ce, trains:ct}; pf.window = getWindowTier(pf); periods.push(pf); }
+  return periods;
+}
+
+// Build display periods straight from the backend's pre-computed closures.
+// The backend owns the authoritative timing — crucially the TD clear-step-anchored
+// OPEN (period end) and the "hold the closure open until the train has physically
+// cleared" behaviour — neither of which the client can reproduce (it has no berth-
+// step feed, only each train's bestTime). So we render the backend's periods
+// verbatim (start/end parsed to Dates) and only attach the client-side confidence
+// window for display. computeClosures() above is kept as a fallback for an older
+// backend that returns no pre-computed closures.
+function buildClosuresFromVps(closures) {
+  var periods = [];
+  for (var i = 0; i < closures.length; i++) {
+    var c = closures[i];
+    if (!c || !c.start || !c.end) continue;
+    var ts = c.trains || [];
+    var mapped = [];
+    for (var j = 0; j < ts.length; j++) {
+      var t = ts[j];
+      var delayMins = t.delayMins || 0;
+      mapped.push({
+        origin: t.origin,
+        destination: t.destination,
+        operator: t.operator,
+        direction: t.direction,
+        bestTime: new Date(t.bestTime),
+        scheduledTime: t.scheduledTime ? new Date(t.scheduledTime) : null,
+        delayMins: delayMins,
+        isDelayed: delayMins > 0,
+        isUncertain: !!t.isUncertain,
+        etaText: t.etaText,
+        source: t.source,
+        headcode: t.headcode,
+        trainType: t.trainType,
+        tdBerth: t.tdBerth,
+        runsAsRequired: !!t.runsAsRequired,
+        recentRunRate: typeof t.recentRunRate === 'number' ? t.recentRunRate : null,
+        tdSeen: !!t.tdSeen
+      });
+    }
+    var p = { start: new Date(c.start), end: new Date(c.end), trains: mapped };
+    p.window = getWindowTier(p);
+    periods.push(p);
+  }
   return periods;
 }
 
@@ -385,7 +433,12 @@ async function refreshData() {
         $('dataMode').style.color = '#FCA5A5';
       }
     }
-    closurePeriods = computeClosures(trains);
+    // Prefer the backend's pre-computed closures — they carry the authoritative,
+    // TD clear-step-anchored OPEN time (and hold-until-cleared). Fall back to
+    // client-side grouping only if the backend returned none.
+    closurePeriods = (vpsClosures && vpsClosures.length)
+      ? buildClosuresFromVps(vpsClosures)
+      : computeClosures(trains);
     $('lastRefreshTime').textContent = fmtShort(new Date());
     renderClosures();
     renderDebugPanel();

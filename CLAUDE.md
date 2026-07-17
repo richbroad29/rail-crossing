@@ -77,7 +77,7 @@ backend-v2 Node service
   └─ TD STOMP feed          (live sightings join predictions for Q-freight lock; tdBerth tier-narrowing pending)
 ```
 
-The frontend polls `GET /crossing/portslade`, receives JSON with the backend's pre-computed upcoming closures, then runs its own client-side closure logic over the train list (so `closeBefore`/`openAfter`/`consecutiveWindow` stay tunable via `crossings.json` without a backend deploy). Renders a state (`OPEN`, `CLOSING_SOON`, `CLOSED`).
+The frontend polls `GET /crossing/portslade` and renders the backend's **pre-computed** closure periods verbatim (`buildClosuresFromVps()` in `shared/crossing.js` — maps `start`/`end` to Dates and attaches only the client-side confidence window). This is deliberate: the backend owns the authoritative timing, including the TD **clear-step-anchored OPEN** and **hold-until-cleared** behaviour, which the client can't reproduce (it has only each train's `bestTime`, not the berth-step feed). `computeClosures()` is retained as a fallback for a backend that returns no pre-computed closures. **Consequence:** `closeBefore`/`openAfter`/`openLagSecs`/`consecutiveWindow` are tuned **backend-side** now (`backend/config/crossings.json` on `backend-v2` + a deploy) — the `shared/crossings.json` copies only feed the fallback path. Renders a state (`OPEN`, `CLOSING_SOON`, `CLOSED`).
 
 **TLS** is auto-provisioned by Caddy via Let's Encrypt (HTTP-01 challenge). The DuckDNS subdomain (`railcrossing.duckdns.org`) is kept alive by a cron on the VPS that hits the DuckDNS update endpoint every 5 minutes. The DuckDNS token lives in that crontab.
 
@@ -212,8 +212,8 @@ External services should be free unless the value clearly justifies a paid tier.
 
 ## Common tasks — quick reference
 
-- **Tweak timing parameters**: edit `shared/crossings.json` → `closeBefore` / `openAfter` / `consecutiveWindow`.
-- **Change closure logic**: `computeClosures()` in `shared/crossing.js` (~line 251).
+- **Tweak timing parameters**: edit `backend/config/crossings.json` on `backend-v2` (`closeBefore` / `openAfter` / `openLagSecs` / `consecutiveWindow`) and deploy — the frontend renders the backend's closures. (`shared/crossings.json` only feeds the client-side fallback path.)
+- **Change closure logic**: backend `_computeClosures()` / `_anchorEndToClearStep()` in `backend/src/crossing-state.js` (authoritative); frontend just maps them via `buildClosuresFromVps()` in `shared/crossing.js`.
 - **Add a new origin keyword for direction detection**: `isEastOrigin()` (~line 66).
 - **Change rendering / status**: `renderClosures()` (~333), `updateStatus()` (~413).
 - **Add a new crossing**: append entry to `shared/crossings.json`, create `<crossing-name>/index.html` mirroring `portslade/index.html`, call `initCrossing('<id>')`.
