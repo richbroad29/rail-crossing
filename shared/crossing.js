@@ -7,7 +7,6 @@ var closurePeriods = [];
 var vpsClosures = []; // raw backend-computed closures from the last fetch (authoritative timing)
 var nextCloseTime = null;
 var nextOpenTime = null;
-var apiMode = 'loading';
 var lastError = '';
 var trainHistory = [];
 var crossingId = '';
@@ -53,179 +52,6 @@ function getOpenAfter(direction, train) {
   if (train && train.trainType === 'freight' && CFG.openAfterFreight != null) return CFG.openAfterFreight;
   if (CFG.openAfter && typeof CFG.openAfter === 'object') return CFG.openAfter[direction] || 0.75;
   return CFG.openAfter || 0.75;
-}
-
-function parseTimeStr(timeStr) {
-  if (!timeStr || timeStr.indexOf(':') < 0) return null;
-  var now = new Date();
-  var parts = timeStr.split(':');
-  var h = parseInt(parts[0]), m = parseInt(parts[1]);
-  var d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m, 0);
-  if (d.getTime() < now.getTime() - 6 * 3600000) d.setDate(d.getDate() + 1);
-  return d;
-}
-
-function getVal(str, tag) {
-  var i = str.indexOf(':' + tag + '>');
-  if (i < 0) i = str.indexOf('<' + tag + '>');
-  if (i < 0) return null;
-  var start = i + tag.length + 2;
-  var end = str.indexOf('<', start);
-  if (end < 0) return null;
-  return str.substring(start, end);
-}
-
-function isEastOrigin(str) {
-  if (!str) return false;
-  var lower = str.toLowerCase();
-  return lower.indexOf('brighton') >= 0 || lower.indexOf('hove') >= 0 ||
-    lower.indexOf('london') >= 0 || lower.indexOf('gatwick') >= 0 ||
-    lower.indexOf('croydon') >= 0 || lower.indexOf('haywards') >= 0;
-}
-
-// Parse combined GetArrDepBoardWithDetails XML response
-// Filters out bus services using serviceType tag
-function parseTrains(xml) {
-  var results = [];
-  var parts = xml.split('service>');
-  for (var i = 0; i < parts.length; i++) {
-    var sv = parts[i];
-    if (sv.indexOf(':sta>') < 0 && sv.indexOf(':std>') < 0 &&
-        sv.indexOf('<sta>') < 0 && sv.indexOf('<std>') < 0) continue;
-    if (sv.toLowerCase().indexOf('iscancelled>true') >= 0) continue;
-    // Skip bus services
-    if (sv.indexOf('serviceType>bus') >= 0) continue;
-
-    var sta = getVal(sv, 'sta');
-    var eta = getVal(sv, 'eta');
-    var std = getVal(sv, 'std');
-    var etd = getVal(sv, 'etd');
-
-    // Parse origin/destination
-    var origBlock = sv.indexOf(':origin>');
-    if (origBlock < 0) origBlock = sv.indexOf('<origin>');
-    var destBlock = sv.indexOf(':destination>');
-    if (destBlock < 0) destBlock = sv.indexOf('<destination>');
-    var origin = '?', dest = '?';
-    if (origBlock >= 0) { origin = getVal(sv.substring(origBlock, origBlock + 200), 'locationName') || '?'; }
-    if (destBlock >= 0) { dest = getVal(sv.substring(destBlock, destBlock + 200), 'locationName') || '?'; }
-
-    var operMatch = sv.indexOf(':operator>');
-    if (operMatch < 0) operMatch = sv.indexOf('<operator>');
-    var operator = '?';
-    if (operMatch >= 0) { operator = getVal(sv.substring(Math.max(0, operMatch - 5), operMatch + 100), 'operator') || '?'; }
-
-    // Direction: if origin is an east station (Brighton, London etc), train is heading west
-    var direction = isEastOrigin(origin) ? 'west' : 'east';
-
-    // Pick reference time based on direction and crossing geometry:
-    // Eastbound trains approach from west, cross THEN arrive at platform → use arrival time
-    // Westbound trains depart platform, THEN cross heading west → use departure time
-    var sch, et;
-    if (direction === 'east') {
-      sch = sta || std;
-      et = eta || etd;
-    } else {
-      sch = std || sta;
-      et = etd || eta;
-    }
-
-    var bt = sch;
-    var isUncertain = false;
-    if (et && et !== 'On time' && et !== 'Delayed' && et.indexOf(':') >= 0) {
-      bt = et;
-    } else if (et === 'Delayed') {
-      isUncertain = true;
-    }
-    var bestTime = parseTimeStr(bt);
-    if (!bestTime) continue;
-
-    var delayMins = 0;
-    if (et && et.indexOf(':') >= 0 && sch) {
-      var e2 = parseTimeStr(et), s2 = parseTimeStr(sch);
-      if (e2 && s2) delayMins = Math.round((e2 - s2) / 60000);
-    }
-
-    results.push({
-      origin: origin, destination: dest, scheduledTime: parseTimeStr(sch),
-      bestTime: bestTime, isRealtime: !!(et && et !== 'On time' && et.indexOf(':') >= 0), isDelayed: delayMins > 0,
-      isUncertain: isUncertain,
-      delayMins: delayMins, etaText: et || 'On time', direction: direction,
-      operator: operator, dedupKey: (sch || '') + (dest || '')
-    });
-  }
-
-  results.sort(function(a, b) { return a.bestTime - b.bestTime; });
-  return results;
-}
-
-// Legacy parser for old arr/dep endpoints (used by fallback)
-function parseXmlLegacy(xml, type) {
-  var results = [];
-  var parts = xml.split('service>');
-  for (var i = 0; i < parts.length; i++) {
-    var sv = parts[i];
-    if (sv.indexOf(':sta>') < 0 && sv.indexOf(':std>') < 0) continue;
-    if (sv.toLowerCase().indexOf('iscancelled>true') >= 0) continue;
-    var sta = getVal(sv, 'sta');
-    var eta = getVal(sv, 'eta');
-    var std = getVal(sv, 'std');
-    var etd = getVal(sv, 'etd');
-    var sch = sta || std;
-    var et = eta || etd;
-    var bt = sch;
-    var isUncertain = false;
-    if (et && et !== 'On time' && et !== 'Delayed' && et.indexOf(':') >= 0) {
-      bt = et;
-    } else if (et === 'Delayed') {
-      isUncertain = true;
-    }
-    var bestTime = parseTimeStr(bt);
-    if (!bestTime) continue;
-    var origBlock = sv.indexOf(':origin>');
-    var destBlock = sv.indexOf(':destination>');
-    var origin = '?', dest = '?';
-    if (origBlock >= 0) { origin = getVal(sv.substring(origBlock, origBlock + 200), 'locationName') || '?'; }
-    if (destBlock >= 0) { dest = getVal(sv.substring(destBlock, destBlock + 200), 'locationName') || '?'; }
-    var operMatch = sv.indexOf(':operator>');
-    var operator = '?';
-    if (operMatch >= 0) { operator = getVal(sv.substring(Math.max(0, operMatch - 5), operMatch + 100), 'operator') || '?'; }
-    var direction = 'east';
-    if (type === 'arr') { if (isEastOrigin(origin)) direction = 'west'; }
-    else { if (isEastOrigin(dest)) direction = 'east'; else direction = 'west'; }
-    var delayMins = 0;
-    if (et && et.indexOf(':') >= 0 && sch) {
-      var e2 = parseTimeStr(et), s2 = parseTimeStr(sch);
-      if (e2 && s2) delayMins = Math.round((e2 - s2) / 60000);
-    }
-    results.push({
-      origin:origin, destination:dest, scheduledTime:parseTimeStr(sch),
-      bestTime:bestTime, isRealtime:true, isDelayed:delayMins>0,
-      isUncertain:isUncertain,
-      delayMins:delayMins, etaText:et||'On time', direction:direction,
-      operator:operator, dedupKey:(sch||'')+(dest||'')
-    });
-  }
-  return results;
-}
-
-function deduplicateTrains(trainList) {
-  var sorted = trainList.slice().sort(function(a,b) { return a.bestTime - b.bestTime; });
-  var results = [];
-  for (var i = 0; i < sorted.length; i++) {
-    var t = sorted[i];
-    var isDupe = false;
-    for (var j = 0; j < results.length; j++) {
-      var r = results[j];
-      if (r.destination === t.destination && Math.abs(r.bestTime.getTime() - t.bestTime.getTime()) <= 120000) {
-        isDupe = true;
-        break;
-      }
-    }
-    if (!isDupe) results.push(t);
-  }
-  results.sort(function(a,b) { return a.bestTime - b.bestTime; });
-  return results;
 }
 
 async function fetchNationalRail() {
@@ -289,35 +115,14 @@ function parseVpsResponse(data) {
   return results;
 }
 
-function computeClosures(trainList) {
-  if (!trainList.length) return [];
-  var sorted = trainList.slice().sort(function(a,b) { return a.bestTime - b.bestTime; });
-  var periods = [], cs = null, ce = null, ct = [];
-  for (var i = 0; i < sorted.length; i++) {
-    var t = sorted[i];
-    var cb = getCloseBefore(t.direction);
-    var oa = getOpenAfter(t.direction, t);
-    var cl = new Date(t.bestTime.getTime() - cb * 60000);
-    var op = new Date(t.bestTime.getTime() + oa * 60000);
-    if (cs === null) { cs = cl; ce = op; ct = [t]; }
-    else if (cl.getTime() - ce.getTime() <= CFG.consecutiveWindow * 60000) {
-      ce = new Date(Math.max(ce.getTime(), op.getTime()));
-      ct.push(t);
-    }
-    else { var pb = {start:cs, end:ce, trains:ct}; pb.window = getWindowTier(pb); periods.push(pb); cs = cl; ce = op; ct = [t]; }
-  }
-  if (cs) { var pf = {start:cs, end:ce, trains:ct}; pf.window = getWindowTier(pf); periods.push(pf); }
-  return periods;
-}
-
 // Build display periods straight from the backend's pre-computed closures.
 // The backend owns the authoritative timing — crucially the TD clear-step-anchored
 // OPEN (period end) and the "hold the closure open until the train has physically
 // cleared" behaviour — neither of which the client can reproduce (it has no berth-
 // step feed, only each train's bestTime). So we render the backend's periods
 // verbatim (start/end parsed to Dates) and only attach the client-side confidence
-// window for display. computeClosures() above is kept as a fallback for an older
-// backend that returns no pre-computed closures.
+// window for display. buildClosuresFromVps([]) safely returns [] when the backend
+// sent no pre-computed closures.
 function buildClosuresFromVps(closures) {
   var periods = [];
   for (var i = 0; i < closures.length; i++) {
@@ -415,30 +220,25 @@ async function refreshData() {
       }
       var cutoff = new Date(new Date().getTime() - 3600000);
       trainHistory = trainHistory.filter(function(t) { return t.bestTime > cutoff; });
-      apiMode = 'live';
       lastRefreshTs = new Date();
       $('dataMode').textContent = 'LIVE';
       $('dataMode').style.color = '#22D3EE';
     } else {
       trains = [];
       if (lastError) {
-        apiMode = 'error';
         $('dataMode').textContent = 'ERROR';
         $('dataMode').style.color = '#FCA5A5';
         $('errorBox').textContent = 'Error: ' + lastError;
         $('errorBox').classList.remove('hidden');
       } else {
-        apiMode = 'offline';
         $('dataMode').textContent = 'OFFLINE';
         $('dataMode').style.color = '#FCA5A5';
       }
     }
-    // Prefer the backend's pre-computed closures — they carry the authoritative,
-    // TD clear-step-anchored OPEN time (and hold-until-cleared). Fall back to
-    // client-side grouping only if the backend returned none.
-    closurePeriods = (vpsClosures && vpsClosures.length)
-      ? buildClosuresFromVps(vpsClosures)
-      : computeClosures(trains);
+    // Render the backend's pre-computed closures — they carry the authoritative,
+    // TD clear-step-anchored OPEN time (and hold-until-cleared). buildClosuresFromVps
+    // safely returns [] when the backend sent none.
+    closurePeriods = buildClosuresFromVps(vpsClosures);
     $('lastRefreshTime').textContent = fmtShort(new Date());
     renderClosures();
     renderDebugPanel();
