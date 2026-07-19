@@ -19,10 +19,6 @@
       "westbound": {
         "approach": { "from": "0003", "to": "0005" },
         "clear":    { "from": "0005", "to": "0007" }
-      },
-      "earlyWarning": {
-        "eastbound": { "from": "0008", "to": "0006" },
-        "westbound": { "from": "0001", "to": "0003" }
       }
     },
 

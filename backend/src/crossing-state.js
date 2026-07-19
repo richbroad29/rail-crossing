@@ -55,7 +55,6 @@ class CrossingState {
     // Data sources
     this.ldbTrains = [];           // From LDBSVWS polling
     this.scheduleTrains = [];      // From CIF schedule file
-    this.tdEvents = [];            // Phase 2: from TD berth steps
 
     // B1 live-position map: headcode → { berth, fromBerth, event, lastSeen(ms) }.
     // Updated on every TD berth step (the TD feed is area-wide for LA), pruned by
@@ -80,10 +79,6 @@ class CrossingState {
     this.closurePeriods = [];
     this.state = 'OPEN';
     this.lastStateChange = new Date();
-
-    // Train history (for feedback correlation)
-    this.trainHistory = [];
-    this.lastPassedTrain = null;
   }
 
   // Record a TD sighting (called from td-listener for each CA/CB event we
@@ -203,23 +198,12 @@ class CrossingState {
   // Update LDB trains (called every 30s from poller)
   updateLdbTrains(trains) {
     this.ldbTrains = trains;
-    this._updateTrainHistory(trains);
     this._recompute();
   }
 
   // Update schedule trains (called once at startup / daily)
   updateScheduleTrains(trains) {
     this.scheduleTrains = trains;
-    this._recompute();
-  }
-
-  // Phase 2: Record a TD berth event
-  recordTdEvent(event) {
-    this.tdEvents.push({ ...event, timestamp: new Date() });
-    // Keep only last hour
-    const cutoff = Date.now() - 3600000;
-    this.tdEvents = this.tdEvents.filter(e => e.timestamp.getTime() > cutoff);
-    logger.logTd(this.id, event);
     this._recompute();
   }
 
@@ -550,24 +534,6 @@ class CrossingState {
       this.lastStateChange = now;
       logger.logState(this.id, oldState, this.state, 'recompute');
     }
-  }
-
-  // Update train history (for feedback)
-  _updateTrainHistory(newTrains) {
-    for (const t of newTrains) {
-      const key = t.dedupKey;
-      const idx = this.trainHistory.findIndex(h => h.dedupKey === key);
-      if (idx >= 0) {
-        this.trainHistory[idx] = t;
-      } else {
-        this.trainHistory.push(t);
-      }
-    }
-    // Prune history older than 1 hour
-    const cutoff = new Date(Date.now() - 3600000);
-    this.trainHistory = this.trainHistory.filter(t =>
-      new Date(t.bestTime) > cutoff
-    );
   }
 
   // Get the full state for the API

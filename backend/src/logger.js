@@ -41,11 +41,6 @@ function logLdb(crossingId, trains) {
   });
 }
 
-// Log a TD berth step event
-function logTd(crossingId, event) {
-  log('td', { crossing: crossingId, ...event });
-}
-
 // Log a schedule-derived expected train
 function logSchedule(crossingId, trains) {
   log('schedule', {
@@ -81,4 +76,4 @@ function logStartup(crossingIds, config) {
   });
 }
 
-module.exports = { log, logLdb, logTd, logSchedule, logState, logStartup };
+module.exports = { log, logLdb, logSchedule, logState, logStartup };

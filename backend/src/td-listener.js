@@ -262,4 +262,4 @@ function start() {
   connect();
 }
 
-module.exports = { start, on: emitter.on.bind(emitter), off: emitter.off.bind(emitter) };
+module.exports = { start, on: emitter.on.bind(emitter) };

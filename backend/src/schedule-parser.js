@@ -25,11 +25,6 @@ function minsToTimeStr(mins) {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
 
-// Convert minutes since midnight to a Date for today (Europe/London wall-clock)
-function minsToDate(mins) {
-  return londonMinsToDate(mins);
-}
-
 // Check if a schedule runs on a given day of week (0=Mon, 6=Sun)
 // schedule_days_runs is "1111100" (Mon-Sun)
 function runsOnDay(daysStr, dayOfWeek) {
@@ -54,8 +49,9 @@ function isActiveToday(schedule) {
 // service crossed midnight, not that timing points are out of order.
 const MIDNIGHT_WRAP_THRESHOLD_MINS = 720;
 
-// Determine if a schedule traverses a crossing based on TIPLOC sets
-// Returns { traverses, direction, westTiploc, eastTiploc, westTime, eastTime }
+// Determine if a schedule traverses a crossing based on TIPLOC sets.
+// Returns { traverses: true, direction, nearWest, nearEast } when it does,
+// otherwise { traverses: false }.
 function analyseRoute(locations, crossingConfig) {
   const westSet = new Set(crossingConfig.tiplocs_west);
   const eastSet = new Set(crossingConfig.tiplocs_east);
@@ -472,6 +468,6 @@ async function applyUpdateExtract(updateFilePath, crossingsConfig, baseByCrossin
 
 module.exports = {
   parseScheduleFile, applyUpdateExtract, getLastParseStats,
-  cifTimeToMins, minsToTimeStr, minsToDate,
+  cifTimeToMins, minsToTimeStr,
   analyseRoute, estimateCrossingTime
 };

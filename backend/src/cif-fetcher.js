@@ -110,20 +110,7 @@ function latestFilePath() {
   return TARGET;
 }
 
-function latestFileExists() {
-  return fs.existsSync(TARGET);
-}
-
-function latestUpdateFilePath() {
-  return UPDATE_TARGET;
-}
-
-function latestUpdateFileExists() {
-  return fs.existsSync(UPDATE_TARGET);
-}
-
 module.exports = {
   downloadCif, downloadCifUpdate,
-  latestFilePath, latestFileExists,
-  latestUpdateFilePath, latestUpdateFileExists
+  latestFilePath
 };

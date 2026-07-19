@@ -148,10 +148,6 @@ function resolveTiploc(tip) {
   return tiplocMap.get(tip) || tip;
 }
 
-function mapSize() {
-  return tiplocMap.size;
-}
-
 function latestFileExists() {
   return fs.existsSync(TARGET);
 }
@@ -160,7 +156,6 @@ module.exports = {
   downloadCorpus,
   loadCorpusFromDisk,
   resolveTiploc,
-  mapSize,
   latestFileExists,
   _cleanDisplayName: cleanDisplayName
 };
