@@ -18,18 +18,15 @@ Goals, in order of priority:
 ```
 index.html                       Landing page
 portslade/index.html             The actual app (Boundary Road)
-shared/crossing.js               All app logic — 614 lines, single file
+shared/crossing.js               All app logic — ~560 lines, single file
 shared/crossings.json            Per-crossing config (timing params, IDs, feedback URL)
 shared/crossing.css              Styles
 shared/icon-180.png, icon.svg    Icons
-siri.js                          Scriptable iOS integration (separate, mirrors the worker calls)
-feedback-update-instructions.md  Notes on the feedback system
 README.md                        Almost empty
-worker/                          Cloudflare Worker source (wrangler.jsonc + src/worker.js)
 portslade/observe/               Barrier-observation PWA — field data-collection tool (separate app, /portslade/observe/)
 ```
 
-The **frontend has no build step** — edit files, push to `main`, GitHub Pages deploys within ~1 minute. The **worker requires a separate deploy step**: `cd worker && npx wrangler deploy`.
+The **frontend has no build step** — edit files, push to `main`, GitHub Pages deploys within ~1 minute.
 
 ## Branches
 
@@ -77,11 +74,11 @@ backend-v2 Node service
   └─ TD STOMP feed          (live sightings join predictions for Q-freight lock; tdBerth tier-narrowing pending)
 ```
 
-The frontend polls `GET /crossing/portslade` and renders the backend's **pre-computed** closure periods verbatim (`buildClosuresFromVps()` in `shared/crossing.js` — maps `start`/`end` to Dates and attaches only the client-side confidence window). This is deliberate: the backend owns the authoritative timing, including the TD **clear-step-anchored OPEN** and **hold-until-cleared** behaviour, which the client can't reproduce (it has only each train's `bestTime`, not the berth-step feed). `computeClosures()` is retained as a fallback for a backend that returns no pre-computed closures. **Consequence:** `closeBefore`/`openAfter`/`openLagSecs`/`consecutiveWindow` are tuned **backend-side** now (`backend/config/crossings.json` on `backend-v2` + a deploy) — the `shared/crossings.json` copies only feed the fallback path. Renders a state (`OPEN`, `CLOSING_SOON`, `CLOSED`).
+The frontend polls `GET /crossing/portslade` and renders the backend's **pre-computed** closure periods verbatim (`buildClosuresFromVps()` in `shared/crossing.js` — maps `start`/`end` to Dates and attaches only the client-side confidence window). This is deliberate: the backend owns the authoritative timing, including the TD **clear-step-anchored OPEN** and **hold-until-cleared** behaviour, which the client can't reproduce (it has only each train's `bestTime`, not the berth-step feed). There is no client-side fallback — the frontend always renders the backend's periods (`buildClosuresFromVps([])` is a no-op when the backend sends none). **Consequence:** `closeBefore`/`openAfter`/`openLagSecs`/`consecutiveWindow` are tuned **backend-side** now (`backend/config/crossings.json` on `backend-v2` + a deploy); the `shared/crossings.json` copies feed only the client-side confidence-window / debug-panel display. Renders a state (`OPEN`, `CLOSING_SOON`, `CLOSED`).
 
 **TLS** is auto-provisioned by Caddy via Let's Encrypt (HTTP-01 challenge). The DuckDNS subdomain (`railcrossing.duckdns.org`) is kept alive by a cron on the VPS that hits the DuckDNS update endpoint every 5 minutes. The DuckDNS token lives in that crontab.
 
-**Cloudflare Worker** (`rail-crossing-api.richardbroad29.workers.dev`) is still deployed but **no longer in the request path**. It exists as a one-week fallback (~12 May 2026 onward) — retirement decision after the observation window.
+**Cloudflare Worker** — retired (2026-07). The old `rail-crossing-api.richardbroad29.workers.dev` SOAP proxy has been removed from the repo and torn down; the frontend calls the VPS backend directly.
 
 **Prediction-pipeline status:**
 
@@ -127,9 +124,9 @@ The helpers `getCloseBefore(direction)` and `getOpenAfter(direction)` (lines ~37
 
 Eastbound barriers close ~1.5–2 min before the train, westbound ~2.5 min before. The asymmetry is real (it relates to signal positions and approach speeds), so don't "normalise" them without good reason.
 
-### Direction detection uses origin names, not coordinates
+### Direction detection is backend-side
 
-`isEastOrigin(str)` (line ~66) returns true if the train origin contains Brighton, Hove, London, Gatwick, Croydon, or Haywards. Adding new origin keywords needs care — adding too few causes misclassification, too many causes false matches.
+Each train's `direction` (`east`/`west`) is computed **by the backend** and delivered on the API — the frontend just reads `t.direction`. The old client-side `isEastOrigin()` origin-keyword heuristic has been removed. Change direction logic backend-side (`analyseRoute()` in `backend/src/schedule-parser.js` for CIF; the LDB poller for LDBSVWS).
 
 ### `closurePeriods` vs `trainHistory`
 
@@ -142,11 +139,9 @@ Feedback taps are event-aware:
 
 Reading from `closurePeriods` for feedback would be wrong — it forgets past trains.
 
-### SOAP 1.2 quirk (worker side, but relevant)
+### SOAP 1.2 quirk (backend LDBSVWS fallback)
 
-The Cloudflare Worker uses **SOAP 1.2** for OpenLDBWS, not 1.1. Required: `xmlns:soap="http://www.w3.org/2003/05/soap-envelope"`, namespace `http://thalesgroup.com/RTTI/2021-11-01/ldb/`, endpoint `ldb12.asmx`, `Content-Type: application/soap+xml`, **no SOAPAction header**. Deviating from any of this causes silent failures.
-
-LDBSVWS (staff version) uses the same SOAP 1.2 structure but with namespace `http://thalesgroup.com/RTTI/2021-11-01/ldbsv/` and endpoint `ldbsv12.asmx` (not `ldb12.asmx`).
+The backend's default LDB path is the RDM REST endpoint (`RDM_API_KEY`). A dormant SOAP fallback in `backend/src/ldb-poller.js` — used only if `NR_TOKEN_SV` is set instead — speaks **SOAP 1.2**, not 1.1: namespace `http://thalesgroup.com/RTTI/2021-11-01/ldbsv/`, endpoint `ldbsv12.asmx`, `Content-Type: application/soap+xml`, **no SOAPAction header**. Deviating from any of this causes silent failures.
 
 ### Freight matters
 
@@ -167,7 +162,7 @@ These are also the values in `crossings.json` → `berths.east/west.approach/pro
 - **Oracle Cloud VPS** (`130.162.167.237`, Ubuntu, Node 20) — runs backend-v2 under systemd (`rail-crossing.service`) and Caddy (reverse proxy + Let's Encrypt). **Note:** Ubuntu image has host-level iptables that REJECT inbound besides 22 — opening a port needs BOTH the OCI Security List and `iptables -I INPUT <pos> ... -j ACCEPT` before the REJECT, persisted with `netfilter-persistent save`.
 - **DuckDNS** — free dynamic-DNS subdomain `railcrossing.duckdns.org` → VPS IP. Kept alive by cron on VPS (`crontab -l` shows the update URL with token).
 - **Caddy** on VPS — `/etc/caddy/Caddyfile`, systemd-managed, auto-renewing Let's Encrypt cert.
-- **Cloudflare Worker** (`rail-crossing-api.richardbroad29.workers.dev`) — deployed but no longer in the request path. Source in `./worker/`. Retirement decision after the one-week observation window starting 11 May 2026.
+- **Cloudflare Worker** — retired (2026-07). The old `rail-crossing-api.richardbroad29.workers.dev` SOAP proxy has been removed from the repo and torn down; the frontend calls the VPS backend directly.
 - **LDBSVWS** (Rail Data Marketplace, Staff Version) — backend-v2 calls the RDM REST endpoint with `x-apikey` (the `RDM_API_KEY` in backend `.env`). This is the active LDB data source.
 - **NWR Train Describer (STOMP)** — Rich is subscribed via NROD. Backend-v2 `td-listener.js` subscribes via plain STOMP (no TLS) to `publicdatafeeds.networkrail.co.uk:61618`, filters area LA, writes JSONL to `backend/data/logs/td/`. Not yet joined into prediction output.
 - **NWR SCHEDULE (CIF)** — downloaded automatically from NROD `CifFileAuthenticate` endpoint using the same basic-auth credentials as STOMP (`NR_FEED_USER`/`NR_FEED_PASS` in backend `.env`). No separate NROD subscription needed — the portal grants global access to all feeds. Daily full extract, ~120 MB gzipped; stored at `~/rail-crossing/backend/data/schedule/cif-latest.json.gz`. **Credential testing gotcha:** `source .env` in bash expands `$` in the password (e.g., `p$i$d…` → `p`) — use `awk -F= '/^NR_FEED_PASS=/{sub(/^NR_FEED_PASS=/,"");print}' .env` to read the literal value.
@@ -194,7 +189,7 @@ git config user.email "claude-agent@anthropic.com"
 
 ### Verify before recommending code changes
 
-When considering a change, **read the current file first**. Don't suggest edits based on memory of what the code probably looks like. The 614 lines of `crossing.js` are not always what you'd expect.
+When considering a change, **read the current file first**. Don't suggest edits based on memory of what the code probably looks like. The ~560 lines of `crossing.js` are not always what you'd expect.
 
 ### Free is the default for cost
 
@@ -212,12 +207,12 @@ External services should be free unless the value clearly justifies a paid tier.
 
 ## Common tasks — quick reference
 
-- **Tweak timing parameters**: edit `backend/config/crossings.json` on `backend-v2` (`closeBefore` / `openAfter` / `openLagSecs` / `consecutiveWindow`) and deploy — the frontend renders the backend's closures. (`shared/crossings.json` only feeds the client-side fallback path.)
+- **Tweak timing parameters**: edit `backend/config/crossings.json` on `backend-v2` (`closeBefore` / `openAfter` / `openLagSecs` / `consecutiveWindow`) and deploy — the frontend renders the backend's closures. (`shared/crossings.json` feeds only the client-side confidence-window / debug-panel display.)
 - **Change closure logic**: backend `_computeClosures()` / `_anchorEndToClearStep()` in `backend/src/crossing-state.js` (authoritative); frontend just maps them via `buildClosuresFromVps()` in `shared/crossing.js`.
-- **Add a new origin keyword for direction detection**: `isEastOrigin()` (~line 66).
-- **Change rendering / status**: `renderClosures()` (~333), `updateStatus()` (~413).
+- **Change direction detection**: it's backend-side now — `analyseRoute()` in `backend/src/schedule-parser.js` (CIF) and the LDB poller. The frontend just reads `t.direction`.
+- **Change rendering / status**: `renderClosures()`, `updateStatus()` in `shared/crossing.js`.
 - **Add a new crossing**: append entry to `shared/crossings.json`, create `<crossing-name>/index.html` mirroring `portslade/index.html`, call `initCrossing('<id>')`.
-- **Test changes**: open `portslade/index.html` directly in a browser (`open portslade/index.html` on macOS) — the worker URL is hard-coded so it works against live data.
+- **Test changes**: open `portslade/index.html` directly in a browser (`open portslade/index.html` on macOS) — the VPS API URL is hard-coded (`API_BASE` in `shared/crossing.js`) so it works against live data.
 
 ## Recently shipped (backend-v2, live 2026-05-31)
 
@@ -229,6 +224,5 @@ External services should be free unless the value clearly justifies a paid tier.
 ## Active work / pending items
 
 - **Confidence-tier narrowing via TD berth state** — TD sightings now flow into predictions (`tdSeen`/`tdSeenAt` on each CIF train) and drive the late-minute lock for Q-freight, but the per-berth `tdBerth` field (approach/protecting/clear) is still not populated. Setting it would unlock the ±90s → ±60s → ±30s → "imminent" confidence-window narrowing. This **position-based triggering** is intended to replace the `areaEntryLeadSecs` projection wholesale, which is why those lead values are not worth tuning.
-- **Retire the Cloudflare Worker** — one-week observation window started 11 May 2026. After that, decide whether to leave it as a permanent fallback or tear down the Workers project.
 - Ongoing calibration of `closeBefore` / `openAfter` / `consecutiveWindow` from feedback data
 - Potential expansion to more crossings once Portslade architecture is validated
