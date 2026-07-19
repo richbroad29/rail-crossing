@@ -576,7 +576,8 @@ function updateStatus() {
     if (upcoming) {
       var ms = upcoming.start.getTime() - t;
       nextCloseTime = upcoming.start; nextOpenTime = upcoming.end;
-      if (ms <= 180000) { status = 'CLOSING_SOON'; msg = 'Closing in ~' + fmtCountdown(ms); }
+      // CLOSING_SOON fires 90 s before the predicted closure (barrier-down) time.
+      if (ms <= 90000) { status = 'CLOSING_SOON'; msg = 'Closing in ~' + fmtCountdown(ms); }
       else { msg = 'Next closure in ~' + fmtCountdown(ms); }
     } else { msg = 'No more closures expected today'; }
     $('statusTime').classList.add('hidden');
