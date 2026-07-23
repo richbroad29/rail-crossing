@@ -33,6 +33,10 @@ function fmtCountdownRough(ms) {
   var m = Math.round(ms / 60000);
   return m <= 0 ? 'now' : '~' + m + ' min';
 }
+// A countdown that has reached/passed zero but whose state hasn't advanced yet
+// (waiting on the berth strike, or a train running later than its live estimate)
+// reads "Soon" rather than "0s" / "NOW" or a negative value.
+function fmtSoon(ms) { return ms <= 0 ? 'Soon' : fmtCountdown(ms); }
 function getColors(st) {
   switch(st) {
     case 'CLOSED': return {bg:'#DC2626',text:'#FFF',glow:'0 0 30px rgba(220,38,38,.5)'};
@@ -153,7 +157,10 @@ function buildClosuresFromVps(closures) {
         tdSeen: !!t.tdSeen
       });
     }
-    var p = { start: new Date(c.start), end: new Date(c.end), trains: mapped };
+    // start = CONFIRMED close (drives the CLOSED/DOWN state). predictedStart =
+    // PREDICTED close (drives the countdown / closing-soon); backend adds it — fall
+    // back to start for older payloads. end = raw predicted open (drives reopen).
+    var p = { start: new Date(c.start), predictedStart: new Date(c.predictedStart || c.start), end: new Date(c.end), trains: mapped };
     p.window = getWindowTier(p);
     periods.push(p);
   }
@@ -276,13 +283,16 @@ function renderClosures() {
       html += '<span class="closure-pill closure-pill-active">~' + duration + ' min \u00B7 opens ' + fmtCountdown(p.end.getTime() - now.getTime()) + '</span>';
     } else {
       var w = p.window || { imminent: false, halfWidthSecs: 120 };
-      var secsUntil = p.start.getTime() - now.getTime();
+      // Show the PREDICTED close time/countdown (matches the header countdown);
+      // isCurrent above still gates on the confirmed start.
+      var pStart = p.predictedStart || p.start;
+      var secsUntil = pStart.getTime() - now.getTime();
       if (w.imminent) {
         html += '<div class="closure-time-group"><span class="closure-time closure-imminent">Any moment now</span></div>';
         html += '<span class="closure-pill">~' + duration + ' min</span>';
       } else {
-        html += '<div class="closure-time-group"><span class="closure-time">' + fmtShort(p.start) + '</span><span class="closure-uncertainty">\u00B1' + fmtUncertainty(w.halfWidthSecs) + '</span></div>';
-        var countdownStr = w.halfWidthSecs >= 60 ? fmtCountdownRough(secsUntil) : fmtCountdown(secsUntil);
+        html += '<div class="closure-time-group"><span class="closure-time">' + fmtShort(pStart) + '</span><span class="closure-uncertainty">\u00B1' + fmtUncertainty(w.halfWidthSecs) + '</span></div>';
+        var countdownStr = w.halfWidthSecs >= 60 ? fmtCountdownRough(secsUntil) : fmtSoon(secsUntil);
         html += '<span class="closure-pill">~' + duration + ' min \u00B7 in ' + countdownStr + '</span>';
       }
     }
@@ -367,17 +377,21 @@ function updateStatus() {
   if (currentClosure) {
     status = 'CLOSED';
     nextOpenTime = currentClosure.end;
-    msg = 'Barriers likely DOWN. Reopens in ~' + fmtCountdown(currentClosure.end.getTime() - t);
+    var openMs = currentClosure.end.getTime() - t;
+    msg = 'Barriers likely DOWN. ' + (openMs <= 0 ? 'Reopens soon' : 'Reopens in ~' + fmtCountdown(openMs));
     $('statusTime').textContent = 'Opens ~' + fmtShort(currentClosure.end);
     $('statusTime').classList.remove('hidden');
     $('statusCard').classList.add('pulse');
   } else {
     $('statusCard').classList.remove('pulse');
     if (upcoming) {
-      var ms = upcoming.start.getTime() - t;
-      nextCloseTime = upcoming.start; nextOpenTime = upcoming.end;
+      // Close countdown / closing-soon target the PREDICTED close (barrier-down);
+      // the CLOSED state itself gates on the confirmed start (the loop above).
+      var closeTarget = upcoming.predictedStart || upcoming.start;
+      var ms = closeTarget.getTime() - t;
+      nextCloseTime = closeTarget; nextOpenTime = upcoming.end;
       // CLOSING_SOON fires 90 s before the predicted closure (barrier-down) time.
-      if (ms <= 90000) { status = 'CLOSING_SOON'; msg = 'Closing in ~' + fmtCountdown(ms); }
+      if (ms <= 90000) { status = 'CLOSING_SOON'; msg = ms <= 0 ? 'Closing soon' : 'Closing in ~' + fmtCountdown(ms); }
       else { msg = 'Next closure in ~' + fmtCountdown(ms); }
     } else { msg = 'No more closures expected today'; }
     $('statusTime').classList.add('hidden');
@@ -403,9 +417,9 @@ function updateStatus() {
     stripes.forEach(function(s) { s.setAttribute('fill', '#15803d'); });
     la.setAttribute('opacity', '0'); la.className = ''; lb.setAttribute('opacity', '0'); lb.className = '';
   }
-  if (nextCloseTime) { $('nextCloseCountdown').textContent = fmtCountdown(Math.max(0, nextCloseTime.getTime() - t)); $('nextCloseCountdown').style.color = '#F59E0B'; $('nextCloseTime').textContent = fmtShort(nextCloseTime); }
+  if (nextCloseTime) { $('nextCloseCountdown').textContent = fmtSoon(nextCloseTime.getTime() - t); $('nextCloseCountdown').style.color = '#F59E0B'; $('nextCloseTime').textContent = fmtShort(nextCloseTime); }
   else { $('nextCloseCountdown').textContent = '--'; $('nextCloseCountdown').style.color = '#475569'; $('nextCloseTime').textContent = ''; }
-  if (nextOpenTime) { $('nextOpenCountdown').textContent = fmtCountdown(Math.max(0, nextOpenTime.getTime() - t)); $('nextOpenCountdown').style.color = '#16A34A'; $('nextOpenTime').textContent = fmtShort(nextOpenTime); }
+  if (nextOpenTime) { $('nextOpenCountdown').textContent = fmtSoon(nextOpenTime.getTime() - t); $('nextOpenCountdown').style.color = '#16A34A'; $('nextOpenTime').textContent = fmtShort(nextOpenTime); }
   else { $('nextOpenCountdown').textContent = '--'; $('nextOpenCountdown').style.color = '#475569'; $('nextOpenTime').textContent = ''; }
   renderClosures();
 
