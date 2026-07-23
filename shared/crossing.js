@@ -371,12 +371,17 @@ function updateStatus() {
   var t = now.getTime();
   for (var i = 0; i < closurePeriods.length; i++) {
     var p = closurePeriods[i];
-    if (t >= p.start.getTime() && t <= p.end.getTime()) { currentClosure = p; break; }
-    if (p.start.getTime() > t && !upcoming) { upcoming = p; }
+    // Find BOTH the current closure and the next upcoming one (don't stop at the
+    // current) — so while CLOSED we can still show the countdown to the next close.
+    if (!currentClosure && t >= p.start.getTime() && t <= p.end.getTime()) { currentClosure = p; }
+    else if (!upcoming && p.start.getTime() > t) { upcoming = p; }
   }
   if (currentClosure) {
     status = 'CLOSED';
     nextOpenTime = currentClosure.end;
+    // Even while down, surface the countdown to the NEXT closure if another is coming
+    // (back-to-back closures are a useful heads-up). Targets the predicted close.
+    if (upcoming) nextCloseTime = upcoming.predictedStart || upcoming.start;
     var openMs = currentClosure.end.getTime() - t;
     msg = 'Barriers likely DOWN. ' + (openMs <= 0 ? 'Reopens soon' : 'Reopens in ~' + fmtCountdown(openMs));
     $('statusTime').textContent = 'Opens ~' + fmtShort(currentClosure.end);
