@@ -51,7 +51,13 @@
         "west": { "passenger": 18, "freight": 30 }
       },
       "consecutiveWindow": 1.5,
-      "areaEntryLeadSecs": { "east": 150, "west": 112 }
+      "areaEntryLeadSecs": { "east": 150, "west": 112 },
+      "closeTrigger": {
+        "_comment": "CLOSE start anchored to the approach.from strike (0006 E / 0003 W). CALIBRATION: east stopping 100s = 24 Jun observer clean-approach cluster (80-113s, n=5). PROVISIONAL/uncalibrated: east freight 100s (n=0), east other/non-stopping 80s (n=0), west other 20s (n=0). west stopping = departure-45s is ACCURACY-tuned (central, not safe: ~half of n=8 tip late by <=~30s; departures were minute-rounded). predictedLeadSecs.east 180 = pre-strike east prediction leads the crossing (measured barrier-down ~2-3.5min), replaces closeBefore.east for display. safetyNetSecs (east 210, west 90) = conservative CLOSED backstop from LIVE bestTime for a MISSED strike, set smaller than the strike's typical lead (east 0006 ~280s, west 0003 ~120s) so the precise strike normally wins; east 210 sits inside the measured 129-257s band, west 90 is the safe-side value. All backstops PROVISIONAL (thin/rounded data).",
+        "east": { "freightSecs": 100, "stoppingSecs": 100, "otherSecs": 80, "predictedLeadSecs": 180, "safetyNetSecs": 210 },
+        "west": { "stoppingDepartureLeadSecs": 45, "stoppingMinAfterStrikeSecs": 10, "otherSecs": 20, "safetyNetSecs": 90 }
+      },
+      "mergeOppositeMaxGapSecs": 20
     },
 
     "live": { "ttlSecs": 240 },

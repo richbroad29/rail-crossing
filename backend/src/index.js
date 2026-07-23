@@ -262,6 +262,7 @@ async function main() {
       state.recordTdSighting(s.headcode, s.ts);
       state.recordTdBerth(s); // B1: feed the live-position map (berth in payload)
       state.recordTdClearStep(s); // TD-triggered open: anchor closure end to the crossing clear step
+      state.recordTdCloseStrike(s); // TD-triggered close: anchor closure start to the approach strike-in
     }
   });
   tdListener.start();

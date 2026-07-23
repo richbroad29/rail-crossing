@@ -246,6 +246,280 @@ function mkTrain(o) {
     periods[0].end, new Date(BASE + 60000 + 30000).toISOString());
 }
 
+// ===========================================================================
+// TD-triggered close + direction-aware hold + gated CLOSED state
+// (Changes 1–5b). _computeClosures now emits period.start (CONFIRMED close,
+// drives CLOSED) and period.predictedStart (PREDICTED close, drives the
+// countdown / CLOSING_SOON). Deterministic: explicit `now`, strikes injected.
+// ===========================================================================
+console.log('\nTD-triggered close + direction-aware hold + gated state\n');
+
+// closeTrigger + mergeOppositeMaxGapSecs + td.approach berths. No openLagSecs, so
+// _anchorEndToClearStep leaves the end at the raw predicted open (deterministic).
+const closeCfg = {
+  name: 'Close Test', road: 'Test Rd',
+  td: {
+    eastbound: { approach: { from: '0006', to: '0004' }, clear: { from: '0004', to: '0002' } },
+    westbound: { approach: { from: '0003', to: '0005' }, clear: { from: '0005', to: '0007' } }
+  },
+  timing: {
+    closeBefore: { east: 1.5, west: 2.5 },
+    openAfter: { east: 0.5, west: 0.5 },
+    consecutiveWindow: 1.5,
+    closeTrigger: {
+      east: { freightSecs: 100, stoppingSecs: 100, otherSecs: 80, predictedLeadSecs: 180, safetyNetSecs: 210 },
+      west: { stoppingDepartureLeadSecs: 45, stoppingMinAfterStrikeSecs: 10, otherSecs: 20, safetyNetSecs: 90 }
+    },
+    mergeOppositeMaxGapSecs: 20
+  }
+};
+// Directional grouping WITHOUT closeTrigger: close = bestTime − closeBefore (east 90s,
+// west 150s), open = bestTime + 30s — clean gap arithmetic for the merge tests.
+const mergeCfg = {
+  name: 'Merge Test', road: 'Test Rd',
+  timing: {
+    closeBefore: { east: 1.5, west: 2.5 },
+    openAfter: { east: 0.5, west: 0.5 },
+    consecutiveWindow: 1.5,
+    mergeOppositeMaxGapSecs: 20
+  }
+};
+// Neither trigger present → legacy consecutiveWindow grouping, close = bestTime − closeBefore.
+const legacyCfg = {
+  name: 'Legacy Test', road: 'Test Rd',
+  timing: {
+    closeBefore: { east: 1.5, west: 2.5 },
+    openAfter: { east: 0.5, west: 0.5 },
+    consecutiveWindow: 1.5
+  }
+};
+
+// Merged-train shape with a settable source (ldb ⇒ stopping) and scheduledTime.
+function mkT(o) {
+  return {
+    direction: o.dir, trainType: o.type || 'passenger', headcode: o.headcode || 'XXXX',
+    bestTime: new Date(o.bestTimeMs),
+    scheduledTime: new Date(o.schedMs != null ? o.schedMs : o.bestTimeMs),
+    origin: 'A', destination: 'B', operator: 'ZZ',
+    etaText: 'x', confidence: 'high', source: o.source || 'ldb'
+  };
+}
+const iso = (ms) => new Date(ms).toISOString();
+// close a single train and return its one period (predictedStart / start / end).
+function periodFor(cfg, train, nowMs, strikes = []) {
+  const state = new CrossingState('t', cfg);
+  for (const s of strikes) state.closeStrikeSeen.set(s.hc, { ts: s.ts, direction: s.dir });
+  return state._computeClosures([train], new Date(nowMs))[0];
+}
+
+// ---- Change 2: predicted close time (period.predictedStart) --------------
+console.log('  -- predicted close (strike-anchored / prediction) --');
+
+// C1: East stopping passenger, 0006 struck → strike + 100s, overriding a LATER bestTime.
+{
+  const p = periodFor(closeCfg,
+    mkT({ dir: 'east', headcode: '1A01', bestTimeMs: BASE + 300000, source: 'ldb' }),
+    BASE + 40000, [{ hc: '1A01', ts: BASE, dir: 'east' }]);
+  check('east stopping (struck): predictedStart = strike + 100s', p.predictedStart, iso(BASE + 100000));
+  check('east stopping (struck): start == predictedStart (gated onset == prediction)', p.start, iso(BASE + 100000));
+}
+// C1b: same strike overrides an EARLIER bestTime baseline too.
+{
+  const p = periodFor(closeCfg,
+    mkT({ dir: 'east', headcode: '1A01', bestTimeMs: BASE - 100000, source: 'ldb' }),
+    BASE + 40000, [{ hc: '1A01', ts: BASE, dir: 'east' }]);
+  check('east stopping (struck): strike overrides an earlier bestTime', p.predictedStart, iso(BASE + 100000));
+}
+// C2: East freight → strike+100; East non-stopping (cif) → strike+80; East ECS → strike+80.
+{
+  const f = periodFor(closeCfg, mkT({ dir: 'east', headcode: '6O99', type: 'freight', bestTimeMs: BASE + 300000 }),
+    BASE + 10000, [{ hc: '6O99', ts: BASE, dir: 'east' }]);
+  check('east freight (struck): strike + 100s', f.predictedStart, iso(BASE + 100000));
+  const ns = periodFor(closeCfg, mkT({ dir: 'east', headcode: '1A02', type: 'passenger', source: 'cif', bestTimeMs: BASE + 300000 }),
+    BASE + 10000, [{ hc: '1A02', ts: BASE, dir: 'east' }]);
+  check('east non-stopping cif passenger (struck): strike + 80s', ns.predictedStart, iso(BASE + 80000));
+  const ecs = periodFor(closeCfg, mkT({ dir: 'east', headcode: '5A05', type: 'ecs', bestTimeMs: BASE + 300000 }),
+    BASE + 10000, [{ hc: '5A05', ts: BASE, dir: 'east' }]);
+  check('east ECS (struck): strike + 80s (other bucket)', ecs.predictedStart, iso(BASE + 80000));
+}
+// C3: East, no strike → predicted = bestTime − predictedLeadSecs (180s); confirmed = bestTime − safetyNet (210s).
+//     (Supersedes Change-2's original closeBefore baseline per the Change-5 correction.)
+{
+  const p = periodFor(closeCfg, mkT({ dir: 'east', headcode: '1A03', bestTimeMs: BASE }), BASE - 300000);
+  check('east (no strike): predictedStart = bestTime − 180s', p.predictedStart, iso(BASE - 180000));
+  check('east (no strike): start = bestTime − 210s (safety-net backstop)', p.start, iso(BASE - 210000));
+}
+// C4: West stopping, struck → max(strike+10, dep−45).
+{
+  const a = periodFor(closeCfg, mkT({ dir: 'west', headcode: '2W20', source: 'ldb', bestTimeMs: BASE }),
+    BASE + 5000, [{ hc: '2W20', ts: BASE, dir: 'west' }]);
+  check('west stopping (struck, strike+10 later): close = strike + 10s', a.predictedStart, iso(BASE + 10000));
+  const b = periodFor(closeCfg, mkT({ dir: 'west', headcode: '2W21', source: 'ldb', bestTimeMs: BASE + 200000 }),
+    BASE + 5000, [{ hc: '2W21', ts: BASE, dir: 'west' }]);
+  check('west stopping (struck, dep−45 later): close = departure − 45s', b.predictedStart, iso(BASE + 155000));
+}
+// C5: West stopping, no strike → predicted = departure − 45s; confirmed = bestTime − 90s.
+{
+  const p = periodFor(closeCfg, mkT({ dir: 'west', headcode: '2W22', source: 'ldb', bestTimeMs: BASE }), BASE - 300000);
+  check('west stopping (no strike): predictedStart = departure − 45s', p.predictedStart, iso(BASE - 45000));
+  check('west stopping (no strike): start = bestTime − 90s (safety-net backstop)', p.start, iso(BASE - 90000));
+}
+// C6: West freight / non-stopping → strike+20; no strike → bestTime − closeBefore.west (150s).
+{
+  const f = periodFor(closeCfg, mkT({ dir: 'west', headcode: '6O80', type: 'freight', bestTimeMs: BASE + 300000 }),
+    BASE + 5000, [{ hc: '6O80', ts: BASE, dir: 'west' }]);
+  check('west freight (struck): strike + 20s', f.predictedStart, iso(BASE + 20000));
+  const fn = periodFor(closeCfg, mkT({ dir: 'west', headcode: '6O81', type: 'freight', bestTimeMs: BASE }), BASE - 300000);
+  check('west freight (no strike): predictedStart = bestTime − closeBefore.west (150s)', fn.predictedStart, iso(BASE - 150000));
+  const ns = periodFor(closeCfg, mkT({ dir: 'west', headcode: '2W23', type: 'passenger', source: 'cif', bestTimeMs: BASE + 300000 }),
+    BASE + 5000, [{ hc: '2W23', ts: BASE, dir: 'west' }]);
+  check('west non-stopping cif passenger (struck): strike + 20s (other bucket)', ns.predictedStart, iso(BASE + 20000));
+}
+// C7: Strike older than the TTL → ignored (baseline used); prune removes it.
+{
+  const staleTs = BASE - 25 * 60000;                       // 25 min ago (> 20 min TTL)
+  const state = new CrossingState('t', closeCfg);
+  state.closeStrikeSeen.set('1A04', { ts: staleTs, direction: 'east' });
+  const p = state._computeClosures([mkT({ dir: 'east', headcode: '1A04', bestTimeMs: BASE })], new Date(BASE))[0];
+  check('stale strike (> TTL) ignored → east baseline (bestTime − 180s)', p.predictedStart, iso(BASE - 180000));
+  state._pruneCloseStrikes(BASE);
+  check('prune removes the stale strike', state.closeStrikeSeen.has('1A04'), false);
+}
+// C8: closeTrigger absent → close = bestTime − closeBefore (unchanged); start == predictedStart.
+{
+  const p = periodFor(legacyCfg, mkT({ dir: 'east', headcode: '1A05', bestTimeMs: BASE }), BASE - 300000);
+  check('no closeTrigger: predictedStart = bestTime − closeBefore.east (90s)', p.predictedStart, iso(BASE - 90000));
+  check('no closeTrigger: start == predictedStart', p.start, p.predictedStart);
+}
+
+// ---- Change 1: recordTdCloseStrike berth matching -------------------------
+console.log('  -- recordTdCloseStrike berth match --');
+{
+  const state = new CrossingState('t', closeCfg);
+  state.recordTdCloseStrike({ headcode: '1A06', to: '0006', from: '0002', ts: iso(BASE) });
+  const e = state.closeStrikeSeen.get('1A06');
+  check('entering 0006 records an EAST strike', e ? e.direction : null, 'east');
+  check('strike ts parsed from event', e ? e.ts : null, BASE);
+  state.recordTdCloseStrike({ headcode: '2W24', to: '0003', from: '0001', ts: iso(BASE) });
+  const w = state.closeStrikeSeen.get('2W24');
+  check('entering 0003 records a WEST strike', w ? w.direction : null, 'west');
+  state.recordTdCloseStrike({ headcode: '9Z99', to: '9999', from: '0000', ts: iso(BASE) });
+  check('entering a non-approach berth is ignored', state.closeStrikeSeen.has('9Z99'), false);
+}
+
+// ---- Change 3: direction-aware hold / merge -------------------------------
+console.log('  -- direction-aware merge --');
+// M9: two SAME-direction trains, small positive gap → split (two periods).
+{
+  const state = new CrossingState('t', mergeCfg);
+  const ps = state._computeClosures([
+    mkT({ dir: 'east', headcode: '1A01', bestTimeMs: BASE }),
+    mkT({ dir: 'east', headcode: '1A02', bestTimeMs: BASE + 150000 })   // gap +30s
+  ], new Date(BASE));
+  check('same-direction small positive gap → two periods (split)', ps.length, 2);
+}
+// M10: two OPPOSITE-direction trains — merge iff gap ≤ 20s.
+{
+  const state = new CrossingState('t', mergeCfg);
+  const merged = state._computeClosures([
+    mkT({ dir: 'east', headcode: '1A01', bestTimeMs: BASE }),
+    mkT({ dir: 'west', headcode: '2W20', bestTimeMs: BASE + 200000 })   // gap = 20s
+  ], new Date(BASE));
+  check('opposite gap = 20s → one period (merged)', merged.length, 1);
+  const split = state._computeClosures([
+    mkT({ dir: 'east', headcode: '1A01', bestTimeMs: BASE }),
+    mkT({ dir: 'west', headcode: '2W20', bestTimeMs: BASE + 220000 })   // gap = 40s
+  ], new Date(BASE));
+  check('opposite gap = 40s → two periods (split)', split.length, 2);
+}
+// M11: W,E,W each opposite-adjacent ≤20 → one; W,E,E → the E,E boundary splits → two.
+{
+  const state = new CrossingState('t', mergeCfg);
+  const wew = state._computeClosures([
+    mkT({ dir: 'west', headcode: '2W20', bestTimeMs: BASE }),
+    mkT({ dir: 'east', headcode: '1A01', bestTimeMs: BASE + 120000 }),
+    mkT({ dir: 'west', headcode: '2W21', bestTimeMs: BASE + 300000 })
+  ], new Date(BASE));
+  check('W,E,W opposite-adjacent ≤20s → one merged period', wew.length, 1);
+  check('W,E,W merged period spans three trains', wew[0].trainCount, 3);
+  const wee = state._computeClosures([
+    mkT({ dir: 'west', headcode: '2W20', bestTimeMs: BASE }),
+    mkT({ dir: 'east', headcode: '1A01', bestTimeMs: BASE + 120000 }),
+    mkT({ dir: 'east', headcode: '1A02', bestTimeMs: BASE + 300000 })
+  ], new Date(BASE));
+  check('W,E,E → E,E boundary (same dir) splits → two periods', wee.length, 2);
+}
+// M12: same-direction TRUE overlap (prev open after next close) → merged (physical fallback).
+{
+  const state = new CrossingState('t', mergeCfg);
+  const ps = state._computeClosures([
+    mkT({ dir: 'east', headcode: '1A01', bestTimeMs: BASE }),
+    mkT({ dir: 'east', headcode: '1A02', bestTimeMs: BASE + 60000 })    // gap −60s (overlap)
+  ], new Date(BASE));
+  check('same-direction true overlap → one period (merged)', ps.length, 1);
+  check('same-direction overlap: two trains', ps[0].trainCount, 2);
+}
+// M13: mergeOppositeMaxGapSecs absent → legacy consecutiveWindow grouping unchanged
+//      (same-dir pair merges under legacy where directional would split).
+{
+  const state = new CrossingState('t', legacyCfg);
+  const ps = state._computeClosures([
+    mkT({ dir: 'east', headcode: '1A01', bestTimeMs: BASE }),
+    mkT({ dir: 'east', headcode: '1A02', bestTimeMs: BASE + 120000 })   // within consecutiveWindow
+  ], new Date(BASE));
+  check('no merge config → legacy consecutiveWindow merges same-dir pair (one period)', ps.length, 1);
+}
+
+// ---- Change 5b: gated CLOSED state (_deriveState) -------------------------
+console.log('  -- gated state (confirmed start / predicted countdown) --');
+// Period shape: not struck → start ≤ predictedStart; struck → equal.
+{
+  const notStruck = periodFor(closeCfg, mkT({ dir: 'east', headcode: '1A07', bestTimeMs: BASE }), BASE - 400000);
+  checkTruthy('not struck: start ≤ predictedStart (backstop earlier/safer)',
+    new Date(notStruck.start).getTime() <= new Date(notStruck.predictedStart).getTime());
+  check('not struck: start strictly earlier than predictedStart', notStruck.start !== notStruck.predictedStart, true);
+  const struck = periodFor(closeCfg, mkT({ dir: 'east', headcode: '1A07', bestTimeMs: BASE, source: 'ldb' }),
+    BASE - 180000, [{ hc: '1A07', ts: BASE - 280000, dir: 'east' }]);
+  check('struck: start == predictedStart', struck.start, struck.predictedStart);
+  check('struck: onset = strike + 100s', struck.start, iso(BASE - 180000));
+}
+// Late train, strike not yet in: countdown region shows CLOSING_SOON, NOT CLOSED, until
+// the backstop; then CLOSED at the safety net (no-strike east period: start −210, pred −180).
+{
+  const state = new CrossingState('t', closeCfg);
+  state.closurePeriods = state._computeClosures([mkT({ dir: 'east', headcode: '1A08', bestTimeMs: BASE })], new Date(BASE - 400000));
+  check('no strike: CLOSING_SOON before the backstop (not CLOSED)', state._deriveState(new Date(BASE - 250000)), 'CLOSING_SOON');
+  check('no strike: OPEN well before the predicted close', state._deriveState(new Date(BASE - 600000)), 'OPEN');
+  check('no strike: CLOSED at the safety-net backstop (bestTime − 210s)', state._deriveState(new Date(BASE - 210000)), 'CLOSED');
+  check('no strike: still CLOSING_SOON just before the backstop', state._deriveState(new Date(BASE - 220000)), 'CLOSING_SOON');
+}
+// With a normal strike: CLOSED at strike + 100s; the backstop (−210) never triggers.
+{
+  const state = new CrossingState('t', closeCfg);
+  const t = mkT({ dir: 'east', headcode: '1A08', bestTimeMs: BASE, source: 'ldb' });
+  state.closeStrikeSeen.set('1A08', { ts: BASE - 280000, direction: 'east' });
+  state.closurePeriods = state._computeClosures([t], new Date(BASE - 180000));
+  check('struck: NOT CLOSED at −200s (before strike onset, though past −210 backstop)',
+    state._deriveState(new Date(BASE - 200000)), 'CLOSING_SOON');
+  check('struck: CLOSED at strike + 100s (−180s)', state._deriveState(new Date(BASE - 180000)), 'CLOSED');
+}
+// West stopping gate: the flip to CLOSED is driven by start (backstop/strike), NOT the
+// dep−45 prediction. Not struck → start (−90) earlier than predicted (−45); struck → equal.
+{
+  const ns = periodFor(closeCfg, mkT({ dir: 'west', headcode: '2W25', source: 'ldb', bestTimeMs: BASE }), BASE - 300000);
+  check('west stopping (no strike): start = bestTime − 90s (not the dep−45 prediction)', ns.start, iso(BASE - 90000));
+  check('west stopping (no strike): predictedStart = dep − 45s', ns.predictedStart, iso(BASE - 45000));
+  const st = periodFor(closeCfg, mkT({ dir: 'west', headcode: '2W25', source: 'ldb', bestTimeMs: BASE }),
+    BASE - 45000, [{ hc: '2W25', ts: BASE - 120000, dir: 'west' }]);
+  check('west stopping (struck): start == predictedStart == dep − 45s', st.start, iso(BASE - 45000));
+}
+// Live not scheduled: a late bestTime with an on-time scheduledTime closes off bestTime.
+{
+  const p = periodFor(closeCfg,
+    mkT({ dir: 'east', headcode: '1A10', bestTimeMs: BASE + 600000, schedMs: BASE }), BASE);
+  check('close computed off LIVE bestTime, not scheduledTime', p.predictedStart, iso(BASE + 420000));
+}
+
 console.log();
 if (fail > 0) { console.error(`${fail} FAILED, ${pass} passed`); process.exit(1); }
 else { console.log(`All ${pass} tests passed.`); }

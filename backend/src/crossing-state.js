@@ -39,6 +39,14 @@ const DEFAULT_AREA_ENTRY_LEAD_SECS = { east: 150, west: 112 };
 // this TTL (checked on both write and read) so a headcode reused later in the day
 // can never match a stale crossing from earlier on.
 const CLEAR_STEP_TTL_MS = 20 * 60 * 1000;
+// --- TD-triggered close (approach strike-in anchor) ---
+// When TD shows a train stepping INTO the approach-side berth (config
+// td.<dir>.approach.from — 0006 east / 0003 west), the barrier's CLOSE start can
+// be anchored to that physical strike + a per-direction/class lag (timing.closeTrigger).
+// Unlike the clear step (which moves a period's END), a close strike moves a period's
+// START, so recording one recomputes. Recorded strikes expire after this TTL so a
+// headcode reused later in the day can't match a stale approach from earlier on.
+const CLOSE_STRIKE_TTL_MS = 20 * 60 * 1000;
 // While a TD-sighted train has NOT yet performed its clear step, the closure must
 // never end (the train hasn't physically cleared). Its end is floored this far into
 // the future so the barrier stays closed/pending until the real clear step lands.
@@ -74,6 +82,13 @@ class CrossingState {
     // anchored to its FINAL train's clear step + openLagSecs. Pruned by TTL so a
     // reused headcode can't match a stale crossing from earlier in the day.
     this.clearStepSeen = new Map();
+
+    // headcode → { ts(ms), direction } of the train's most recent APPROACH
+    // strike-in (stepping into config td.<dir>.approach.from — 0006 east / 0003
+    // west). Drives TD-triggered close: a period's START is anchored to this
+    // strike + a per-direction/class lag (timing.closeTrigger). Pruned by TTL so a
+    // reused headcode can't match a stale approach from earlier in the day.
+    this.closeStrikeSeen = new Map();
 
     // Computed state
     this.closurePeriods = [];
@@ -146,6 +161,38 @@ class CrossingState {
   _pruneClearSteps(nowMs) {
     for (const [headcode, s] of this.clearStepSeen) {
       if (nowMs - s.ts > CLEAR_STEP_TTL_MS) this.clearStepSeen.delete(headcode);
+    }
+  }
+
+  // TD-triggered close: record a train stepping INTO the approach-side berth
+  // (td.<dir>.approach.from — 0006 east / 0003 west). This is the physical strike-in
+  // that anchors a closure's START. Matched on the destination berth ONLY: entering
+  // 0006 is always an eastbound event and entering 0003 always westbound (distinct
+  // berths); the per-train direction gate in _computeCloseTime is the second guard.
+  // Unlike recordTdBerth, a strike moves a closure's start, so this DOES recompute.
+  recordTdCloseStrike(evt) {
+    if (!evt || !evt.headcode || !evt.to) return;
+    const dir = this._matchCloseStrikeBerth(evt.to);
+    if (!dir) return;
+    const ms = evt.ts ? new Date(evt.ts).getTime() : Date.now();
+    if (!Number.isFinite(ms)) return;
+    this.closeStrikeSeen.set(evt.headcode, { ts: ms, direction: dir });
+    this._pruneCloseStrikes(ms);
+    this._recompute();
+  }
+
+  // Which direction's approach strike-in berth `to` is, or null if it isn't one.
+  _matchCloseStrikeBerth(to) {
+    const td = this.config && this.config.td;
+    if (!td) return null;
+    if (td.eastbound && td.eastbound.approach && td.eastbound.approach.from === to) return 'east';
+    if (td.westbound && td.westbound.approach && td.westbound.approach.from === to) return 'west';
+    return null;
+  }
+
+  _pruneCloseStrikes(nowMs) {
+    for (const [headcode, s] of this.closeStrikeSeen) {
+      if (nowMs - s.ts > CLOSE_STRIKE_TTL_MS) this.closeStrikeSeen.delete(headcode);
     }
   }
 
@@ -364,22 +411,118 @@ class CrossingState {
     return secs * 1000;
   }
 
-  // Compute closure periods from merged train list
+  // A merged train is a stopping passenger iff it came off an LDB departure/arrival
+  // board (source starts "ldb"). Boards only list CALLING services, so an LDB source
+  // ⇒ stopping; source "cif" ⇒ not on the board ("unknown", treated as non-stopping).
+  // Matches the getLiveTrains convention (stopping: onBoard ? true : 'unknown').
+  _isStopping(t) {
+    return typeof t.source === 'string' && t.source.startsWith('ldb');
+  }
+
+  // The train's fresh, direction-matched approach strike (or null). A strike matches
+  // only if its recorded direction equals the train's and it is within the TTL.
+  _freshStrike(t, now) {
+    const struck = this.closeStrikeSeen.get(t.headcode);
+    if (struck && struck.direction === t.direction &&
+        (now.getTime() - struck.ts) <= CLOSE_STRIKE_TTL_MS) return struck;
+    return null;
+  }
+
+  // PREDICTED close time (display / countdown target) for a single train. Strike-based
+  // once the approach berth has struck; otherwise the live-bestTime prediction. Gated on
+  // timing.closeTrigger — absent ⇒ the legacy bestTime − closeBefore, which preserves
+  // other crossings and gives a clean rollback.
+  //
+  //  - EAST: freight → strike+freightSecs; stopping passenger → strike+stoppingSecs;
+  //    everything else (non-stopping / ECS / unknown) → strike+otherSecs. Before the
+  //    strike, the prediction LEADS the crossing by predictedLeadSecs (~180s, measured),
+  //    NOT closeBefore.east (90s) — see the closeTrigger _comment.
+  //  - WEST stopping passenger → max(strike + stoppingMinAfterStrikeSecs, departure − 45s);
+  //    before the strike, departure − 45s. bestTime IS the LDB departure for westbound.
+  //  - WEST freight / non-stopping → strike+otherSecs; before the strike, bestTime − closeBefore.west.
+  _computeCloseTime(t, now) {
+    const ct = this.timing && this.timing.closeTrigger;
+    const cbFallback = () => new Date(t.bestTime.getTime() - this._getCloseBefore(t.direction) * 60000);
+    if (!ct) return cbFallback();
+
+    const struck = this._freshStrike(t, now);
+    const stopping = this._isStopping(t);
+
+    if (t.direction === 'east') {
+      const c = ct.east || {};
+      const secs = t.trainType === 'freight' ? c.freightSecs
+                 : (t.trainType === 'passenger' && stopping) ? c.stoppingSecs
+                 : c.otherSecs;                          // non-stopping / ECS / unknown
+      if (struck && typeof secs === 'number') return new Date(struck.ts + secs * 1000);
+      // Pre-strike east prediction leads the crossing by predictedLeadSecs (measured
+      // ~2–3.5 min), not closeBefore — so the countdown doesn't lurch when the strike lands.
+      const lead = typeof c.predictedLeadSecs === 'number' ? c.predictedLeadSecs
+                 : this._getCloseBefore('east') * 60;
+      return new Date(t.bestTime.getTime() - lead * 1000);
+    }
+
+    // west
+    const c = ct.west || {};
+    if (t.trainType === 'passenger' && stopping) {
+      // bestTime IS the LDB departure for westbound (extractTrain: et=etd||eta). A
+      // westbound stopper is always LDB-sourced, so this branch can't fire off a CIF time.
+      const depMinus = new Date(t.bestTime.getTime() - c.stoppingDepartureLeadSecs * 1000);
+      if (struck) {
+        const floor = struck.ts + c.stoppingMinAfterStrikeSecs * 1000;
+        return new Date(Math.max(floor, depMinus.getTime())); // whichever is LATER
+      }
+      return depMinus;                                   // prediction: departure − 45s
+    }
+    // west freight / non-stopping / ECS / unknown
+    if (struck && typeof c.otherSecs === 'number') return new Date(struck.ts + c.otherSecs * 1000);
+    return cbFallback();                                 // baseline until the 0003 strike
+  }
+
+  // CONFIRMED close time (gated CLOSED onset) for a single train. Strike-based when
+  // struck (identical to the predicted time); otherwise a conservative backstop from the
+  // LIVE bestTime (bestTime − safetyNetSecs[dir]), set SMALLER than the strike's typical
+  // lead so the precise strike normally wins and the backstop only fires on a genuinely
+  // missed/dropped strike. Never uses scheduledTime — bestTime is the live estimate.
+  _confirmedCloseTime(t, now) {
+    const ct = this.timing && this.timing.closeTrigger;
+    if (!ct) return this._computeCloseTime(t, now);      // no trigger: confirmed == baseline
+
+    const struck = this._freshStrike(t, now);
+    if (struck) return this._computeCloseTime(t, now);   // struck: gated onset == predicted
+
+    const c = ct[t.direction] || {};
+    if (typeof c.safetyNetSecs === 'number') {
+      return new Date(t.bestTime.getTime() - c.safetyNetSecs * 1000);
+    }
+    return this._computeCloseTime(t, now);               // no backstop configured: fall back
+  }
+
+  // Raw predicted open (barrier-up) for a train — bestTime + openAfter[dir]. This is
+  // the grouping/merge end key; the TD clear step stretches only the finalised tail.
+  _openPred(t) {
+    return new Date(t.bestTime.getTime() + this._getOpenAfter(t.direction) * 60000);
+  }
+
+  // Compute closure periods from merged train list (sorted by bestTime). Uses the
+  // direction-aware grouping when timing.mergeOppositeMaxGapSecs is configured; else
+  // the legacy single-window grouping (unchanged for other crossings / rollback).
   _computeClosures(trains, now = new Date()) {
     if (!trains.length) return [];
+    if (this.timing && typeof this.timing.mergeOppositeMaxGapSecs === 'number') {
+      return this._computeClosuresDirectional(trains, now);
+    }
 
     const periods = [];
-    let start = null, end = null, currentTrains = [];
+    let predStart = null, confStart = null, end = null, currentTrains = [];
 
     for (const t of trains) {
-      const cb = this._getCloseBefore(t.direction);
-      const oa = this._getOpenAfter(t.direction);
+      const closeTime = this._computeCloseTime(t, now);       // predicted (grouping key)
+      const confClose = this._confirmedCloseTime(t, now);     // gated CLOSED onset
+      const openTime = this._openPred(t);
 
-      const closeTime = new Date(t.bestTime.getTime() - cb * 60000);
-      const openTime = new Date(t.bestTime.getTime() + oa * 60000);
-
-      if (start === null) {
-        start = closeTime;
+      if (predStart === null) {
+        predStart = closeTime;
+        confStart = confClose;
         end = openTime;
         currentTrains = [t];
       } else if (closeTime.getTime() - end.getTime() <= this.timing.consecutiveWindow * 60000) {
@@ -388,21 +531,66 @@ class CrossingState {
         currentTrains.push(t);
       } else {
         // New period — anchor the finalised period's end to its final train's clear step
-        periods.push(this._makePeriod(start, this._anchorEndToClearStep(end, currentTrains, now), currentTrains));
-        start = closeTime;
+        periods.push(this._makePeriod(confStart, this._anchorEndToClearStep(end, currentTrains, now), currentTrains, predStart));
+        predStart = closeTime;
+        confStart = confClose;
         end = openTime;
         currentTrains = [t];
       }
     }
 
-    if (start) {
-      periods.push(this._makePeriod(start, this._anchorEndToClearStep(end, currentTrains, now), currentTrains));
+    if (predStart) {
+      periods.push(this._makePeriod(confStart, this._anchorEndToClearStep(end, currentTrains, now), currentTrains, predStart));
     }
 
     return periods;
   }
 
-  _makePeriod(start, end, trains) {
+  // Direction-aware grouping (Change 3). Walk trains sorted by bestTime; for each
+  // boundary compare this train's predicted close against the previous train's raw
+  // predicted open:
+  //   gapSecs = (thisClose − prevOpenPred) / 1000        (barrier-up seconds between)
+  //   same direction → split ALWAYS, except a true time overlap (gapSecs < 0)
+  //   opposite direction → merge iff gapSecs ≤ mergeOppositeMaxGapSecs (incl. overlap)
+  // A group is a maximal run where every internal boundary merges (transitive along
+  // the chain). Each period carries start = the group's earliest CONFIRMED close (drives
+  // CLOSED) and predictedStart = the group's earliest PREDICTED close (drives the
+  // countdown / closing-soon); the end is the clear-step-anchored latest predicted open.
+  _computeClosuresDirectional(trains, now) {
+    const maxGap = this.timing.mergeOppositeMaxGapSecs;
+    const ann = trains.map(t => ({
+      train: t,
+      predClose: this._computeCloseTime(t, now),
+      confClose: this._confirmedCloseTime(t, now),
+      openPred: this._openPred(t)
+    }));
+
+    const groups = [];
+    let cur = null;
+    for (const a of ann) {
+      if (!cur) { cur = [a]; groups.push(cur); continue; }
+      const prev = cur[cur.length - 1];
+      const gapSecs = (a.predClose.getTime() - prev.openPred.getTime()) / 1000;
+      const sameDir = a.train.direction === prev.train.direction;
+      const merge = sameDir ? (gapSecs < 0) : (gapSecs <= maxGap);
+      if (merge) cur.push(a);
+      else { cur = [a]; groups.push(cur); }
+    }
+
+    return groups.map(g => {
+      const groupTrains = g.map(a => a.train);
+      const predStart = new Date(Math.min(...g.map(a => a.predClose.getTime())));
+      const confStart = new Date(Math.min(...g.map(a => a.confClose.getTime())));
+      const maxOpenPred = new Date(Math.max(...g.map(a => a.openPred.getTime())));
+      const end = this._anchorEndToClearStep(maxOpenPred, groupTrains, now);
+      return this._makePeriod(confStart, end, groupTrains, predStart);
+    });
+  }
+
+  // start = CONFIRMED close (gated CLOSED onset). predictedStart = PREDICTED close
+  // (countdown / closing-soon target); defaults to start for the legacy/no-trigger path.
+  // When not struck confirmedClose ≤ predictedClose, so start ≤ predictedStart; struck ⇒ equal.
+  _makePeriod(start, end, trains, predictedStart = start) {
     // Determine reason
     let reason = 'single_train';
     if (trains.length > 1) reason = 'merged_consecutive';
@@ -414,6 +602,7 @@ class CrossingState {
 
     return {
       start: start.toISOString(),
+      predictedStart: (predictedStart || start).toISOString(),
       end: end.toISOString(),
       durationMins: Math.round((end - start) / 60000),
       reason,
@@ -512,28 +701,34 @@ class CrossingState {
     this.closurePeriods = this._computeClosures(merged, now);
 
     const oldState = this.state;
-
-    // Determine current state
-    const currentClosure = this.closurePeriods.find(p =>
-      now >= new Date(p.start) && now <= new Date(p.end)
-    );
-
-    if (currentClosure) {
-      this.state = 'CLOSED';
-    } else {
-      // Check if closing soon
-      const nextClosure = this.closurePeriods.find(p => new Date(p.start) > now);
-      if (nextClosure && (new Date(nextClosure.start) - now) <= CLOSING_SOON_WINDOW_MS) {
-        this.state = 'CLOSING_SOON';
-      } else {
-        this.state = 'OPEN';
-      }
-    }
+    this.state = this._deriveState(now);
 
     if (this.state !== oldState) {
       this.lastStateChange = now;
       logger.logState(this.id, oldState, this.state, 'recompute');
     }
+  }
+
+  // Derive the live state from the computed closure periods at `now`.
+  //  - CLOSED is gated on the CONFIRMED close (p.start = strike-based, or the conservative
+  //    backstop) so the crossing never shows CLOSED straight off the timetable before the
+  //    approach strike (or safety net) confirms it.
+  //  - CLOSING_SOON uses the PREDICTED close (p.predictedStart) so the countdown / soon
+  //    banner reflects the display prediction (which leads the confirmed close).
+  // Since confirmedClose ≤ predictedClose (equal once struck), CLOSED never precedes the
+  // period start test, and the countdown never passes zero before CLOSED shows.
+  _deriveState(now) {
+    const closeTarget = (p) => new Date(p.predictedStart || p.start);
+    const currentClosure = this.closurePeriods.find(p =>
+      now >= new Date(p.start) && now <= new Date(p.end)
+    );
+    if (currentClosure) return 'CLOSED';
+
+    const nextClosure = this.closurePeriods.find(p => closeTarget(p) > now);
+    if (nextClosure && (closeTarget(nextClosure) - now) <= CLOSING_SOON_WINDOW_MS) {
+      return 'CLOSING_SOON';
+    }
+    return 'OPEN';
   }
 
   // Get the full state for the API
