@@ -67,9 +67,10 @@
     <div style="font-size:12px;font-weight:600;margin-bottom:6px">Help improve accuracy</div>
     <div style="font-size:11px;color:#94A3B8;margin-bottom:8px">Tap when you see the barriers move:</div>
     <div class="feedback-btns">
-      <button class="fb-btn fb-closed" onclick="sendFeedback('closing')">Barriers Closing Now</button>
-      <button class="fb-btn fb-open" onclick="sendFeedback('opening')">Barriers Opening Now</button>
+      <button class="fb-btn fb-closed" onclick="openFeedbackPicker('closing')">Barriers Closing Now</button>
+      <button class="fb-btn fb-open" onclick="openFeedbackPicker('opening')">Barriers Opening Now</button>
     </div>
+    <div class="fb-picker hidden" id="fbPicker"></div>
     <div class="fb-msg hidden" id="fbMsg"></div>
   </div>
 

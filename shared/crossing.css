@@ -33,6 +33,21 @@ body{background:#0F172A;color:#E2E8F0;font-family:-apple-system,BlinkMacSystemFo
 .fb-open{background:#064E3B;color:#6EE7B7}
 .fb-closed{background:#7F1D1D;color:#FCA5A5}
 .fb-msg{font-size:11px;color:#6EE7B7;text-align:center;margin-top:8px}
+/* Feedback train picker (inline) */
+.fb-picker{margin-top:10px;border-top:1px solid #334155;padding-top:10px}
+.fb-picker-hdr{font-size:13px;font-weight:700;color:#E2E8F0;margin-bottom:2px}
+.fb-picker-sub{font-size:11px;color:#94A3B8;margin-bottom:10px}
+.fb-cands{display:flex;flex-direction:column;gap:8px}
+.fb-cand{width:100%;text-align:left;background:#1E293B;border:1px solid #334155;border-radius:8px;padding:9px 11px;cursor:pointer;color:#E2E8F0;position:relative}
+.fb-cand:active{background:#334155}
+.fb-cand-guess{border-color:#F59E0B;box-shadow:0 0 0 1px #F59E0B inset;padding-top:22px}
+.fb-guess-tag{position:absolute;top:0;left:0;background:#F59E0B;color:#000;font-size:9px;font-weight:700;letter-spacing:.04em;padding:2px 8px;border-radius:8px 0 8px 0}
+.fb-cand-route{font-size:13px;font-weight:600}
+.fb-cand-meta{font-size:11px;color:#94A3B8;margin-top:2px}
+.fb-cand-pos{font-size:11px;color:#38BDF8;margin-top:3px;font-weight:600}
+.fb-notsure{width:100%;margin-top:10px;padding:9px;border-radius:8px;border:1px solid #334155;background:transparent;color:#94A3B8;font-size:12px;font-weight:600;cursor:pointer}
+.fb-notsure:active{background:#334155}
+.fb-none{font-size:11px;color:#94A3B8;padding:6px 0}
 .setup-row{display:flex;gap:8px;margin-bottom:8px}
 .setup-btn{flex:1;padding:10px;border-radius:8px;border:1px solid #334155;background:#1E293B;color:#E2E8F0;font-size:11px;font-weight:600;text-align:center;cursor:pointer;display:flex;align-items:center;justify-content:center;min-height:42px}
 .setup-btn:active{background:#334155}

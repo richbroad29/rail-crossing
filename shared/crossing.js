@@ -476,44 +476,195 @@ function renderDebugPanel() {
   panel.innerHTML = html;
 }
 
-function sendFeedback(state) {
-  var now = new Date();
-  var currentStatus = $('statusTitle').textContent;
-  var lastTrain = lastPassedTrain;
-  var nextTrain = null;
-  var allTrains = trainHistory.length > 0 ? trainHistory : trains;
-  for (var i = 0; i < allTrains.length; i++) {
-    if (allTrains[i].bestTime > now && !nextTrain) nextTrain = allTrains[i];
-  }
-  var payload = {
-    timestamp: now.toISOString(),
-    crossing: crossingId,
-    crossingName: CFG.name,
-    event: state,
-    predicted: currentStatus,
-    lastTrainTime: lastTrain ? fmtShort(lastTrain.bestTime) : '',
-    lastTrainDirection: lastTrain ? lastTrain.direction : '',
-    lastTrainRoute: lastTrain ? (lastTrain.origin + ' > ' + lastTrain.destination) : '',
-    lastTrainSecsAgo: lastTrain ? Math.round((now - lastTrain.bestTime) / 1000) : '',
-    nextTrainTime: nextTrain ? fmtShort(nextTrain.bestTime) : '',
-    nextTrainDirection: nextTrain ? nextTrain.direction : '',
-    nextTrainRoute: nextTrain ? (nextTrain.origin + ' > ' + nextTrain.destination) : '',
-    nextTrainSecsAway: nextTrain ? Math.round((nextTrain.bestTime - now) / 1000) : ''
+// ============================================================================
+// Barrier feedback — train picker.
+// Tapping "Closing/Opening now" FREEZES the event moment (timestamp + a snapshot
+// of every live train's position/times), then asks which train caused it.
+// Positions keep updating live for identification, but the DATA recorded is the
+// event-moment snapshot. Berth topology + time-to-crossing are ported from the
+// observer app's 28-day TD derivation (Portslade-specific).
+// ============================================================================
+var FB_CHAIN = {
+  east: [
+    { b:'0016', gap:132, ttc:671 }, { b:'0014', gap:74, ttc:537 }, { b:'0012', gap:37, ttc:462 },
+    { b:'0010', gap:143, ttc:422 }, { b:'0008', gap:75, ttc:278 },
+    { b:'0006', gap:142, role:'approach', ttc:206 }, { b:'0004', gap:79, role:'protecting', ttc:64 },
+    { x:true }, { b:'0002', gap:115, role:'clear' }, { b:'T686', gap:53 }, { b:'T684' }
+  ],
+  west: [
+    { b:'T682', gap:90 }, { b:'T677', gap:126, ttc:336 }, { b:'0001', gap:45, ttc:201 },
+    { b:'0003', gap:36, role:'approach', ttc:152 }, { b:'0005', gap:115, role:'protecting', ttc:115 },
+    { x:true }, { b:'0007', gap:43, role:'clear' }, { b:'0009', gap:70 }, { b:'0011', gap:140 },
+    { b:'0013', gap:144 }, { b:'0015', gap:84 }, { b:'0017' }
+  ]
+};
+var FB_IN = {};
+Object.keys(FB_CHAIN).forEach(function(d){
+  var idx = {}, xi = -1;
+  FB_CHAIN[d].forEach(function(n,i){ if(n.x) xi = i; else idx[n.b] = i; });
+  FB_IN[d] = { idx:idx, xi:xi };
+});
+function fbTrainKind(hc){ if(!hc) return 'passenger'; var c=hc.charAt(0); if(c==='6'||c==='7') return 'freight'; if(c==='5') return 'ecs'; if(c==='3') return 'test'; return 'passenger'; }
+function fbArrow(d){ return d==='east'?'▶':d==='west'?'◀':'·'; }
+function fbMins(s){ return '~'+Math.max(1, Math.round(s/60))+' min'; }
+function fbEtaToXing(d,i){ var c=FB_IN[d]; if(i<0||i>=c.xi) return 0; var s=0; for(var j=i;j<c.xi;j++){ s+=(FB_CHAIN[d][j].gap||60); } return s; }
+function fbEsc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+// Layman position for a berth+direction. null → off the Portslade chain.
+function fbProximity(berth, direction){
+  var c = FB_IN[direction]; if(!c) return null;
+  var i = c.idx[berth]; if(i===undefined) return null;
+  if(i > c.xi) return { stage:'passed', label:'Just passed the crossing', etaSecs:null, rank:9999 };
+  var node = FB_CHAIN[direction][i];
+  var eta = (node.ttc != null) ? node.ttc : fbEtaToXing(direction,i);
+  var label = eta<=75 ? 'About to pass the crossing' : 'Approaching ('+fbMins(eta)+')';
+  return { stage:'approach', label:label, etaSecs:eta, rank:eta };
+}
+// Scheduled + live Portslade time for a headcode, joined from the closure trains.
+function fbTimes(hc){
+  var pool = trainHistory.length ? trainHistory : trains;
+  for(var i=0;i<pool.length;i++){ if(pool[i].headcode===hc) return { sched: pool[i].scheduledTime||null, live: pool[i].bestTime||null }; }
+  return { sched:null, live:null };
+}
+function fbEnrich(lt){
+  var tm = fbTimes(lt.headcode);
+  var prox = fbProximity(lt.berth, lt.direction);
+  // Recent berth-strike history for this train (server-provided; each { berth, ts }).
+  // Captured as-of the event snapshot for calibration; empty until the backend ships it.
+  var strikes = (lt.history || []).map(function(h){ return { berth:h.berth||h.to||'', ts:h.ts||'', event:h.event||'' }; });
+  return {
+    headcode: lt.headcode, direction: lt.direction||'',
+    route: (lt.origin||'?')+' → '+(lt.destination||'?'),
+    type: fbTrainKind(lt.headcode), berth: lt.berth||'', ageSecs: lt.ageSecs||0,
+    prox: prox, posLabel: prox?prox.label:'Elsewhere in the area',
+    // Four Portslade times from the live feed (backend-provided; HH:MM): scheduled &
+    // live (estimated) arrival & departure. Blank until the backend ships them — the
+    // single closure-join time (schedStr/liveStr) is a display fallback.
+    schedArr: lt.schedArr||'', schedDep: lt.schedDep||'', liveArr: lt.liveArr||'', liveDep: lt.liveDep||'',
+    schedStr: tm.sched?fmtShort(tm.sched):'', liveStr: tm.live?fmtShort(tm.live):'',
+    strikes: strikes
   };
-  $('fbMsg').textContent = 'Sending...';
-  $('fbMsg').classList.remove('hidden');
-  fetch(CFG.feedbackUrl, {
-    method: 'POST', mode: 'no-cors',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(payload)
-  }).then(function() {
-    var label = state === 'closing' ? 'barriers closing' : 'barriers opening';
-    $('fbMsg').textContent = 'Thanks! Recorded ' + label + ' at ' + fmtShort(now) + '.';
-    setTimeout(function() { $('fbMsg').classList.add('hidden'); }, 5000);
-  }).catch(function() {
-    $('fbMsg').textContent = 'Thanks! Feedback noted (offline).';
-    setTimeout(function() { $('fbMsg').classList.add('hidden'); }, 5000);
+}
+function fetchLive(){
+  return fetch(API_BASE+'/crossing/'+crossingId+'/live')
+    .then(function(r){ return r.ok ? r.json() : { trains:[] }; })
+    .then(function(d){ return d.trains || []; })
+    .catch(function(){ return []; });
+}
+// Pick the app's best-guess train: opening → the just-passed train; else the
+// nearest approaching one.
+function fbSuggest(type, enriched){
+  if(type==='opening'){
+    var passed = enriched.filter(function(t){ return t.prox && t.prox.stage==='passed'; });
+    if(passed.length){ passed.sort(function(a,b){ return a.ageSecs-b.ageSecs; }); return passed[0]; }
+  }
+  var appr = enriched.filter(function(t){ return t.prox && t.prox.stage==='approach'; });
+  appr.sort(function(a,b){ return a.prox.rank-b.prox.rank; });
+  return appr[0] || null;
+}
+function fbSortKey(type, t){
+  if(!t.prox) return 100000 + (t.ageSecs||0);                          // off-chain: last
+  if(t.prox.stage==='passed') return (type==='opening') ? (t.ageSecs||0) : 90000+(t.ageSecs||0);
+  return t.prox.rank;                                                  // approaching: by eta
+}
+
+var fbEvent = null;      // frozen event snapshot { type, tsISO, predictedState, snapshot, order, guess }
+var fbLivePos = {};      // headcode -> latest { posLabel } for live display only
+var fbPollTimer = null;
+
+function openFeedbackPicker(type){
+  fetchLive().then(function(live){
+    var enriched = live.map(fbEnrich);
+    var order = enriched.slice().sort(function(a,b){ return fbSortKey(type,a)-fbSortKey(type,b); }).map(function(t){ return t.headcode; });
+    var guess = fbSuggest(type, enriched);
+    if(guess){ order = order.filter(function(h){ return h!==guess.headcode; }); order.unshift(guess.headcode); }
+    var snap = {}; enriched.forEach(function(t){ snap[t.headcode] = t; });
+    fbEvent = { type:type, tsISO:new Date().toISOString(), predictedState:$('statusTitle').textContent, snapshot:snap, order:order, guess:guess };
+    fbLivePos = {}; enriched.forEach(function(t){ fbLivePos[t.headcode] = { posLabel:t.posLabel }; });
+    $('fbMsg').classList.add('hidden');
+    renderFbPicker();
+    $('fbPicker').classList.remove('hidden');
+    if(fbPollTimer) clearInterval(fbPollTimer);
+    fbPollTimer = setInterval(fbPollLive, 2500);
   });
+}
+function fbPollLive(){
+  if(!fbEvent){ if(fbPollTimer){ clearInterval(fbPollTimer); fbPollTimer=null; } return; }
+  fetchLive().then(function(live){
+    live.forEach(function(lt){ var p=fbProximity(lt.berth, lt.direction); fbLivePos[lt.headcode] = { posLabel: p?p.label:'Elsewhere in the area' }; });
+    renderFbPicker();
+  });
+}
+function fbMinOf(hhmm){ var m=/^(\d{1,2}):(\d{2})/.exec(hhmm||''); return m ? (parseInt(m[1],10)*60 + parseInt(m[2],10)) : null; }
+// Direction-appropriate display: westbound shows departure, eastbound arrival
+// (with lateness vs schedule). Falls back to the single closure-join time.
+function fbTimeStr(t){
+  var isWest = t.direction==='west';
+  var live = isWest ? t.liveDep : t.liveArr;
+  var sched = isWest ? t.schedDep : t.schedArr;
+  var word = isWest ? 'Departs' : 'Arrives';
+  if(live || sched){
+    var main = live || sched, tag = '';
+    var lm = fbMinOf(live), sm = fbMinOf(sched);
+    if(lm!=null && sm!=null){ var d = lm - sm; tag = d===0 ? ' (on time)' : (' ('+Math.abs(d)+' min '+(d>0?'late':'early')+')'); }
+    return word+' ~'+main+tag;
+  }
+  if(t.liveStr || t.schedStr) return 'Due ~'+(t.liveStr||t.schedStr);
+  return 'Time unknown';
+}
+function fbCardHtml(hc, isGuess){
+  var t = fbEvent.snapshot[hc]; if(!t) return '';
+  var pos = (fbLivePos[hc] && fbLivePos[hc].posLabel) || t.posLabel;
+  var typeTag = t.type==='freight'?'Freight · ':t.type==='ecs'?'Empty train · ':'';
+  return '<button class="fb-cand'+(isGuess?' fb-cand-guess':'')+'" onclick="fbSubmit(\''+hc+'\')">'+
+    (isGuess?'<div class="fb-guess-tag">Our guess</div>':'')+
+    '<div class="fb-cand-route">'+fbArrow(t.direction)+' '+fbEsc(typeTag+t.route)+'</div>'+
+    '<div class="fb-cand-meta">'+fbEsc(fbTimeStr(t))+'</div>'+
+    '<div class="fb-cand-pos">'+fbEsc(pos)+'</div>'+
+    '</button>';
+}
+function renderFbPicker(){
+  if(!fbEvent) return;
+  var verb = fbEvent.type==='closing' ? 'closing' : 'opening';
+  var order = fbEvent.order.slice(0, 6);
+  var cards = order.map(function(hc){ return fbCardHtml(hc, fbEvent.guess && hc===fbEvent.guess.headcode); }).join('');
+  if(!cards) cards = '<div class="fb-none">No trains detected nearby right now — tap below to just log the time.</div>';
+  $('fbPicker').innerHTML =
+    '<div class="fb-picker-hdr">Which train is '+verb+' the barrier?</div>'+
+    '<div class="fb-picker-sub">Tap the train you can see — it helps us learn the exact timings.</div>'+
+    '<div class="fb-cands">'+cards+'</div>'+
+    '<button class="fb-notsure" onclick="fbSubmit(null)">Not sure / no train visible</button>';
+}
+function fbSubmit(hc){
+  var e = fbEvent; if(!e) return;
+  var sel = hc ? e.snapshot[hc] : null;
+  var g = e.guess;
+  var payload = {
+    crossing: crossingId, crossingName: CFG.name,
+    eventTimestamp: e.tsISO, event: e.type, predictedState: e.predictedState,
+    ourGuessHeadcode: g?g.headcode:'', ourGuessRoute: g?g.route:'', ourGuessDirection: g?g.direction:'',
+    ourGuessType: g?g.type:'',
+    ourGuessSchedArr: g?g.schedArr:'', ourGuessSchedDep: g?g.schedDep:'', ourGuessLiveArr: g?g.liveArr:'', ourGuessLiveDep: g?g.liveDep:'',
+    ourGuessPosition: g?g.posLabel:'', ourGuessBerth: g?g.berth:'',
+    ourGuessBerthHistory: g?JSON.stringify(g.strikes||[]):'',
+    submittedAt: new Date().toISOString(),
+    selectedHeadcode: sel?sel.headcode:'', selectedRoute: sel?sel.route:'', selectedDirection: sel?sel.direction:'',
+    selectedType: sel?sel.type:'',
+    selectedSchedArr: sel?sel.schedArr:'', selectedSchedDep: sel?sel.schedDep:'', selectedLiveArr: sel?sel.liveArr:'', selectedLiveDep: sel?sel.liveDep:'',
+    selectedPosition: sel?sel.posLabel:'', selectedBerth: sel?sel.berth:'',
+    selectedBerthHistory: sel?JSON.stringify(sel.strikes||[]):'',
+    wasOurGuess: !!(sel && g && sel.headcode===g.headcode), notSure: !hc
+  };
+  if(fbPollTimer){ clearInterval(fbPollTimer); fbPollTimer = null; }
+  $('fbPicker').classList.add('hidden'); $('fbPicker').innerHTML = '';
+  var when = fmtShort(new Date(e.tsISO));
+  $('fbMsg').textContent = 'Sending...'; $('fbMsg').classList.remove('hidden');
+  fetch(CFG.feedbackUrl, { method:'POST', mode:'no-cors', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload) })
+    .then(function(){ $('fbMsg').textContent = 'Thanks! Recorded the '+e.type+' at '+when+(sel?' ('+sel.route+').':'.'); setTimeout(function(){ $('fbMsg').classList.add('hidden'); }, 6000); fbEvent=null; })
+    .catch(function(){ $('fbMsg').textContent = 'Thanks! Noted (offline).'; setTimeout(function(){ $('fbMsg').classList.add('hidden'); }, 6000); fbEvent=null; });
+}
+function fbCancel(){
+  if(fbPollTimer){ clearInterval(fbPollTimer); fbPollTimer = null; }
+  fbEvent = null; $('fbPicker').classList.add('hidden'); $('fbPicker').innerHTML = '';
 }
 
 function showModal(type) {
