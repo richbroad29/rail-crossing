@@ -32,11 +32,11 @@ body{background:#0F172A;color:#E2E8F0;font-family:-apple-system,BlinkMacSystemFo
 .fb-btn:active{opacity:.7}
 .fb-open{background:#064E3B;color:#6EE7B7}
 .fb-closed{background:#7F1D1D;color:#FCA5A5}
-.fb-msg{font-size:11px;color:#6EE7B7;text-align:center;margin-top:8px;opacity:0;transition:opacity .3s ease}
-.fb-msg.fb-msg-show{opacity:1}
-/* Feedback train picker (inline, blind-style reveal) */
-.fb-picker{max-height:0;opacity:0;overflow:hidden;margin-top:0;transition:max-height .4s ease, opacity .3s ease}
-.fb-picker.fb-open{max-height:460px;opacity:1;margin-top:10px}
+.fb-msg{font-size:11px;color:#6EE7B7;text-align:center;max-height:0;opacity:0;overflow:hidden;margin-top:0;transition:max-height .35s ease, opacity .3s ease, margin-top .35s ease}
+.fb-msg.fb-shown{max-height:60px;opacity:1;margin-top:8px}
+/* Feedback train picker (inline, blind-style reveal). fb-shown NOT fb-open (that's the green button). */
+.fb-picker{max-height:0;opacity:0;overflow:hidden;margin-top:0;transition:max-height .4s ease, opacity .3s ease, margin-top .4s ease}
+.fb-picker.fb-shown{max-height:460px;opacity:1;margin-top:10px}
 .fb-picker-hdr{font-size:13px;font-weight:700;color:#E2E8F0;margin-bottom:2px}
 .fb-picker-sub{font-size:11px;color:#94A3B8;margin-bottom:9px}
 .fb-cands{display:flex;flex-direction:column;gap:7px}

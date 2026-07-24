@@ -570,6 +570,7 @@ function fbSortKey(type, t){
 var fbEvent = null;      // frozen event snapshot { type, tsISO, predictedState, snapshot, order, guess }
 var fbLivePos = {};      // headcode -> latest { posLabel } for live display only
 var fbPollTimer = null;
+var fbMsgTimer = null;
 
 function openFeedbackPicker(type){
   fetchLive().then(function(live){
@@ -580,7 +581,7 @@ function openFeedbackPicker(type){
     var snap = {}; enriched.forEach(function(t){ snap[t.headcode] = t; });
     fbEvent = { type:type, tsISO:new Date().toISOString(), predictedState:$('statusTitle').textContent, snapshot:snap, order:order, guess:guess };
     fbLivePos = {}; enriched.forEach(function(t){ fbLivePos[t.headcode] = { posLabel:t.posLabel }; });
-    var m = $('fbMsg'); m.classList.remove('fb-msg-show'); m.classList.add('hidden');
+    var m = $('fbMsg'); m.classList.remove('fb-shown'); m.classList.add('hidden'); clearTimeout(fbMsgTimer);
     renderFbPicker();
     fbOpenPicker();
     if(fbPollTimer) clearInterval(fbPollTimer);
@@ -661,22 +662,28 @@ function fbSubmit(hc){
     wasOurGuess: !!(sel && g && sel.headcode===g.headcode), notSure: !hc
   };
   if(fbPollTimer){ clearInterval(fbPollTimer); fbPollTimer = null; }
-  fbClosePicker();
+  fbClosePicker();                                // roll the picker up
   var when = fmtShort(new Date(e.tsISO));
-  fbShowMsg('Sending…');
-  fetch(CFG.feedbackUrl, { method:'POST', mode:'no-cors', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload) })
-    .then(function(){ $('fbMsg').textContent = 'Thanks! Recorded the '+e.type+' at '+when+(sel?' ('+sel.route+').':'.'); fbAutoHideMsg(); fbEvent=null; })
-    .catch(function(){ $('fbMsg').textContent = 'Thanks! Noted (offline).'; fbAutoHideMsg(); fbEvent=null; });
+  // Optimistic confirmation (the POST is fire-and-forget no-cors) — reveals as one
+  // blind as the picker collapses; no jarring Sending→Thanks text swap.
+  fbRevealMsg('Thanks! Recorded the '+e.type+' at '+when+(sel?' ('+sel.route+').':'.'));
+  fbEvent = null;
+  fetch(CFG.feedbackUrl, { method:'POST', mode:'no-cors', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload) }).catch(function(){});
 }
 function fbCancel(){
   if(fbPollTimer){ clearInterval(fbPollTimer); fbPollTimer = null; }
   fbEvent = null; fbClosePicker();
 }
-// Blind-style reveal/collapse + fading confirmation, so the whole flow is smooth.
-function fbOpenPicker(){ var p=$('fbPicker'); p.classList.remove('hidden'); void p.offsetHeight; p.classList.add('fb-open'); }
-function fbClosePicker(){ var p=$('fbPicker'); p.classList.remove('fb-open'); setTimeout(function(){ p.classList.add('hidden'); p.innerHTML=''; }, 380); }
-function fbShowMsg(txt){ var m=$('fbMsg'); m.textContent=txt; m.classList.remove('hidden'); void m.offsetHeight; m.classList.add('fb-msg-show'); }
-function fbAutoHideMsg(){ setTimeout(function(){ var m=$('fbMsg'); m.classList.remove('fb-msg-show'); setTimeout(function(){ m.classList.add('hidden'); }, 320); }, 6000); }
+// Blind-style reveal/collapse for BOTH the picker and the confirmation, so the whole
+// flow is one smooth motion. (fb-shown, NOT fb-open — fb-open is the green "Barriers
+// Opening Now" button class.)
+function fbOpenPicker(){ var p=$('fbPicker'); p.classList.remove('hidden'); void p.offsetHeight; p.classList.add('fb-shown'); }
+function fbClosePicker(){ var p=$('fbPicker'); p.classList.remove('fb-shown'); setTimeout(function(){ p.classList.add('hidden'); p.innerHTML=''; }, 400); }
+function fbRevealMsg(txt){
+  var m=$('fbMsg'); m.textContent=txt; m.classList.remove('hidden'); void m.offsetHeight; m.classList.add('fb-shown');
+  clearTimeout(fbMsgTimer);
+  fbMsgTimer = setTimeout(function(){ m.classList.remove('fb-shown'); setTimeout(function(){ m.classList.add('hidden'); }, 360); }, 6000);
+}
 
 function showModal(type) {
   var title = '', body = '';
