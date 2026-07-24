@@ -580,9 +580,9 @@ function openFeedbackPicker(type){
     var snap = {}; enriched.forEach(function(t){ snap[t.headcode] = t; });
     fbEvent = { type:type, tsISO:new Date().toISOString(), predictedState:$('statusTitle').textContent, snapshot:snap, order:order, guess:guess };
     fbLivePos = {}; enriched.forEach(function(t){ fbLivePos[t.headcode] = { posLabel:t.posLabel }; });
-    $('fbMsg').classList.add('hidden');
+    var m = $('fbMsg'); m.classList.remove('fb-msg-show'); m.classList.add('hidden');
     renderFbPicker();
-    $('fbPicker').classList.remove('hidden');
+    fbOpenPicker();
     if(fbPollTimer) clearInterval(fbPollTimer);
     fbPollTimer = setInterval(fbPollLive, 2500);
   });
@@ -595,37 +595,43 @@ function fbPollLive(){
   });
 }
 function fbMinOf(hhmm){ var m=/^(\d{1,2}):(\d{2})/.exec(hhmm||''); return m ? (parseInt(m[1],10)*60 + parseInt(m[2],10)) : null; }
-// Direction-appropriate display: westbound shows departure, eastbound arrival
-// (with lateness vs schedule). Falls back to the single closure-join time.
-function fbTimeStr(t){
+// Direction-appropriate time for the card's right column: westbound departure,
+// eastbound arrival, with a lateness tag vs schedule. Returns { time, tag, cls }.
+function fbTimeParts(t){
   var isWest = t.direction==='west';
   var live = isWest ? t.liveDep : t.liveArr;
   var sched = isWest ? t.schedDep : t.schedArr;
-  var word = isWest ? 'Departs' : 'Arrives';
-  if(live || sched){
-    var main = live || sched, tag = '';
-    var lm = fbMinOf(live), sm = fbMinOf(sched);
-    if(lm!=null && sm!=null){ var d = lm - sm; tag = d===0 ? ' (on time)' : (' ('+Math.abs(d)+' min '+(d>0?'late':'early')+')'); }
-    return word+' ~'+main+tag;
+  var time = live || sched || t.liveStr || t.schedStr || '';
+  if(!time) return { time:'', tag:'', cls:'' };
+  var lm = fbMinOf(live), sm = fbMinOf(sched);
+  if(lm!=null && sm!=null){
+    var d = lm - sm;
+    if(d===0) return { time:time, tag:'on time', cls:'fb-on' };
+    return { time:time, tag:Math.abs(d)+'m '+(d>0?'late':'early'), cls:'fb-late' };
   }
-  if(t.liveStr || t.schedStr) return 'Due ~'+(t.liveStr||t.schedStr);
-  return 'Time unknown';
+  return { time:time, tag:'', cls:'' };
 }
 function fbCardHtml(hc, isGuess){
   var t = fbEvent.snapshot[hc]; if(!t) return '';
   var pos = (fbLivePos[hc] && fbLivePos[hc].posLabel) || t.posLabel;
-  var typeTag = t.type==='freight'?'Freight · ':t.type==='ecs'?'Empty train · ':'';
+  var typeTag = t.type==='freight'?'Freight · ':t.type==='ecs'?'Empty · ':'';
+  var tm = fbTimeParts(t);
+  var timeHtml = tm.time
+    ? '<span class="fb-cand-time">'+fbEsc(tm.time)+(tm.tag?'<span class="fb-cand-late '+tm.cls+'">'+fbEsc(tm.tag)+'</span>':'')+'</span>'
+    : '<span class="fb-cand-time fb-cand-tunk">–</span>';
   return '<button class="fb-cand'+(isGuess?' fb-cand-guess':'')+'" onclick="fbSubmit(\''+hc+'\')">'+
     (isGuess?'<div class="fb-guess-tag">Our guess</div>':'')+
-    '<div class="fb-cand-route">'+fbArrow(t.direction)+' '+fbEsc(typeTag+t.route)+'</div>'+
-    '<div class="fb-cand-meta">'+fbEsc(fbTimeStr(t))+'</div>'+
+    '<div class="fb-cand-top">'+
+      '<span class="fb-cand-route">'+fbArrow(t.direction)+' '+fbEsc(typeTag+t.route)+'</span>'+
+      timeHtml+
+    '</div>'+
     '<div class="fb-cand-pos">'+fbEsc(pos)+'</div>'+
     '</button>';
 }
 function renderFbPicker(){
   if(!fbEvent) return;
   var verb = fbEvent.type==='closing' ? 'closing' : 'opening';
-  var order = fbEvent.order.slice(0, 6);
+  var order = fbEvent.order.slice(0, 3);
   var cards = order.map(function(hc){ return fbCardHtml(hc, fbEvent.guess && hc===fbEvent.guess.headcode); }).join('');
   if(!cards) cards = '<div class="fb-none">No trains detected nearby right now — tap below to just log the time.</div>';
   $('fbPicker').innerHTML =
@@ -655,17 +661,22 @@ function fbSubmit(hc){
     wasOurGuess: !!(sel && g && sel.headcode===g.headcode), notSure: !hc
   };
   if(fbPollTimer){ clearInterval(fbPollTimer); fbPollTimer = null; }
-  $('fbPicker').classList.add('hidden'); $('fbPicker').innerHTML = '';
+  fbClosePicker();
   var when = fmtShort(new Date(e.tsISO));
-  $('fbMsg').textContent = 'Sending...'; $('fbMsg').classList.remove('hidden');
+  fbShowMsg('Sending…');
   fetch(CFG.feedbackUrl, { method:'POST', mode:'no-cors', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload) })
-    .then(function(){ $('fbMsg').textContent = 'Thanks! Recorded the '+e.type+' at '+when+(sel?' ('+sel.route+').':'.'); setTimeout(function(){ $('fbMsg').classList.add('hidden'); }, 6000); fbEvent=null; })
-    .catch(function(){ $('fbMsg').textContent = 'Thanks! Noted (offline).'; setTimeout(function(){ $('fbMsg').classList.add('hidden'); }, 6000); fbEvent=null; });
+    .then(function(){ $('fbMsg').textContent = 'Thanks! Recorded the '+e.type+' at '+when+(sel?' ('+sel.route+').':'.'); fbAutoHideMsg(); fbEvent=null; })
+    .catch(function(){ $('fbMsg').textContent = 'Thanks! Noted (offline).'; fbAutoHideMsg(); fbEvent=null; });
 }
 function fbCancel(){
   if(fbPollTimer){ clearInterval(fbPollTimer); fbPollTimer = null; }
-  fbEvent = null; $('fbPicker').classList.add('hidden'); $('fbPicker').innerHTML = '';
+  fbEvent = null; fbClosePicker();
 }
+// Blind-style reveal/collapse + fading confirmation, so the whole flow is smooth.
+function fbOpenPicker(){ var p=$('fbPicker'); p.classList.remove('hidden'); void p.offsetHeight; p.classList.add('fb-open'); }
+function fbClosePicker(){ var p=$('fbPicker'); p.classList.remove('fb-open'); setTimeout(function(){ p.classList.add('hidden'); p.innerHTML=''; }, 380); }
+function fbShowMsg(txt){ var m=$('fbMsg'); m.textContent=txt; m.classList.remove('hidden'); void m.offsetHeight; m.classList.add('fb-msg-show'); }
+function fbAutoHideMsg(){ setTimeout(function(){ var m=$('fbMsg'); m.classList.remove('fb-msg-show'); setTimeout(function(){ m.classList.add('hidden'); }, 320); }, 6000); }
 
 function showModal(type) {
   var title = '', body = '';
