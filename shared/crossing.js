@@ -539,7 +539,10 @@ function fbEnrich(lt){
     // Four Portslade times from the live feed (backend-provided; HH:MM): scheduled &
     // live (estimated) arrival & departure. Blank until the backend ships them — the
     // single closure-join time (schedStr/liveStr) is a display fallback.
-    schedArr: lt.schedArr||'', schedDep: lt.schedDep||'', liveArr: lt.liveArr||'', liveDep: lt.liveDep||'',
+    schedArr: fbHHMM(lt.schedArr), schedDep: fbHHMM(lt.schedDep),
+    // live = best estimate as HH:MM, falling back to scheduled when the feed gives no
+    // separate estimate (so the live columns are never blank when scheduled is known).
+    liveArr: fbHHMM(lt.liveArr) || fbHHMM(lt.schedArr), liveDep: fbHHMM(lt.liveDep) || fbHHMM(lt.schedDep),
     schedStr: tm.sched?fmtShort(tm.sched):'', liveStr: tm.live?fmtShort(tm.live):'',
     strikes: strikes
   };
@@ -573,19 +576,21 @@ var fbPollTimer = null;
 var fbMsgTimer = null;
 
 function openFeedbackPicker(type){
+  var tsISO = new Date().toISOString();   // freeze the event moment at the tap, before the fetch
   fetchLive().then(function(live){
     var enriched = live.map(fbEnrich);
     var order = enriched.slice().sort(function(a,b){ return fbSortKey(type,a)-fbSortKey(type,b); }).map(function(t){ return t.headcode; });
     var guess = fbSuggest(type, enriched);
     if(guess){ order = order.filter(function(h){ return h!==guess.headcode; }); order.unshift(guess.headcode); }
     var snap = {}; enriched.forEach(function(t){ snap[t.headcode] = t; });
-    fbEvent = { type:type, tsISO:new Date().toISOString(), predictedState:$('statusTitle').textContent, snapshot:snap, order:order, guess:guess };
+    fbEvent = { eventId: tsISO+'-'+Math.random().toString(36).slice(2,7), type:type, tsISO:tsISO, predictedState:$('statusTitle').textContent, snapshot:snap, order:order, guess:guess };
     fbLivePos = {}; enriched.forEach(function(t){ fbLivePos[t.headcode] = { posLabel:t.posLabel }; });
     var m = $('fbMsg'); m.classList.remove('fb-shown'); m.classList.add('hidden'); clearTimeout(fbMsgTimer);
     renderFbPicker();
     fbOpenPicker();
     if(fbPollTimer) clearInterval(fbPollTimer);
     fbPollTimer = setInterval(fbPollLive, 2500);
+    fbPost(fbBuildPayload(null, false));  // capture the event at button-tap, even if never completed
   });
 }
 function fbPollLive(){
@@ -596,6 +601,8 @@ function fbPollLive(){
   });
 }
 function fbMinOf(hhmm){ var m=/^(\d{1,2}):(\d{2})/.exec(hhmm||''); return m ? (parseInt(m[1],10)*60 + parseInt(m[2],10)) : null; }
+// Extract HH:MM from a feed time (full ISO like 2026-07-24T08:29:00, or already HH:MM).
+function fbHHMM(t){ if(!t) return ''; var m=String(t).match(/(\d{2}):(\d{2})/); return m?m[0]:''; }
 // Direction-appropriate time for the card's right column: westbound departure,
 // eastbound arrival, with a lateness tag vs schedule. Returns { time, tag, cls }.
 function fbTimeParts(t){
@@ -641,11 +648,15 @@ function renderFbPicker(){
     '<div class="fb-cands">'+cards+'</div>'+
     '<button class="fb-notsure" onclick="fbSubmit(null)">Not sure / no train visible</button>';
 }
-function fbSubmit(hc){
-  var e = fbEvent; if(!e) return;
+// Build the feedback payload. Shared by the button-tap capture (completed=false, no
+// selection yet) and the final submission (completed=true). eventId ties them to one
+// row so a later selection updates the row already written at button-tap.
+function fbBuildPayload(hc, completed){
+  var e = fbEvent; if(!e) return null;
   var sel = hc ? e.snapshot[hc] : null;
   var g = e.guess;
-  var payload = {
+  return {
+    eventId: e.eventId, completed: !!completed,
     crossing: crossingId, crossingName: CFG.name,
     eventTimestamp: e.tsISO, event: e.type, predictedState: e.predictedState,
     ourGuessHeadcode: g?g.headcode:'', ourGuessRoute: g?g.route:'', ourGuessDirection: g?g.direction:'',
@@ -659,16 +670,24 @@ function fbSubmit(hc){
     selectedSchedArr: sel?sel.schedArr:'', selectedSchedDep: sel?sel.schedDep:'', selectedLiveArr: sel?sel.liveArr:'', selectedLiveDep: sel?sel.liveDep:'',
     selectedPosition: sel?sel.posLabel:'', selectedBerth: sel?sel.berth:'',
     selectedBerthHistory: sel?JSON.stringify(sel.strikes||[]):'',
-    wasOurGuess: !!(sel && g && sel.headcode===g.headcode), notSure: !hc
+    wasOurGuess: !!(sel && g && sel.headcode===g.headcode), notSure: !!(completed && !hc)
   };
+}
+function fbPost(payload){
+  if(!payload) return;
+  fetch(CFG.feedbackUrl, { method:'POST', mode:'no-cors', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload) }).catch(function(){});
+}
+function fbSubmit(hc){
+  var e = fbEvent; if(!e) return;
+  var payload = fbBuildPayload(hc, true);         // completed — updates the button-tap row by eventId
+  var sel = hc ? e.snapshot[hc] : null;
   if(fbPollTimer){ clearInterval(fbPollTimer); fbPollTimer = null; }
   fbClosePicker();                                // roll the picker up
   var when = fmtShort(new Date(e.tsISO));
-  // Optimistic confirmation (the POST is fire-and-forget no-cors) — reveals as one
-  // blind as the picker collapses; no jarring Sending→Thanks text swap.
+  // Optimistic confirmation — reveals as one blind as the picker collapses.
   fbRevealMsg('Thanks! Recorded the '+e.type+' at '+when+(sel?' ('+sel.route+').':'.'));
   fbEvent = null;
-  fetch(CFG.feedbackUrl, { method:'POST', mode:'no-cors', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload) }).catch(function(){});
+  fbPost(payload);
 }
 function fbCancel(){
   if(fbPollTimer){ clearInterval(fbPollTimer); fbPollTimer = null; }
