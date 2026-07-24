@@ -92,6 +92,37 @@ console.log('\nB1 — live-position map\n');
   check('lastSeen is the later step', t && t.lastSeen, BASE + 1000);
 }
 
+// Berth-strike history accumulates (deduped, ordered, ISO ts) and surfaces on the
+// live train; the four LDB times (schedArr/schedDep/liveArr/liveDep) pass through the join.
+{
+  const s = new CrossingState('portslade', cfg);
+  s.ldbTrains = [{ headcode: '2W20', direction: 'west', origin: 'BRIGHTON', destination: 'SOUTHAMPTON',
+                   schedArr: '20:18', schedDep: '20:20', liveArr: '20:20', liveDep: '20:22' }];
+  s.recordTdBerth({ headcode: '2W20', ts: BASE, event: 'CA', from: 'T677', to: '0001' });
+  s.recordTdBerth({ headcode: '2W20', ts: BASE + 1000, event: 'CA', from: '0001', to: '0001' }); // dup berth → ignored
+  s.recordTdBerth({ headcode: '2W20', ts: BASE + 2000, event: 'CA', from: '0001', to: '0003' });
+  const t = s.getLiveTrains(BASE + 2000).find(x => x.headcode === '2W20');
+
+  checkTruthy('history present as array', t && Array.isArray(t.history));
+  check('history deduped to 2 strikes', t && t.history.length, 2);
+  check('history[0] berth', t && t.history[0].berth, '0001');
+  check('history[0] ts is ISO of the strike', t && t.history[0].ts, new Date(BASE).toISOString());
+  check('history[1] berth (latest)', t && t.history[1].berth, '0003');
+  check('schedArr passes through from LDB join', t && t.schedArr, '20:18');
+  check('schedDep passes through', t && t.schedDep, '20:20');
+  check('liveArr passes through', t && t.liveArr, '20:20');
+  check('liveDep passes through', t && t.liveDep, '20:22');
+}
+
+// No LDB/CIF match → the four times are null; history still present.
+{
+  const s = new CrossingState('portslade', cfg);
+  s.recordTdBerth({ headcode: '9Z99', ts: BASE, event: 'CB', from: 'A010', to: 'A035' });
+  const t = s.getLiveTrains(BASE).find(x => x.headcode === '9Z99');
+  check('unmatched train: schedDep null', t && t.schedDep, null);
+  check('unmatched train: history is an array', t && Array.isArray(t.history), true);
+}
+
 // Endpoint shape over real HTTP.
 (async () => {
   const s = freshState();

@@ -105,6 +105,14 @@ function parseTime(timeStr) {
 
 // ---- Common train extraction logic ----
 
+// Resolve an LDB estimate to an HH:MM string: an explicit estimate wins; "On time"
+// ⇒ the scheduled time; "Delayed"/absent ⇒ blank (don't fabricate a time).
+function liveOf(sched, est) {
+  if (est && est.includes(':')) return est;
+  if (est === 'On time') return sched || '';
+  return '';
+}
+
 function extractTrain(sta, eta, std, etd, origin, dest, operator, trainid, source = 'ldbsv', uid = null) {
   const direction = isEastOrigin(origin) ? 'west' : 'east';
 
@@ -151,6 +159,12 @@ function extractTrain(sta, eta, std, etd, origin, dest, operator, trainid, sourc
     uid,
     trainType,
     source,
+    // Raw four-way Portslade times (HH:MM) for the feedback picker's calibration
+    // capture: scheduled & live (estimated) arrival & departure, straight from LDB.
+    schedArr: sta || '',
+    schedDep: std || '',
+    liveArr: liveOf(sta, eta),
+    liveDep: liveOf(std, etd),
     dedupKey: `${sch || ''}|${dest}`
   };
 }

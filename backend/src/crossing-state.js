@@ -47,6 +47,9 @@ const CLEAR_STEP_TTL_MS = 20 * 60 * 1000;
 // START, so recording one recomputes. Recorded strikes expire after this TTL so a
 // headcode reused later in the day can't match a stale approach from earlier on.
 const CLOSE_STRIKE_TTL_MS = 20 * 60 * 1000;
+// Max berth-strike steps retained per train in the B1 live map (feeds the feedback
+// picker's calibration capture). Bounded so a long-dwelling headcode can't grow it.
+const BERTH_HISTORY_MAX = 30;
 // While a TD-sighted train has NOT yet performed its clear step, the closure must
 // never end (the train hasn't physically cleared). Its end is floored this far into
 // the future so the barrier stays closed/pending until the real clear step lands.
@@ -124,11 +127,22 @@ class CrossingState {
     if (!evt || !evt.headcode) return;
     const ms = evt.ts ? new Date(evt.ts).getTime() : Date.now();
     if (!Number.isFinite(ms)) return;
+    const berth = evt.to || null;
+    // Accumulate a per-train berth-strike history (each new berth = one strike;
+    // consecutive same-berth events are deduped). Bounded, carried on the live-map
+    // entry, and dropped with the train when it is TTL-pruned from getLiveTrains.
+    const prev = this.liveTrains.get(evt.headcode);
+    let history = prev && prev.history ? prev.history : [];
+    if (berth && (history.length === 0 || history[history.length - 1].berth !== berth)) {
+      history = history.concat([{ berth, ts: new Date(ms).toISOString(), event: evt.event || null }]);
+      if (history.length > BERTH_HISTORY_MAX) history = history.slice(history.length - BERTH_HISTORY_MAX);
+    }
     this.liveTrains.set(evt.headcode, {
-      berth: evt.to || null,        // the berth the train just stepped INTO
+      berth,                        // the berth the train just stepped INTO
       fromBerth: evt.from || null,
       event: evt.event || null,
-      lastSeen: ms
+      lastSeen: ms,
+      history
     });
   }
 
@@ -234,6 +248,13 @@ class CrossingState {
         stopping: onBoard ? true : 'unknown',
         origin: match ? (match.origin || null) : null,
         destination: match ? (match.destination || null) : null,
+        // Four Portslade times (LDB sta/std/eta/etd, HH:MM) from the matched known
+        // train, and the recent berth-strike history — both feed the feedback picker.
+        schedArr: match ? (match.schedArr || null) : null,
+        schedDep: match ? (match.schedDep || null) : null,
+        liveArr: match ? (match.liveArr || null) : null,
+        liveDep: match ? (match.liveDep || null) : null,
+        history: (t.history || []).map(h => ({ berth: h.berth, ts: h.ts, event: h.event })),
         lastSeen: t.lastSeen,
         ageSecs: Math.round((now - t.lastSeen) / 1000)
       });
