@@ -520,6 +520,90 @@ console.log('  -- gated state (confirmed start / predicted countdown) --');
   check('close computed off LIVE bestTime, not scheduledTime', p.predictedStart, iso(BASE + 420000));
 }
 
+// ---- Clear-step-aware merge key (_openPred) ------------------------------
+// Regression for the live 2026-07-25 19:08 incident: 1S27 (east) physically cleared
+// the crossing at 19:07:39, but its LDB arrival estimate kept drifting later, so its
+// bestTime-based openPred (19:10:30) dragged the following westbound 2Y62 into the
+// same period — the app showed one continuous 4m40s closure across a gap where the
+// barrier had really lifted (2m03s of false barriers-down).
+console.log('  -- clear-step-aware merge key --');
+
+const mergeClearCfg = {
+  ...closeCfg,
+  timing: { ...closeCfg.timing, openLagSecs: { east: { passenger: 45, freight: 70 }, west: { passenger: 18, freight: 30 } } }
+};
+
+{
+  // BASE = the moment 1S27 cleared. Offsets are the real ones from the incident.
+  const clearTs = BASE;
+  const state = new CrossingState('t', mergeClearCfg);
+  state.closeStrikeSeen.set('1S27', { ts: clearTs - 212000, direction: 'east' }); // 0006 at 19:04:07
+  state.clearStepSeen.set('1S27', { ts: clearTs, direction: 'east' });            // 0004→0002 19:07:39
+  const east = mkT({ dir: 'east', headcode: '1S27', bestTimeMs: clearTs + 141000 }); // stale 19:10:00
+  const west = mkT({ dir: 'west', headcode: '2Y62', bestTimeMs: clearTs + 186000 }); // 19:10:45
+  const periods = state._computeClosures([east, west], new Date(clearTs + 46000));   // now = 19:08:25
+
+  check('cleared train no longer merges the follower: 2 periods, not 1', periods.length, 2);
+  check('period 1 (1S27) ends at its clear step + 45s', periods[0].end, iso(clearTs + 45000));
+  check('period 1 holds only the cleared train', periods[0].trains.map(t => t.headcode).join(), '1S27');
+  check('period 2 (2Y62) starts on its own dep − 45s', periods[1].predictedStart, iso(clearTs + 141000));
+
+  // The same inputs WITHOUT a recorded clear step must still merge — proving the split
+  // above comes from the clear step, not from some unrelated change to the gap maths.
+  const naive = new CrossingState('t', mergeClearCfg);
+  naive.closeStrikeSeen.set('1S27', { ts: clearTs - 212000, direction: 'east' });
+  const merged = naive._computeClosures([east, west], new Date(clearTs + 46000));
+  check('same inputs with no clear step recorded: still one merged period', merged.length, 1);
+}
+
+{
+  // Safety property: an INTERMEDIATE train's clear step must never shorten a period.
+  // Both trains cleared, but the period must run to the LATER of the two ends.
+  const clearTs = BASE;
+  const state = new CrossingState('t', mergeClearCfg);
+  state.clearStepSeen.set('1A20', { ts: clearTs, direction: 'east' });
+  state.clearStepSeen.set('1A21', { ts: clearTs + 90000, direction: 'east' });
+  const a = mkT({ dir: 'east', headcode: '1A20', bestTimeMs: clearTs + 5000 });
+  const b = mkT({ dir: 'east', headcode: '1A21', bestTimeMs: clearTs + 10000 });
+  const periods = state._computeClosures([a, b], new Date(clearTs + 95000));
+  check('merged period ends on the LAST train\'s clear step, not the first',
+    periods[periods.length - 1].end, iso(clearTs + 90000 + 45000));
+}
+
+// ---- CIF calling-pattern classification (_isStopping) --------------------
+// A CIF-sourced passenger service beyond the ~2h LDB window used to be treated as
+// non-stopping simply because it wasn't on the board. schedule-parser now supplies
+// callsAtStation, so it can be classified from the schedule instead.
+console.log('  -- CIF calling-pattern classification --');
+
+{
+  const cif = (o) => ({ ...mkT({ ...o, source: 'cif' }), callsAtStation: o.callsAtStation });
+
+  // East: a CIF passenger that CALLS gets stoppingSecs (100), not otherSecs (80).
+  const calls = periodFor(closeCfg, cif({ dir: 'east', headcode: '1C01', bestTimeMs: BASE, callsAtStation: true }),
+    BASE - 300000, [{ hc: '1C01', ts: BASE - 300000, dir: 'east' }]);
+  check('east CIF caller: struck close = strike + stoppingSecs(100)', calls.predictedStart, iso(BASE - 200000));
+
+  const passes = periodFor(closeCfg, cif({ dir: 'east', headcode: '1C02', bestTimeMs: BASE, callsAtStation: false }),
+    BASE - 300000, [{ hc: '1C02', ts: BASE - 300000, dir: 'east' }]);
+  check('east CIF non-caller: struck close = strike + otherSecs(80)', passes.predictedStart, iso(BASE - 220000));
+
+  const unknown = periodFor(closeCfg, cif({ dir: 'east', headcode: '1C03', bestTimeMs: BASE, callsAtStation: null }),
+    BASE - 300000, [{ hc: '1C03', ts: BASE - 300000, dir: 'east' }]);
+  check('east CIF unknown: falls back to otherSecs(80), the old conservative answer',
+    unknown.predictedStart, iso(BASE - 220000));
+
+  // West: a CIF caller must NOT enter the dep−45 branch — its bestTime is an
+  // interpolated crossing time, not a departure. Expect the closeBefore baseline (2.5 min).
+  const w = periodFor(closeCfg, cif({ dir: 'west', headcode: '1C04', bestTimeMs: BASE, callsAtStation: true }), BASE - 300000);
+  check('west CIF caller: stays on the closeBefore baseline, NOT dep − 45s',
+    w.predictedStart, iso(BASE - 150000));
+
+  // ...while an LDB westbound stopper is unaffected.
+  const wl = periodFor(closeCfg, mkT({ dir: 'west', headcode: '2W30', bestTimeMs: BASE, source: 'ldb' }), BASE - 300000);
+  check('west LDB stopper: still dep − 45s', wl.predictedStart, iso(BASE - 45000));
+}
+
 console.log();
 if (fail > 0) { console.error(`${fail} FAILED, ${pass} passed`); process.exit(1); }
 else { console.log(`All ${pass} tests passed.`); }

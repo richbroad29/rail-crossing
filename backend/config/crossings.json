@@ -23,6 +23,8 @@
     },
 
     "schedule": {
+      "_comment_tiploc_station": "TIPLOC of the crossing's OWN station (Portslade, CRS PLD — verified against CORPUS; note it is PSLDAWH, not PORTSLD). Used only to read whether a CIF schedule CALLS here (arrival/departure present) or merely passes, so a passenger service beyond the ~2h LDB window is classified correctly instead of defaulting to non-stopping.",
+      "tiploc_station": "PSLDAWH",
       "tiplocs_west": [
         "FSHRSGT", "STHWICK", "SHRHMBS", "LNCG",
         "WORTHNG", "WWRTHNG", "WWRTMS", "EWRTHNG", "DRNGTOS",

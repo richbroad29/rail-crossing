@@ -176,6 +176,22 @@ function extractTrainFields(sched) {
   };
 }
 
+// Does this schedule CALL at the crossing's own station (config schedule.tiploc_station)?
+// A calling location carries an arrival and/or departure; a location the train merely
+// runs through carries only `pass`. Returns null when unconfigured or the station isn't
+// in the schedule at all, so callers can distinguish "doesn't call" from "don't know".
+function callsAtStation(locations, schedCfg) {
+  const tip = schedCfg && schedCfg.tiploc_station;
+  if (!tip) return null;
+  let seen = false;
+  for (const loc of locations) {
+    if (loc.tiploc_code !== tip) continue;
+    seen = true;
+    if (loc.arrival || loc.departure || loc.public_arrival || loc.public_departure) return true;
+  }
+  return seen ? false : null;
+}
+
 // Build the per-crossing train entry for a record that traverses, or null.
 function buildCrossingEntry(fields, locations, crossingCfg) {
   const schedCfg = crossingCfg.schedule;
@@ -197,6 +213,10 @@ function buildCrossingEntry(fields, locations, crossingCfg) {
     trainType: fields.trainType,
     power: fields.power,
     direction: route.direction,
+    // true/false when the schedule says whether it calls at the crossing station,
+    // null when unknowable. Lets crossing-state classify a CIF train beyond the LDB
+    // window instead of silently treating every CIF entry as non-stopping.
+    callsAtStation: callsAtStation(locations, schedCfg),
     stp: fields.stp,
     runsAsRequired: fields.runsAsRequired,
     daysPattern: fields.daysPattern,

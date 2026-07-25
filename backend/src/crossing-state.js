@@ -396,6 +396,7 @@ class CrossingState {
         isUncertain: true,
         etaText,
         source: 'cif',
+        callsAtStation: t.callsAtStation,
         confidence,
         runsAsRequired: !!t.runsAsRequired,
         recentRunRate: typeof t.recentRunRate === 'number' ? t.recentRunRate : null,
@@ -432,11 +433,22 @@ class CrossingState {
     return secs * 1000;
   }
 
-  // A merged train is a stopping passenger iff it came off an LDB departure/arrival
-  // board (source starts "ldb"). Boards only list CALLING services, so an LDB source
-  // ⇒ stopping; source "cif" ⇒ not on the board ("unknown", treated as non-stopping).
-  // Matches the getLiveTrains convention (stopping: onBoard ? true : 'unknown').
+  // Does this train CALL at the crossing station?
+  //  - LDB source ⇒ yes. Boards list calling services only.
+  //  - CIF source ⇒ read it from the schedule's calling pattern (`callsAtStation`,
+  //    set by schedule-parser). Previously every CIF entry was treated as
+  //    non-stopping, which silently mislabelled any passenger service beyond the
+  //    ~2 h LDB window. `null` (unknowable) keeps the old conservative answer.
   _isStopping(t) {
+    if (typeof t.source === 'string' && t.source.startsWith('ldb')) return true;
+    return t.callsAtStation === true;
+  }
+
+  // Whether `bestTime` for this train is a real LDB DEPARTURE, as opposed to a CIF
+  // interpolated crossing time. The westbound stopping rule subtracts a departure
+  // lead, so it must only run on trains where bestTime actually means a departure —
+  // feeding it an interpolated crossing time would silently anchor to the wrong event.
+  _hasLiveDeparture(t) {
     return typeof t.source === 'string' && t.source.startsWith('ldb');
   }
 
@@ -484,9 +496,13 @@ class CrossingState {
 
     // west
     const c = ct.west || {};
-    if (t.trainType === 'passenger' && stopping) {
-      // bestTime IS the LDB departure for westbound (extractTrain: et=etd||eta). A
-      // westbound stopper is always LDB-sourced, so this branch can't fire off a CIF time.
+    if (t.trainType === 'passenger' && stopping && this._hasLiveDeparture(t)) {
+      // bestTime IS the LDB departure for westbound (extractTrain: et=etd||eta), so
+      // dep − lead is meaningful. The _hasLiveDeparture guard keeps a CIF-sourced
+      // westbound caller OUT of this branch: its bestTime is an interpolated CROSSING
+      // time, and subtracting a departure lead from it would anchor to the wrong event.
+      // Such a train falls through to the baseline below — same as before this became
+      // classifiable at all, so no regression, just no longer silently mislabelled.
       const depMinus = new Date(t.bestTime.getTime() - c.stoppingDepartureLeadSecs * 1000);
       if (struck) {
         const floor = struck.ts + c.stoppingMinAfterStrikeSecs * 1000;
@@ -518,9 +534,28 @@ class CrossingState {
     return this._computeCloseTime(t, now);               // no backstop configured: fall back
   }
 
-  // Raw predicted open (barrier-up) for a train — bestTime + openAfter[dir]. This is
-  // the grouping/merge end key; the TD clear step stretches only the finalised tail.
-  _openPred(t) {
+  // Predicted open (barrier-up) for a train — the grouping/merge end key, and the
+  // basis for a period's raw end before _anchorEndToClearStep runs.
+  //
+  // A train we have WATCHED clear the crossing is not a prediction any more, so its
+  // recorded clear step wins over bestTime + openAfter. This matters because the
+  // merge key decides grouping: a train whose bestTime keeps drifting later (an LDB
+  // arrival estimate goes stale once the train has actually passed) would otherwise
+  // keep projecting an open time into the future and drag the FOLLOWING train into
+  // its period, holding the barrier "down" across a gap where it has really lifted.
+  // Observed live 2026-07-25: 1S27 cleared 19:07:39 but kept a 19:10:30 openPred off
+  // a stale estimate, merging 2Y62 in and producing 2m03s of false barriers-down.
+  //
+  // Keyed on headcode + TTL only, exactly like _anchorEndToClearStep — deliberately
+  // NO direction test, so a train whose direction join missed can't be sidelined.
+  // Shortening is safe: callers take max() over the group and _anchorEndToClearStep
+  // still owns the final train's end, so an intermediate clear can't end a period early.
+  _openPred(t, now) {
+    const cleared = t.headcode ? this.clearStepSeen.get(t.headcode) : null;
+    if (cleared && now && (now.getTime() - cleared.ts) <= CLEAR_STEP_TTL_MS) {
+      const lagSecs = this._getOpenLagSecs(t.direction, t.trainType);
+      if (lagSecs != null) return new Date(cleared.ts + lagSecs * 1000);
+    }
     return new Date(t.bestTime.getTime() + this._getOpenAfter(t.direction) * 60000);
   }
 
@@ -539,7 +574,7 @@ class CrossingState {
     for (const t of trains) {
       const closeTime = this._computeCloseTime(t, now);       // predicted (grouping key)
       const confClose = this._confirmedCloseTime(t, now);     // gated CLOSED onset
-      const openTime = this._openPred(t);
+      const openTime = this._openPred(t, now);
 
       if (predStart === null) {
         predStart = closeTime;
@@ -583,7 +618,7 @@ class CrossingState {
       train: t,
       predClose: this._computeCloseTime(t, now),
       confClose: this._confirmedCloseTime(t, now),
-      openPred: this._openPred(t)
+      openPred: this._openPred(t, now)
     }));
 
     const groups = [];
