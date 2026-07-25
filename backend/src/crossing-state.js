@@ -2,7 +2,14 @@ const logger = require('./logger');
 const { londonMinsToDate } = require('./time-utils');
 
 // States: OPEN, CLOSING_SOON, CLOSED, OPENING_SOON
-const CLOSING_SOON_WINDOW_MS = 5 * 60 * 1000; // Show "closing soon" 5 min before
+//
+// MUST match the frontend's own CLOSING_SOON threshold (shared/crossing.js on `main`,
+// `if (ms <= 90000)` in updateStatus). The frontend ignores this `state` field and
+// derives its own from the periods, so the only consumer here is the state log — and
+// a log that disagrees with what the user saw is worse than no log. It was 5 min,
+// which made the log read CLOSING_SOON while the app still showed "next closure in
+// ~5 min". Keep the two in step if either changes.
+const CLOSING_SOON_WINDOW_MS = 90 * 1000;
 
 // --- Late-running re-attachment (see _mergeTrains) ---
 // A real, approaching train must never show an expired time or drop off the

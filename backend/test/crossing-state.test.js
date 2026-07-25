@@ -604,6 +604,25 @@ console.log('  -- CIF calling-pattern classification --');
   check('west LDB stopper: still dep − 45s', wl.predictedStart, iso(BASE - 45000));
 }
 
+// ---- CLOSING_SOON window matches the frontend ----------------------------
+// The frontend derives its own state and flips to CLOSING SOON at 90 s. This state
+// field only feeds the state log, so it must agree with what the user actually saw.
+console.log('  -- CLOSING_SOON window --');
+
+{
+  const state = new CrossingState('t', closeCfg);
+  // Struck east stopper: predicted close == confirmed close == strike + 100s.
+  const strike = BASE - 100000;                       // close lands exactly at BASE
+  state.closeStrikeSeen.set('1A30', { ts: strike, direction: 'east' });
+  const t = mkT({ dir: 'east', headcode: '1A30', bestTimeMs: BASE + 180000 });
+  state.closurePeriods = state._computeClosures([t], new Date(BASE - 120000));
+
+  check('OPEN at 100s before the predicted close', state._deriveState(new Date(BASE - 100000)), 'OPEN');
+  check('CLOSING_SOON at exactly 90s before', state._deriveState(new Date(BASE - 90000)), 'CLOSING_SOON');
+  check('CLOSING_SOON at 30s before', state._deriveState(new Date(BASE - 30000)), 'CLOSING_SOON');
+  check('CLOSED once the close time is reached', state._deriveState(new Date(BASE)), 'CLOSED');
+}
+
 console.log();
 if (fail > 0) { console.error(`${fail} FAILED, ${pass} passed`); process.exit(1); }
 else { console.log(`All ${pass} tests passed.`); }
