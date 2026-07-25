@@ -177,18 +177,23 @@ function extractTrainFields(sched) {
 }
 
 // Does this schedule CALL at `tiploc`? A calling location carries an arrival and/or
-// departure; a location the train merely runs through carries only `pass`. Returns null
-// when unconfigured or the location isn't in the schedule at all, so callers can tell
-// "doesn't call" apart from "don't know".
+// departure; a location the train merely runs through carries only `pass`.
+//
+// ABSENT ⇒ FALSE, not unknown. A CIF schedule lists every location the train calls at,
+// plus passing locations that happen to be timing points — so a station that does not
+// appear is one the train does not call at. Verified against the real extract: the
+// Littlehampton–Victoria services carry PSLDAWH with arr/dep and no FSHRSGT entry at
+// all, which is exactly "calls Portslade, not Fishersgate". Treating absent as unknown
+// made every one of them fall back to the wrong timing class.
+//
+// null is reserved for "not configured" — the only genuine don't-know.
 function callsAt(locations, tiploc) {
   if (!tiploc) return null;
-  let seen = false;
   for (const loc of locations) {
     if (loc.tiploc_code !== tiploc) continue;
-    seen = true;
     if (loc.arrival || loc.departure || loc.public_arrival || loc.public_departure) return true;
   }
-  return seen ? false : null;
+  return false;
 }
 
 // Build the per-crossing train entry for a record that traverses, or null.
