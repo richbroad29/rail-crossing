@@ -188,8 +188,8 @@ class CrossingState {
   // TD-triggered close: record a train stepping INTO any berth on a direction's
   // approach chain (td.<dir>.approachChain). One of those berths anchors the closure
   // START, and WHICH one depends on the train's class — eastbound berth 0006 contains
-  // Fishersgate, so a service calling there strikes it ~150s before reaching 0004 while
-  // one that doesn't strikes it ~50s before. Recording the whole chain lets
+  // Southwick, so a service calling there strikes it ~160s before reaching 0004 while
+  // one that doesn't strikes it ~49s before. Recording the whole chain lets
   // _computeCloseTime pick the right anchor per class, and lets the CLOSED backstop see
   // whether a train is still upstream of its anchor.
   //
@@ -489,7 +489,7 @@ class CrossingState {
     return typeof t.source === 'string' && t.source.startsWith('ldb');
   }
 
-  // Does this train also call at the station inside the approach berth (Fishersgate)?
+  // Does this train also call at the station inside the approach berth (Southwick)?
   // Read from the CIF schedule, which covers the whole day, then applied to LDB-sourced
   // trains too by UID (headcode as fallback) — LDB only tells us about THIS station's
   // board, so it cannot answer this on its own. Returns true/false/null(unknown).
@@ -509,14 +509,14 @@ class CrossingState {
   }
 
   // Which eastbound timing class a train belongs to. The classes exist because approach
-  // berth 0006 contains Fishersgate: a service calling there occupies 0006 ~3x longer,
+  // berth 0006 contains Southwick: a service calling there occupies 0006 ~3x longer,
   // so the same strike means a very different time-to-crossing. See closeTrigger._comment.
   //   freight       6xxx/7xxx — ~100s slower than fast passenger at every berth
   //   ecs           5xxx
-  //   stoppingLocal calls Portslade AND Fishersgate  (1N/1S/2Y Brighton stoppers)
-  //   stopping      calls Portslade, NOT Fishersgate (1H Victoria semi-fasts)
+  //   stoppingLocal calls Portslade AND Southwick   (1N/1S/2Y Brighton services)
+  //   stopping      calls Portslade, NOT Southwick  (1H Victoria semi-fasts)
   //   fast          calls neither
-  // An unknown Fishersgate answer falls to 'stoppingLocal', whose 0006 anchor is the
+  // An unknown Southwick answer falls to 'stoppingLocal', whose 0006 anchor is the
   // one number with field calibration behind it.
   _eastClass(t) {
     if (t.trainType === 'freight') return 'freight';

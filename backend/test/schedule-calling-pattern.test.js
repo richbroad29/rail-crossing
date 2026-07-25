@@ -2,7 +2,7 @@
 // callsAt(): a station ABSENT from a CIF schedule means the train does not call there.
 // Absence was previously reported as "unknown", which made every Littlehampton–Victoria
 // service fall back to the wrong eastbound timing class (they carry PSLDAWH but no
-// FSHRSGT entry at all). Shapes below are taken from the real extract.
+// STHWICK entry at all). Shapes below are taken from the real extract.
 const { parseScheduleFile } = require('../src/schedule-parser');
 const path = require('path');
 
@@ -19,7 +19,7 @@ const cfg = {
     name: 'T', road: 'R',
     schedule: {
       tiploc_station: 'PSLDAWH',
-      tiploc_approach_call: 'FSHRSGT',
+      tiploc_approach_call: 'STHWICK',
       tiplocs_west: ['SHRHMBS'], tiplocs_east: ['HOVE'],
       interpolation: { eastbound: { from: 'SHRHMBS', to: 'HOVE', fraction: 0.7 },
                        westbound: { from: 'HOVE', to: 'SHRHMBS', fraction: 0.3 } }
@@ -38,10 +38,10 @@ const L = (tiploc, arr, dep, pas) => ({ tiploc_code: tiploc, record_identity: 'L
 (async () => {
   const file = path.join(os.tmpdir(), `cp-test-${process.pid}.json.gz`);
   fs.writeFileSync(file, zlib.gzipSync([
-    // calls Portslade, Fishersgate absent entirely  → the 1H Victoria pattern
+    // calls Portslade, Southwick absent entirely  → the 1H Victoria pattern
     sched('AAA', [L('SHRHMBS','0843','0844'), L('PSLDAWH','0848','0848H'), L('HOVE','0851','0852')]),
     // calls both                                     → the 2Y local pattern
-    sched('BBB', [L('SHRHMBS','0843','0844'), L('FSHRSGT','0846','0846H'),
+    sched('BBB', [L('SHRHMBS','0843','0844'), L('STHWICK','0846','0846H'),
                   L('PSLDAWH','0848','0848H'), L('HOVE','0851','0852')]),
     // passes Portslade without calling
     sched('CCC', [L('SHRHMBS','0843','0844'), L('PSLDAWH',null,null,'0848'), L('HOVE','0851','0852')]),
@@ -52,7 +52,7 @@ const L = (tiploc, arr, dep, pas) => ({ tiploc_code: tiploc, record_identity: 'L
   fs.unlinkSync(file);
 
   check('calls Portslade (arr/dep present)', by.AAA && by.AAA.callsAtStation, true);
-  check('Fishersgate ABSENT ⇒ does not call there (not unknown)', by.AAA && by.AAA.callsAtApproach, false);
+  check('Southwick ABSENT ⇒ does not call there (not unknown)', by.AAA && by.AAA.callsAtApproach, false);
   check('calls both', by.BBB && by.BBB.callsAtApproach, true);
   check('passes Portslade (pass only) ⇒ does not call', by.CCC && by.CCC.callsAtStation, false);
 

@@ -630,7 +630,7 @@ console.log('  -- CLOSING_SOON window --');
 }
 
 // ---- Per-class eastbound close anchors -----------------------------------
-// Approach berth 0006 contains Fishersgate, so its strike means two different things
+// Approach berth 0006 contains Southwick, so its strike means two different things
 // depending on whether the service calls there. Each class anchors to its own berth.
 console.log('  -- per-class eastbound anchors --');
 
@@ -676,22 +676,22 @@ const classCfg = {
   const cls = (o) => st._eastClass({ ...mkT({ dir: 'east', ...o }), callsAtApproach: o.callsAtApproach });
   check('freight → freight class', cls({ headcode: '6O68', type: 'freight' }), 'freight');
   check('5xxx ECS → ecs class', cls({ headcode: '5T91', type: 'ecs' }), 'ecs');
-  check('LDB stopper NOT calling Fishersgate → stopping (class A)',
+  check('LDB stopper NOT calling Southwick → stopping (class A)',
     cls({ headcode: '1H67', bestTimeMs: BASE, callsAtApproach: false }), 'stopping');
-  check('LDB stopper calling Fishersgate → stoppingLocal (class B)',
+  check('LDB stopper calling Southwick → stoppingLocal (class B)',
     cls({ headcode: '1N61', bestTimeMs: BASE, callsAtApproach: true }), 'stoppingLocal');
-  check('unknown Fishersgate answer → stoppingLocal (the calibrated rule)',
+  check('unknown Southwick answer → stoppingLocal (the calibrated rule)',
     cls({ headcode: '1N99', bestTimeMs: BASE, callsAtApproach: null }), 'stoppingLocal');
   const cifPass = { ...mkT({ dir: 'east', headcode: '1Z01', bestTimeMs: BASE, source: 'cif' }), callsAtStation: false };
   check('non-caller passenger → fast', st._eastClass(cifPass), 'fast');
 }
 
-// Fishersgate answer resolved from the CIF schedule by UID, for an LDB-sourced train
+// Southwick answer resolved from the CIF schedule by UID, for an LDB-sourced train
 {
   const st = new CrossingState('t', classCfg);
   st.scheduleTrains = [{ uid: 'W12345', headcode: '1H67', callsAtApproach: false, callsAtStation: true }];
   const t = { ...mkT({ dir: 'east', headcode: '1H67', bestTimeMs: BASE }), uid: 'W12345' };
-  check('LDB train inherits the Fishersgate answer from CIF by UID', st._eastClass(t), 'stopping');
+  check('LDB train inherits the Southwick answer from CIF by UID', st._eastClass(t), 'stopping');
 }
 
 // each class anchors to its own berth + offset

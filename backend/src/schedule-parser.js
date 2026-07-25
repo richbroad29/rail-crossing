@@ -182,8 +182,8 @@ function extractTrainFields(sched) {
 // ABSENT ⇒ FALSE, not unknown. A CIF schedule lists every location the train calls at,
 // plus passing locations that happen to be timing points — so a station that does not
 // appear is one the train does not call at. Verified against the real extract: the
-// Littlehampton–Victoria services carry PSLDAWH with arr/dep and no FSHRSGT entry at
-// all, which is exactly "calls Portslade, not Fishersgate". Treating absent as unknown
+// Littlehampton–Victoria services carry PSLDAWH with arr/dep and no STHWICK entry at
+// all, which is exactly "calls Portslade, not Southwick". Treating absent as unknown
 // made every one of them fall back to the wrong timing class.
 //
 // null is reserved for "not configured" — the only genuine don't-know.
@@ -222,7 +222,7 @@ function buildCrossingEntry(fields, locations, crossingCfg) {
     // window instead of silently treating every CIF entry as non-stopping.
     callsAtStation: callsAt(locations, schedCfg.tiploc_station),
     // Whether it also calls at the station sitting INSIDE the approach berth
-    // (schedule.tiploc_approach_call — Fishersgate, inside eastbound berth 0006).
+    // (schedule.tiploc_approach_call — Southwick, inside eastbound berth 0006).
     // That stop roughly doubles the approach-berth transit, so it selects which
     // close anchor applies. See timing.closeTrigger._comment.
     callsAtApproach: callsAt(locations, schedCfg.tiploc_approach_call),
