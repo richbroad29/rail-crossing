@@ -7,6 +7,10 @@ var closurePeriods = [];
 var vpsClosures = []; // raw backend-computed closures from the last fetch (authoritative timing)
 var nextCloseTime = null;
 var nextOpenTime = null;
+// "Down For" card: how long the barrier is expected to be down for the closure the
+// other two cards refer to — the CURRENT one while closed, otherwise the next one.
+var downForMs = null;
+var downForRange = null;
 var lastError = '';
 var trainHistory = [];
 var crossingId = '';
@@ -37,6 +41,15 @@ function fmtCountdownRough(ms) {
 // (waiting on the berth strike, or a train running later than its live estimate)
 // reads "Soon" rather than "0s" / "NOW" or a negative value.
 function fmtSoon(ms) { return ms <= 0 ? 'Soon' : fmtCountdown(ms); }
+// A duration (not a countdown) — reads as a length of time, to the nearest 10 s:
+// "~50s", "~2m 40s", "~3m". Ten seconds is about the resolution the underlying
+// prediction can honestly support, so don't tighten it without better calibration.
+function fmtDuration(ms) {
+  var s = Math.max(10, Math.round(ms / 10000) * 10);
+  if (s < 60) return '~' + s + 's';
+  var m = Math.floor(s / 60), sec = s % 60;
+  return sec === 0 ? '~' + m + 'm' : '~' + m + 'm ' + sec + 's';
+}
 function getColors(st) {
   switch(st) {
     case 'CLOSED': return {bg:'#DC2626',text:'#FFF',glow:'0 0 30px rgba(220,38,38,.5)'};
@@ -228,25 +241,20 @@ async function refreshData() {
       var cutoff = new Date(new Date().getTime() - 3600000);
       trainHistory = trainHistory.filter(function(t) { return t.bestTime > cutoff; });
       lastRefreshTs = new Date();
-      $('dataMode').textContent = 'LIVE';
-      $('dataMode').style.color = '#22D3EE';
     } else {
       trains = [];
-      if (lastError) {
-        $('dataMode').textContent = 'ERROR';
-        $('dataMode').style.color = '#FCA5A5';
-        $('errorBox').textContent = 'Error: ' + lastError;
-        $('errorBox').classList.remove('hidden');
-      } else {
-        $('dataMode').textContent = 'OFFLINE';
-        $('dataMode').style.color = '#FCA5A5';
-      }
+      // The old "Data: LIVE" card is gone — LIVE was the expected state ~always and
+      // told the user nothing. Only the failure cases are worth surfacing, and the
+      // error box already does that; "no data" now gets its own message there.
+      $('errorBox').textContent = lastError
+        ? 'Error: ' + lastError
+        : 'No live data — showing nothing rather than a stale guess.';
+      $('errorBox').classList.remove('hidden');
     }
     // Render the backend's pre-computed closures — they carry the authoritative,
     // TD clear-step-anchored OPEN time (and hold-until-cleared). buildClosuresFromVps
     // safely returns [] when the backend sent none.
     closurePeriods = buildClosuresFromVps(vpsClosures);
-    $('lastRefreshTime').textContent = fmtShort(new Date());
     renderClosures();
     renderDebugPanel();
     setRefreshState('done');
@@ -275,7 +283,11 @@ function renderClosures() {
   for (var i = 0; i < showing; i++) {
     var p = relevant[i];
     var isCurrent = now >= p.start && now <= p.end;
-    var duration = Math.round((p.end - p.start) / 60000);
+    // Measure from the PREDICTED close, not the confirmed `start`. Everything the user
+    // sees (header countdown, the time on this row, the Down For card) targets the
+    // predicted close, and `start` sits earlier by the safety-net margin — measuring
+    // from it would overstate the closure and disagree with the Down For card.
+    var duration = Math.round((p.end - (p.predictedStart || p.start)) / 60000);
     html += '<div class="closure-card' + (isCurrent ? ' closure-active' : '') + '">';
     html += '<div class="closure-hdr">';
     if (isCurrent) {
@@ -363,10 +375,21 @@ function showMoreClosures() {
   renderClosures();
 }
 
+// How long the barrier is down for a period, measured from the PREDICTED close (the
+// barrier-down estimate the countdown targets) to the period end — not from `start`,
+// which is the conservative confirmed-close gate and would overstate the duration.
+function setDownFor(p) {
+  if (!p) return;
+  var from = p.predictedStart || p.start;
+  downForMs = p.end.getTime() - from.getTime();
+  downForRange = fmtShort(from) + '–' + fmtShort(p.end);
+}
+
 function updateStatus() {
   var now = new Date();
   var status = 'OPEN', msg = 'No upcoming closures found';
   nextCloseTime = null; nextOpenTime = null;
+  downForMs = null; downForRange = null;
   var currentClosure = null, upcoming = null;
   var t = now.getTime();
   for (var i = 0; i < closurePeriods.length; i++) {
@@ -382,6 +405,8 @@ function updateStatus() {
     // Even while down, surface the countdown to the NEXT closure if another is coming
     // (back-to-back closures are a useful heads-up). Targets the predicted close.
     if (upcoming) nextCloseTime = upcoming.predictedStart || upcoming.start;
+    // "Down For" describes the closure we're IN — it pairs with Next Open above.
+    setDownFor(currentClosure);
     var openMs = currentClosure.end.getTime() - t;
     msg = 'Barriers likely DOWN. ' + (openMs <= 0 ? 'Reopens soon' : 'Reopens in ~' + fmtCountdown(openMs));
     $('statusTime').textContent = 'Opens ~' + fmtShort(currentClosure.end);
@@ -395,6 +420,7 @@ function updateStatus() {
       var closeTarget = upcoming.predictedStart || upcoming.start;
       var ms = closeTarget.getTime() - t;
       nextCloseTime = closeTarget; nextOpenTime = upcoming.end;
+      setDownFor(upcoming);
       // CLOSING_SOON fires 90 s before the predicted closure (barrier-down) time.
       if (ms <= 90000) { status = 'CLOSING_SOON'; msg = ms <= 0 ? 'Closing soon' : 'Closing in ~' + fmtCountdown(ms); }
       else { msg = 'Next closure in ~' + fmtCountdown(ms); }
@@ -426,6 +452,8 @@ function updateStatus() {
   else { $('nextCloseCountdown').textContent = '--'; $('nextCloseCountdown').style.color = '#475569'; $('nextCloseTime').textContent = ''; }
   if (nextOpenTime) { $('nextOpenCountdown').textContent = fmtSoon(nextOpenTime.getTime() - t); $('nextOpenCountdown').style.color = '#16A34A'; $('nextOpenTime').textContent = fmtShort(nextOpenTime); }
   else { $('nextOpenCountdown').textContent = '--'; $('nextOpenCountdown').style.color = '#475569'; $('nextOpenTime').textContent = ''; }
+  if (downForMs !== null && downForMs > 0) { $('closureLength').textContent = fmtDuration(downForMs); $('closureLength').style.color = '#94A3B8'; $('closureLengthSub').textContent = downForRange; }
+  else { $('closureLength').textContent = '--'; $('closureLength').style.color = '#475569'; $('closureLengthSub').textContent = ''; }
   renderClosures();
 
   var allForHistory = trainHistory.length > 0 ? trainHistory : trains;
