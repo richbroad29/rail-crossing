@@ -185,35 +185,64 @@ class CrossingState {
     }
   }
 
-  // TD-triggered close: record a train stepping INTO the approach-side berth
-  // (td.<dir>.approach.from — 0006 east / 0003 west). This is the physical strike-in
-  // that anchors a closure's START. Matched on the destination berth ONLY: entering
-  // 0006 is always an eastbound event and entering 0003 always westbound (distinct
-  // berths); the per-train direction gate in _computeCloseTime is the second guard.
-  // Unlike recordTdBerth, a strike moves a closure's start, so this DOES recompute.
+  // TD-triggered close: record a train stepping INTO any berth on a direction's
+  // approach chain (td.<dir>.approachChain). One of those berths anchors the closure
+  // START, and WHICH one depends on the train's class — eastbound berth 0006 contains
+  // Fishersgate, so a service calling there strikes it ~150s before reaching 0004 while
+  // one that doesn't strikes it ~50s before. Recording the whole chain lets
+  // _computeCloseTime pick the right anchor per class, and lets the CLOSED backstop see
+  // whether a train is still upstream of its anchor.
+  //
+  // Matched on the destination berth ONLY: the two directions use disjoint berths, so
+  // entering one is unambiguous; the per-train direction gate in _freshStrike is the
+  // second guard. Unlike recordTdBerth, a strike moves a closure's start, so this DOES
+  // recompute — but only for berths that can actually anchor something, otherwise every
+  // step of the chain would trigger a full recompute.
   recordTdCloseStrike(evt) {
     if (!evt || !evt.headcode || !evt.to) return;
     const dir = this._matchCloseStrikeBerth(evt.to);
     if (!dir) return;
     const ms = evt.ts ? new Date(evt.ts).getTime() : Date.now();
     if (!Number.isFinite(ms)) return;
-    this.closeStrikeSeen.set(evt.headcode, { ts: ms, direction: dir });
+    this.closeStrikeSeen.set(this._strikeKey(evt.headcode, evt.to),
+      { ts: ms, direction: dir, headcode: evt.headcode, berth: evt.to });
     this._pruneCloseStrikes(ms);
-    this._recompute();
+    if (this._isAnchorBerth(dir, evt.to)) this._recompute();
   }
 
-  // Which direction's approach strike-in berth `to` is, or null if it isn't one.
+  _strikeKey(headcode, berth) { return `${headcode}|${berth}`; }
+
+  // Which direction's approach chain contains berth `to`, or null if none does.
+  // Falls back to the legacy single approach.from berth when no chain is configured,
+  // so a crossing without approachChain behaves exactly as before.
   _matchCloseStrikeBerth(to) {
     const td = this.config && this.config.td;
     if (!td) return null;
-    if (td.eastbound && td.eastbound.approach && td.eastbound.approach.from === to) return 'east';
-    if (td.westbound && td.westbound.approach && td.westbound.approach.from === to) return 'west';
+    for (const dir of ['east', 'west']) {
+      const cfg = td[dir === 'east' ? 'eastbound' : 'westbound'];
+      if (!cfg) continue;
+      if (Array.isArray(cfg.approachChain)) {
+        if (cfg.approachChain.includes(to)) return dir;
+      } else if (cfg.approach && cfg.approach.from === to) {
+        return dir;
+      }
+    }
     return null;
   }
 
+  // Is this berth one that some class actually anchors its close to? Used to avoid
+  // recomputing on every chain step. Unknown config ⇒ true (recompute, the safe side).
+  _isAnchorBerth(direction, berth) {
+    const ct = this.timing && this.timing.closeTrigger && this.timing.closeTrigger[direction];
+    if (!ct) return true;
+    if (ct.classes) return Object.values(ct.classes).some(c => c && c.berth === berth);
+    const cfg = this.config.td[direction === 'east' ? 'eastbound' : 'westbound'];
+    return !!(cfg && cfg.approach && cfg.approach.from === berth);
+  }
+
   _pruneCloseStrikes(nowMs) {
-    for (const [headcode, s] of this.closeStrikeSeen) {
-      if (nowMs - s.ts > CLOSE_STRIKE_TTL_MS) this.closeStrikeSeen.delete(headcode);
+    for (const [key, s] of this.closeStrikeSeen) {          // key is `headcode|berth`
+      if (nowMs - s.ts > CLOSE_STRIKE_TTL_MS) this.closeStrikeSeen.delete(key);
     }
   }
 
@@ -404,6 +433,7 @@ class CrossingState {
         etaText,
         source: 'cif',
         callsAtStation: t.callsAtStation,
+        callsAtApproach: t.callsAtApproach,
         confidence,
         runsAsRequired: !!t.runsAsRequired,
         recentRunRate: typeof t.recentRunRate === 'number' ? t.recentRunRate : null,
@@ -459,10 +489,66 @@ class CrossingState {
     return typeof t.source === 'string' && t.source.startsWith('ldb');
   }
 
-  // The train's fresh, direction-matched approach strike (or null). A strike matches
-  // only if its recorded direction equals the train's and it is within the TTL.
-  _freshStrike(t, now) {
-    const struck = this.closeStrikeSeen.get(t.headcode);
+  // Does this train also call at the station inside the approach berth (Fishersgate)?
+  // Read from the CIF schedule, which covers the whole day, then applied to LDB-sourced
+  // trains too by UID (headcode as fallback) — LDB only tells us about THIS station's
+  // board, so it cannot answer this on its own. Returns true/false/null(unknown).
+  _callsAtApproachStop(t) {
+    if (t.callsAtApproach != null) return t.callsAtApproach;
+    for (const s of this.scheduleTrains) {
+      if (s.callsAtApproach == null) continue;
+      if (t.uid && s.uid && t.uid === s.uid) return s.callsAtApproach;
+    }
+    if (t.headcode) {
+      for (const s of this.scheduleTrains) {
+        if (s.callsAtApproach == null) continue;
+        if (s.headcode === t.headcode) return s.callsAtApproach;
+      }
+    }
+    return null;
+  }
+
+  // Which eastbound timing class a train belongs to. The classes exist because approach
+  // berth 0006 contains Fishersgate: a service calling there occupies 0006 ~3x longer,
+  // so the same strike means a very different time-to-crossing. See closeTrigger._comment.
+  //   freight       6xxx/7xxx — ~100s slower than fast passenger at every berth
+  //   ecs           5xxx
+  //   stoppingLocal calls Portslade AND Fishersgate  (1N/1S/2Y Brighton stoppers)
+  //   stopping      calls Portslade, NOT Fishersgate (1H Victoria semi-fasts)
+  //   fast          calls neither
+  // An unknown Fishersgate answer falls to 'stoppingLocal', whose 0006 anchor is the
+  // one number with field calibration behind it.
+  _eastClass(t) {
+    if (t.trainType === 'freight') return 'freight';
+    if (t.trainType === 'ecs') return 'ecs';
+    if (!this._isStopping(t)) return 'fast';
+    return this._callsAtApproachStop(t) === false ? 'stopping' : 'stoppingLocal';
+  }
+
+  // The single approach berth for a direction (td.<dir>.approach.from). Used by the
+  // westbound rule and by legacy flat east configs; strikes are always keyed by berth.
+  _approachBerth(direction) {
+    const cfg = this.config && this.config.td &&
+      this.config.td[direction === 'east' ? 'eastbound' : 'westbound'];
+    return cfg && cfg.approach ? cfg.approach.from : undefined;
+  }
+
+  // The close-anchor spec { berth, offsetSecs } for a train, or null when the crossing
+  // isn't using per-class anchors (legacy single-berth config).
+  _closeAnchor(t) {
+    const ct = this.timing && this.timing.closeTrigger && this.timing.closeTrigger[t.direction];
+    if (!ct || !ct.classes) return null;
+    const spec = ct.classes[t.direction === 'east' ? this._eastClass(t) : null];
+    return spec && spec.berth && typeof spec.offsetSecs === 'number' ? spec : null;
+  }
+
+  // The train's fresh, direction-matched strike at `berth` (or null). A strike matches
+  // only if its recorded direction equals the train's and it is within the TTL. With no
+  // berth given, falls back to the legacy per-headcode key (crossings without a chain).
+  _freshStrike(t, now, berth) {
+    if (!t.headcode) return null;
+    const key = berth ? this._strikeKey(t.headcode, berth) : t.headcode;
+    const struck = this.closeStrikeSeen.get(key);
     if (struck && struck.direction === t.direction &&
         (now.getTime() - struck.ts) <= CLOSE_STRIKE_TTL_MS) return struck;
     return null;
@@ -473,10 +559,11 @@ class CrossingState {
   // timing.closeTrigger — absent ⇒ the legacy bestTime − closeBefore, which preserves
   // other crossings and gives a clean rollback.
   //
-  //  - EAST: freight → strike+freightSecs; stopping passenger → strike+stoppingSecs;
-  //    everything else (non-stopping / ECS / unknown) → strike+otherSecs. Before the
-  //    strike, the prediction LEADS the crossing by predictedLeadSecs (~180s, measured),
-  //    NOT closeBefore.east (90s) — see the closeTrigger _comment.
+  //  - EAST: per-class anchor berth + offset (closeTrigger.east.classes — see _eastClass
+  //    and the config comment for why 0006 cannot serve every class). Before that berth
+  //    strikes, the prediction LEADS the crossing by predictedLeadSecs (~180s, measured),
+  //    NOT closeBefore.east (90s). Legacy flat east config (freightSecs/stoppingSecs/
+  //    otherSecs on a single approach berth) is still honoured for other crossings.
   //  - WEST stopping passenger → max(strike + stoppingMinAfterStrikeSecs, departure − 45s);
   //    before the strike, departure − 45s. bestTime IS the LDB departure for westbound.
   //  - WEST freight / non-stopping → strike+otherSecs; before the strike, bestTime − closeBefore.west.
@@ -485,15 +572,22 @@ class CrossingState {
     const cbFallback = () => new Date(t.bestTime.getTime() - this._getCloseBefore(t.direction) * 60000);
     if (!ct) return cbFallback();
 
-    const struck = this._freshStrike(t, now);
     const stopping = this._isStopping(t);
 
     if (t.direction === 'east') {
       const c = ct.east || {};
-      const secs = t.trainType === 'freight' ? c.freightSecs
-                 : (t.trainType === 'passenger' && stopping) ? c.stoppingSecs
-                 : c.otherSecs;                          // non-stopping / ECS / unknown
-      if (struck && typeof secs === 'number') return new Date(struck.ts + secs * 1000);
+      const anchor = this._closeAnchor(t);
+      if (anchor) {
+        const struck = this._freshStrike(t, now, anchor.berth);
+        if (struck) return new Date(struck.ts + anchor.offsetSecs * 1000);
+      } else {
+        // Legacy flat config: one approach berth, class picked by type only.
+        const struck = this._freshStrike(t, now, this._approachBerth('east'));
+        const secs = t.trainType === 'freight' ? c.freightSecs
+                   : (t.trainType === 'passenger' && stopping) ? c.stoppingSecs
+                   : c.otherSecs;                        // non-stopping / ECS / unknown
+        if (struck && typeof secs === 'number') return new Date(struck.ts + secs * 1000);
+      }
       // Pre-strike east prediction leads the crossing by predictedLeadSecs (measured
       // ~2–3.5 min), not closeBefore — so the countdown doesn't lurch when the strike lands.
       const lead = typeof c.predictedLeadSecs === 'number' ? c.predictedLeadSecs
@@ -501,8 +595,9 @@ class CrossingState {
       return new Date(t.bestTime.getTime() - lead * 1000);
     }
 
-    // west
+    // west — still a single approach berth (0003); no Fishersgate-equivalent on this side.
     const c = ct.west || {};
+    const struck = this._freshStrike(t, now, this._approachBerth('west'));
     if (t.trainType === 'passenger' && stopping && this._hasLiveDeparture(t)) {
       // bestTime IS the LDB departure for westbound (extractTrain: et=etd||eta), so
       // dep − lead is meaningful. The _hasLiveDeparture guard keeps a CIF-sourced
@@ -522,23 +617,64 @@ class CrossingState {
     return cbFallback();                                 // baseline until the 0003 strike
   }
 
+  // Where a train currently is on its direction's approach chain: the index in
+  // td.<dir>.approachChain of the berth it last stepped into, or null when we don't
+  // know (no live position, no chain configured, or it is somewhere else in the TD area).
+  _chainIndex(t) {
+    const cfg = this.config && this.config.td &&
+      this.config.td[t.direction === 'east' ? 'eastbound' : 'westbound'];
+    const chain = cfg && cfg.approachChain;
+    if (!Array.isArray(chain) || !t.headcode) return null;
+    const live = this.liveTrains.get(t.headcode);
+    if (!live || !live.berth) return null;
+    const i = chain.indexOf(live.berth);
+    return i === -1 ? null : i;
+  }
+
+  // Is the train known to be still UPSTREAM of the berth its close anchors to? If so the
+  // anchor strike simply hasn't happened yet, and firing the bestTime backstop would
+  // close the barrier off a timetable estimate for a train we can SEE is not there yet.
+  // That is exactly what produced the 2026-07-24 21:42 false CLOSED. Unknown position ⇒
+  // false (allow the backstop) — a train we cannot see must still be able to close.
+  _upstreamOfAnchor(t) {
+    const anchor = this._closeAnchor(t);
+    const berth = anchor ? anchor.berth : this._approachBerth(t.direction);
+    if (!berth) return false;
+    const cfg = this.config.td[t.direction === 'east' ? 'eastbound' : 'westbound'];
+    const chain = cfg && cfg.approachChain;
+    if (!Array.isArray(chain)) return false;
+    const anchorIdx = chain.indexOf(berth);
+    const hereIdx = this._chainIndex(t);
+    if (anchorIdx === -1 || hereIdx === null) return false;
+    return hereIdx < anchorIdx;
+  }
+
   // CONFIRMED close time (gated CLOSED onset) for a single train. Strike-based when
   // struck (identical to the predicted time); otherwise a conservative backstop from the
-  // LIVE bestTime (bestTime − safetyNetSecs[dir]), set SMALLER than the strike's typical
+  // LIVE bestTime (bestTime − safetyNetSecs[dir]), set SMALLER than the anchor's typical
   // lead so the precise strike normally wins and the backstop only fires on a genuinely
   // missed/dropped strike. Never uses scheduledTime — bestTime is the live estimate.
+  //
+  // The backstop is additionally POSITION-GATED: while TD shows the train still upstream
+  // of its anchor berth, the backstop is held off, because we can see the anchor is still
+  // to come. Only bestTime drift can put the backstop that early, and bestTime is the
+  // least reliable input we have (eastbound crossing→bestTime sd ~55s). Measured missed-
+  // strike rate is 0.093%, so deferring to position costs almost nothing.
   _confirmedCloseTime(t, now) {
     const ct = this.timing && this.timing.closeTrigger;
     if (!ct) return this._computeCloseTime(t, now);      // no trigger: confirmed == baseline
 
-    const struck = this._freshStrike(t, now);
-    if (struck) return this._computeCloseTime(t, now);   // struck: gated onset == predicted
+    const anchor = this._closeAnchor(t);
+    const berth = anchor ? anchor.berth : this._approachBerth(t.direction);
+    if (this._freshStrike(t, now, berth)) {
+      return this._computeCloseTime(t, now);             // struck: gated onset == predicted
+    }
 
     const c = ct[t.direction] || {};
-    if (typeof c.safetyNetSecs === 'number') {
+    if (typeof c.safetyNetSecs === 'number' && !this._upstreamOfAnchor(t)) {
       return new Date(t.bestTime.getTime() - c.safetyNetSecs * 1000);
     }
-    return this._computeCloseTime(t, now);               // no backstop configured: fall back
+    return this._computeCloseTime(t, now);               // no backstop / not there yet
   }
 
   // Predicted open (barrier-up) for a train — the grouping/merge end key, and the

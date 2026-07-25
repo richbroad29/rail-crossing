@@ -305,10 +305,16 @@ function mkT(o) {
   };
 }
 const iso = (ms) => new Date(ms).toISOString();
+// Strikes are keyed headcode|berth. Default to the direction's single approach berth
+// (0006 east / 0003 west) so the legacy-shaped tests read the same as before.
+function setStrike(state, hc, ts, dir, berth) {
+  const b = berth || (dir === 'east' ? '0006' : '0003');
+  state.closeStrikeSeen.set(`${hc}|${b}`, { ts, direction: dir, headcode: hc, berth: b });
+}
 // close a single train and return its one period (predictedStart / start / end).
 function periodFor(cfg, train, nowMs, strikes = []) {
   const state = new CrossingState('t', cfg);
-  for (const s of strikes) state.closeStrikeSeen.set(s.hc, { ts: s.ts, direction: s.dir });
+  for (const s of strikes) setStrike(state, s.hc, s.ts, s.dir, s.berth);
   return state._computeClosures([train], new Date(nowMs))[0];
 }
 
@@ -379,11 +385,11 @@ console.log('  -- predicted close (strike-anchored / prediction) --');
 {
   const staleTs = BASE - 25 * 60000;                       // 25 min ago (> 20 min TTL)
   const state = new CrossingState('t', closeCfg);
-  state.closeStrikeSeen.set('1A04', { ts: staleTs, direction: 'east' });
+  setStrike(state, '1A04', staleTs, 'east');
   const p = state._computeClosures([mkT({ dir: 'east', headcode: '1A04', bestTimeMs: BASE })], new Date(BASE))[0];
   check('stale strike (> TTL) ignored → east baseline (bestTime − 180s)', p.predictedStart, iso(BASE - 180000));
   state._pruneCloseStrikes(BASE);
-  check('prune removes the stale strike', state.closeStrikeSeen.has('1A04'), false);
+  check('prune removes the stale strike', state.closeStrikeSeen.has('1A04|0006'), false);
 }
 // C8: closeTrigger absent → close = bestTime − closeBefore (unchanged); start == predictedStart.
 {
@@ -397,14 +403,14 @@ console.log('  -- recordTdCloseStrike berth match --');
 {
   const state = new CrossingState('t', closeCfg);
   state.recordTdCloseStrike({ headcode: '1A06', to: '0006', from: '0002', ts: iso(BASE) });
-  const e = state.closeStrikeSeen.get('1A06');
+  const e = state.closeStrikeSeen.get('1A06|0006');
   check('entering 0006 records an EAST strike', e ? e.direction : null, 'east');
   check('strike ts parsed from event', e ? e.ts : null, BASE);
   state.recordTdCloseStrike({ headcode: '2W24', to: '0003', from: '0001', ts: iso(BASE) });
-  const w = state.closeStrikeSeen.get('2W24');
+  const w = state.closeStrikeSeen.get('2W24|0003');
   check('entering 0003 records a WEST strike', w ? w.direction : null, 'west');
   state.recordTdCloseStrike({ headcode: '9Z99', to: '9999', from: '0000', ts: iso(BASE) });
-  check('entering a non-approach berth is ignored', state.closeStrikeSeen.has('9Z99'), false);
+  check('entering a non-approach berth is ignored', state.closeStrikeSeen.has('9Z99|9999'), false);
 }
 
 // ---- Change 3: direction-aware hold / merge -------------------------------
@@ -497,7 +503,7 @@ console.log('  -- gated state (confirmed start / predicted countdown) --');
 {
   const state = new CrossingState('t', closeCfg);
   const t = mkT({ dir: 'east', headcode: '1A08', bestTimeMs: BASE, source: 'ldb' });
-  state.closeStrikeSeen.set('1A08', { ts: BASE - 280000, direction: 'east' });
+  setStrike(state, '1A08', BASE - 280000, 'east');
   state.closurePeriods = state._computeClosures([t], new Date(BASE - 180000));
   check('struck: NOT CLOSED at −200s (before strike onset, though past −210 backstop)',
     state._deriveState(new Date(BASE - 200000)), 'CLOSING_SOON');
@@ -537,7 +543,7 @@ const mergeClearCfg = {
   // BASE = the moment 1S27 cleared. Offsets are the real ones from the incident.
   const clearTs = BASE;
   const state = new CrossingState('t', mergeClearCfg);
-  state.closeStrikeSeen.set('1S27', { ts: clearTs - 212000, direction: 'east' }); // 0006 at 19:04:07
+  setStrike(state, '1S27', clearTs - 212000, 'east'); // 0006 at 19:04:07
   state.clearStepSeen.set('1S27', { ts: clearTs, direction: 'east' });            // 0004→0002 19:07:39
   const east = mkT({ dir: 'east', headcode: '1S27', bestTimeMs: clearTs + 141000 }); // stale 19:10:00
   const west = mkT({ dir: 'west', headcode: '2Y62', bestTimeMs: clearTs + 186000 }); // 19:10:45
@@ -551,7 +557,7 @@ const mergeClearCfg = {
   // The same inputs WITHOUT a recorded clear step must still merge — proving the split
   // above comes from the clear step, not from some unrelated change to the gap maths.
   const naive = new CrossingState('t', mergeClearCfg);
-  naive.closeStrikeSeen.set('1S27', { ts: clearTs - 212000, direction: 'east' });
+  setStrike(naive, '1S27', clearTs - 212000, 'east');
   const merged = naive._computeClosures([east, west], new Date(clearTs + 46000));
   check('same inputs with no clear step recorded: still one merged period', merged.length, 1);
 }
@@ -613,7 +619,7 @@ console.log('  -- CLOSING_SOON window --');
   const state = new CrossingState('t', closeCfg);
   // Struck east stopper: predicted close == confirmed close == strike + 100s.
   const strike = BASE - 100000;                       // close lands exactly at BASE
-  state.closeStrikeSeen.set('1A30', { ts: strike, direction: 'east' });
+  setStrike(state, '1A30', strike, 'east');
   const t = mkT({ dir: 'east', headcode: '1A30', bestTimeMs: BASE + 180000 });
   state.closurePeriods = state._computeClosures([t], new Date(BASE - 120000));
 
@@ -621,6 +627,148 @@ console.log('  -- CLOSING_SOON window --');
   check('CLOSING_SOON at exactly 90s before', state._deriveState(new Date(BASE - 90000)), 'CLOSING_SOON');
   check('CLOSING_SOON at 30s before', state._deriveState(new Date(BASE - 30000)), 'CLOSING_SOON');
   check('CLOSED once the close time is reached', state._deriveState(new Date(BASE)), 'CLOSED');
+}
+
+// ---- Per-class eastbound close anchors -----------------------------------
+// Approach berth 0006 contains Fishersgate, so its strike means two different things
+// depending on whether the service calls there. Each class anchors to its own berth.
+console.log('  -- per-class eastbound anchors --');
+
+const classCfg = {
+  name: 'Class Test', road: 'Test Rd',
+  td: {
+    eastbound: {
+      approach: { from: '0006', to: '0004' },
+      clear: { from: '0004', to: '0002' },
+      approachChain: ['0016', '0014', '0012', '0010', '0008', '0006', '0004']
+    },
+    westbound: {
+      approach: { from: '0003', to: '0005' },
+      clear: { from: '0005', to: '0007' },
+      approachChain: ['T682', 'T677', '0001', '0003', '0005']
+    }
+  },
+  timing: {
+    closeBefore: { east: 1.5, west: 2.5 },
+    openAfter: { east: 0.5, west: 0.5 },
+    consecutiveWindow: 1.5,
+    closeTrigger: {
+      east: {
+        classes: {
+          stopping:      { berth: '0008', offsetSecs: 40 },
+          stoppingLocal: { berth: '0006', offsetSecs: 100 },
+          fast:          { berth: '0008', offsetSecs: 20 },
+          ecs:           { berth: '0008', offsetSecs: 85 },
+          freight:       { berth: '0006', offsetSecs: 20 }
+        },
+        predictedLeadSecs: 180,
+        safetyNetSecs: 145
+      },
+      west: { stoppingDepartureLeadSecs: 45, stoppingMinAfterStrikeSecs: 10, otherSecs: 20, safetyNetSecs: 90 }
+    },
+    mergeOppositeMaxGapSecs: 20
+  }
+};
+
+// class determination
+{
+  const st = new CrossingState('t', classCfg);
+  const cls = (o) => st._eastClass({ ...mkT({ dir: 'east', ...o }), callsAtApproach: o.callsAtApproach });
+  check('freight → freight class', cls({ headcode: '6O68', type: 'freight' }), 'freight');
+  check('5xxx ECS → ecs class', cls({ headcode: '5T91', type: 'ecs' }), 'ecs');
+  check('LDB stopper NOT calling Fishersgate → stopping (class A)',
+    cls({ headcode: '1H67', bestTimeMs: BASE, callsAtApproach: false }), 'stopping');
+  check('LDB stopper calling Fishersgate → stoppingLocal (class B)',
+    cls({ headcode: '1N61', bestTimeMs: BASE, callsAtApproach: true }), 'stoppingLocal');
+  check('unknown Fishersgate answer → stoppingLocal (the calibrated rule)',
+    cls({ headcode: '1N99', bestTimeMs: BASE, callsAtApproach: null }), 'stoppingLocal');
+  const cifPass = { ...mkT({ dir: 'east', headcode: '1Z01', bestTimeMs: BASE, source: 'cif' }), callsAtStation: false };
+  check('non-caller passenger → fast', st._eastClass(cifPass), 'fast');
+}
+
+// Fishersgate answer resolved from the CIF schedule by UID, for an LDB-sourced train
+{
+  const st = new CrossingState('t', classCfg);
+  st.scheduleTrains = [{ uid: 'W12345', headcode: '1H67', callsAtApproach: false, callsAtStation: true }];
+  const t = { ...mkT({ dir: 'east', headcode: '1H67', bestTimeMs: BASE }), uid: 'W12345' };
+  check('LDB train inherits the Fishersgate answer from CIF by UID', st._eastClass(t), 'stopping');
+}
+
+// each class anchors to its own berth + offset
+{
+  const anchored = (o, strikes) => {
+    const st = new CrossingState('t', classCfg);
+    for (const s of strikes) setStrike(st, o.headcode, s.ts, 'east', s.berth);
+    const t = { ...mkT({ dir: 'east', ...o }), callsAtApproach: o.callsAtApproach };
+    return st._computeClosures([t], new Date(BASE - 300000))[0];
+  };
+  check('class A: 0008 strike + 40s',
+    anchored({ headcode: '1H67', bestTimeMs: BASE, callsAtApproach: false },
+      [{ ts: BASE - 240000, berth: '0008' }]).predictedStart, iso(BASE - 200000));
+  check('class B: 0006 strike + 100s (unchanged)',
+    anchored({ headcode: '1N61', bestTimeMs: BASE, callsAtApproach: true },
+      [{ ts: BASE - 240000, berth: '0006' }]).predictedStart, iso(BASE - 140000));
+  check('freight: 0006 strike + 20s (NOT the fast-passenger rule)',
+    anchored({ headcode: '6O68', type: 'freight', bestTimeMs: BASE },
+      [{ ts: BASE - 240000, berth: '0006' }]).predictedStart, iso(BASE - 220000));
+  check('ecs: 0008 strike + 85s',
+    anchored({ headcode: '5T91', type: 'ecs', bestTimeMs: BASE },
+      [{ ts: BASE - 240000, berth: '0008' }]).predictedStart, iso(BASE - 155000));
+
+  // A class-A train striking 0006 must NOT re-anchor — 0006 is not its berth. This is
+  // what caused the CLOSED → CLOSING_SOON → CLOSED flicker on every 1H service.
+  check('class A ignores a 0006 strike (wrong berth for its class)',
+    anchored({ headcode: '1H67', bestTimeMs: BASE, callsAtApproach: false },
+      [{ ts: BASE - 100000, berth: '0006' }]).predictedStart, iso(BASE - 180000));
+}
+
+// ---- Position-gated backstop ---------------------------------------------
+console.log('  -- position-gated backstop --');
+{
+  const withPos = (berth) => {
+    const st = new CrossingState('t', classCfg);
+    const t = { ...mkT({ dir: 'east', headcode: '1H67', bestTimeMs: BASE }), callsAtApproach: false };
+    if (berth) st.liveTrains.set('1H67', { berth, lastSeen: BASE - 200000 });
+    return st._computeClosures([t], new Date(BASE - 200000))[0];
+  };
+  check('no live position: backstop applies (bestTime − 145s)', withPos(null).start, iso(BASE - 145000));
+  check('upstream of the 0008 anchor (at 0012): backstop suppressed', withPos('0012').start, iso(BASE - 180000));
+  check('at the anchor berth (0008) with no strike: backstop applies', withPos('0008').start, iso(BASE - 145000));
+  check('past the anchor (0006) with no strike: backstop applies', withPos('0006').start, iso(BASE - 145000));
+  check('elsewhere in the TD area (not on the chain): backstop applies', withPos('A012').start, iso(BASE - 145000));
+}
+
+// ---- Regression: the 2026-07-24 21:42 false CLOSED (1H67) -----------------
+// Real timings: 0008 in 20:42:04, 0006 in 20:43:22, crossed 20:44:58, bestTime 20:46:00.
+// Old behaviour: backstop (bestTime−210 = 20:42:30) fired CLOSED while the train was
+// still in 0008; the 0006 strike then pushed the close out to 20:45:02 — four seconds
+// AFTER it had already crossed the road — un-CLOSING and re-CLOSING the app.
+console.log('  -- 1H67 regression (2026-07-24) --');
+{
+  const T = (hhmmss) => Date.parse(`2026-07-24T${hhmmss}Z`);
+  const st = new CrossingState('t', classCfg);
+  const t = { ...mkT({ dir: 'east', headcode: '1H67', bestTimeMs: T('20:46:00') }), callsAtApproach: false };
+
+  // 20:42:03 — one second before reaching 0008, TD shows it in 0010.
+  st.liveTrains.set('1H67', { berth: '0010', lastSeen: T('20:42:03') });
+  let p = st._computeClosures([t], new Date(T('20:42:03')))[0];
+  check('at 20:42:03 (in 0010): NOT closed — backstop held off by position',
+    new Date(p.start) <= new Date(T('20:42:03')), false);
+
+  // 20:42:04 — strikes 0008, its anchor.
+  st.recordTdBerth({ headcode: '1H67', to: '0008', from: '0010', ts: new Date(T('20:42:04')).toISOString() });
+  setStrike(st, '1H67', T('20:42:04'), 'east', '0008');
+  p = st._computeClosures([t], new Date(T('20:42:04')))[0];
+  check('0008 strike anchors the close to 20:42:44 (strike + 40s)', p.predictedStart, iso(T('20:42:44')));
+  check('confirmed == predicted once struck', p.start, p.predictedStart);
+
+  // 20:43:22 — strikes 0006. Must NOT move anything for this class.
+  st.recordTdBerth({ headcode: '1H67', to: '0006', from: '0008', ts: new Date(T('20:43:22')).toISOString() });
+  setStrike(st, '1H67', T('20:43:22'), 'east', '0006');
+  const p2 = st._computeClosures([t], new Date(T('20:43:22')))[0];
+  check('0006 strike does not move the close (no flicker)', p2.predictedStart, iso(T('20:42:44')));
+  check('close now precedes the real crossing (20:44:58) by 134s',
+    Math.round((T('20:44:58') - Date.parse(p2.predictedStart)) / 1000), 134);
 }
 
 console.log();

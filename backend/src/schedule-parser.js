@@ -176,16 +176,15 @@ function extractTrainFields(sched) {
   };
 }
 
-// Does this schedule CALL at the crossing's own station (config schedule.tiploc_station)?
-// A calling location carries an arrival and/or departure; a location the train merely
-// runs through carries only `pass`. Returns null when unconfigured or the station isn't
-// in the schedule at all, so callers can distinguish "doesn't call" from "don't know".
-function callsAtStation(locations, schedCfg) {
-  const tip = schedCfg && schedCfg.tiploc_station;
-  if (!tip) return null;
+// Does this schedule CALL at `tiploc`? A calling location carries an arrival and/or
+// departure; a location the train merely runs through carries only `pass`. Returns null
+// when unconfigured or the location isn't in the schedule at all, so callers can tell
+// "doesn't call" apart from "don't know".
+function callsAt(locations, tiploc) {
+  if (!tiploc) return null;
   let seen = false;
   for (const loc of locations) {
-    if (loc.tiploc_code !== tip) continue;
+    if (loc.tiploc_code !== tiploc) continue;
     seen = true;
     if (loc.arrival || loc.departure || loc.public_arrival || loc.public_departure) return true;
   }
@@ -216,7 +215,12 @@ function buildCrossingEntry(fields, locations, crossingCfg) {
     // true/false when the schedule says whether it calls at the crossing station,
     // null when unknowable. Lets crossing-state classify a CIF train beyond the LDB
     // window instead of silently treating every CIF entry as non-stopping.
-    callsAtStation: callsAtStation(locations, schedCfg),
+    callsAtStation: callsAt(locations, schedCfg.tiploc_station),
+    // Whether it also calls at the station sitting INSIDE the approach berth
+    // (schedule.tiploc_approach_call — Fishersgate, inside eastbound berth 0006).
+    // That stop roughly doubles the approach-berth transit, so it selects which
+    // close anchor applies. See timing.closeTrigger._comment.
+    callsAtApproach: callsAt(locations, schedCfg.tiploc_approach_call),
     stp: fields.stp,
     runsAsRequired: fields.runsAsRequired,
     daysPattern: fields.daysPattern,
