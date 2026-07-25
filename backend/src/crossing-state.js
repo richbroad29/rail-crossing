@@ -63,6 +63,11 @@ const BERTH_HISTORY_MAX = 30;
 // Bounded in practice by the merged-list drop grace, so a sighted no-show can't hold
 // the barrier indefinitely.
 const OPEN_HOLD_FLOOR_MS = 60 * 1000;
+// Mirror of OPEN_HOLD_FLOOR_MS for the close side: while TD shows a train still short
+// of its close-anchor berth, the gated (CLOSED) onset is held this far into the future
+// so a drifting bestTime can't close the barrier for a train we can see isn't there.
+// Short, because it must release promptly once the train does reach the anchor.
+const CLOSE_HOLD_FLOOR_MS = 30 * 1000;
 
 class CrossingState {
   constructor(crossingId, config) {
@@ -671,10 +676,22 @@ class CrossingState {
     }
 
     const c = ct[t.direction] || {};
-    if (typeof c.safetyNetSecs === 'number' && !this._upstreamOfAnchor(t)) {
-      return new Date(t.bestTime.getTime() - c.safetyNetSecs * 1000);
+    if (typeof c.safetyNetSecs === 'number') {
+      const backstop = t.bestTime.getTime() - c.safetyNetSecs * 1000;
+      if (this._upstreamOfAnchor(t)) {
+        // TD shows the train still short of its anchor berth, so the anchor strike is
+        // genuinely still to come — HOLD the gated close in the near future rather than
+        // let a drifting bestTime fire CLOSED early. Floored (not just "skip the
+        // backstop"): falling through to _computeCloseTime would return the pre-strike
+        // prediction bestTime − predictedLeadSecs, which is EARLIER than the backstop
+        // now that safetyNet < predictedLead — i.e. the gate would have made CLOSED fire
+        // sooner, the exact opposite of its purpose. Releases as soon as the train
+        // reaches the anchor, or the strike lands and re-anchors properly.
+        return new Date(Math.max(backstop, now.getTime() + CLOSE_HOLD_FLOOR_MS));
+      }
+      return new Date(backstop);
     }
-    return this._computeCloseTime(t, now);               // no backstop / not there yet
+    return this._computeCloseTime(t, now);               // no backstop configured
   }
 
   // Predicted open (barrier-up) for a train — the grouping/merge end key, and the

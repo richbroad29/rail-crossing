@@ -732,7 +732,30 @@ console.log('  -- position-gated backstop --');
     return st._computeClosures([t], new Date(BASE - 200000))[0];
   };
   check('no live position: backstop applies (bestTime − 145s)', withPos(null).start, iso(BASE - 145000));
-  check('upstream of the 0008 anchor (at 0012): backstop suppressed', withPos('0012').start, iso(BASE - 180000));
+  // Upstream: the gated close is HELD into the near future, never pulled earlier. It must
+  // be strictly LATER than the ungated backstop, otherwise the gate would make CLOSED fire
+  // sooner for a train we can see has not arrived — which is what it did on first write.
+  const up = withPos('0012');
+  check('upstream, backstop still future: gated close = the backstop, never earlier',
+    up.start, iso(BASE - 145000));
+  check('upstream close is NOT pulled back to the pre-strike prediction',
+    Date.parse(up.start) > BASE - 180000, true);
+
+  // Once the backstop time itself has passed, the hold has to bind — otherwise a train
+  // we can see is still four berths away would show CLOSED off a drifting bestTime.
+  const late = (berth, nowMs) => {
+    const st = new CrossingState('t', classCfg);
+    const t = { ...mkT({ dir: 'east', headcode: '1H67', bestTimeMs: BASE }), callsAtApproach: false };
+    if (berth) st.liveTrains.set('1H67', { berth, lastSeen: nowMs });
+    return st._computeClosures([t], new Date(nowMs))[0];
+  };
+  const held = late('0012', BASE - 100000);          // past bestTime−145s, still at 0012
+  check('upstream past the backstop time: close held to now + 30s (not CLOSED)',
+    held.start, iso(BASE - 100000 + 30000));
+  check('...so the period is still in the future — no CLOSED', Date.parse(held.start) > BASE - 100000, true);
+  const free = late('0006', BASE - 100000);          // same instant, but past the anchor
+  check('past the anchor at the same instant: backstop applies and CLOSED is allowed',
+    Date.parse(free.start) <= BASE - 100000, true);
   check('at the anchor berth (0008) with no strike: backstop applies', withPos('0008').start, iso(BASE - 145000));
   check('past the anchor (0006) with no strike: backstop applies', withPos('0006').start, iso(BASE - 145000));
   check('elsewhere in the TD area (not on the chain): backstop applies', withPos('A012').start, iso(BASE - 145000));
