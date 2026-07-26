@@ -1,4 +1,7 @@
 node_modules/
-data/
+data/*
+# ...except the derived transit table: small, deterministic, reviewable, and the
+# service needs it at runtime. Regenerate with scripts/derive-transits.js.
+!data/transits.json
 .env
 *.log
