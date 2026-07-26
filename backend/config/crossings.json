@@ -72,7 +72,9 @@
             "freight":       { "berth": "0006", "offsetSecs": 20 }
           },
           "predictedLeadSecs": 180,
-          "safetyNetSecs": 145
+          "safetyNetSecs": 145,
+          "_comment_confirmedMayFollowPredicted": "Opt-in: allow the CLOSED gate to sit LATER than the predicted close. True only here, because safetyNetSecs(145) < predictedLeadSecs(180) is deliberate eastbound — it is what makes the frontend 'Soon' state live instead of dormant. Everywhere else the backstop is clamped to the prediction, so a pair of unrelated config values can't silently produce a window where the countdown has passed zero while the app still says CLEAR.",
+          "confirmedMayFollowPredicted": true
         },
         "west": { "stoppingDepartureLeadSecs": 45, "stoppingMinAfterStrikeSecs": 10, "otherSecs": 20, "safetyNetSecs": 90 }
       },

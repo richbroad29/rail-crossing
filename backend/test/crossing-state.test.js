@@ -662,7 +662,8 @@ const classCfg = {
           freight:       { berth: '0006', offsetSecs: 20 }
         },
         predictedLeadSecs: 180,
-        safetyNetSecs: 145
+        safetyNetSecs: 145,
+        confirmedMayFollowPredicted: true   // as production: "Soon" is live eastbound
       },
       west: { stoppingDepartureLeadSecs: 45, stoppingMinAfterStrikeSecs: 10, otherSecs: 20, safetyNetSecs: 90 }
     },
@@ -833,10 +834,93 @@ console.log('  -- picker anchors survive departure --');
   check('direction still resolved (not "unknown")', live ? live.direction : null, 'east');
   check('stopping stays true rather than degrading to "unknown"', live ? live.stopping : null, true);
 
+  // The real-world shape: Darwin KEEPS the departed service on the board and blanks the
+  // estimates rather than dropping the row, so the live match still wins the record
+  // lookup while holding nothing. Observed 2026-07-26 on 1N34.
+  const st2 = new CrossingState('t', classCfg);
+  st2.ldbTrains = [ldbTrain({ hc: '1N34', dir: 'west', bestMs: NOW + 60000,
+    schedArr: '21:09', schedDep: '21:09', liveArr: '21:11', liveDep: '21:12' })];
+  st2._mergeTrains();
+  st2.recordTdBerth({ headcode: '1N34', to: '0007', from: '0005', ts: iso2(NOW) });
+  // same row, estimates blanked as it arrives then departs
+  st2.ldbTrains = [ldbTrain({ hc: '1N34', dir: 'west', bestMs: NOW + 60000,
+    schedArr: '21:09', schedDep: '21:09', liveArr: null, liveDep: null })];
+  st2._mergeTrains();
+  const l2 = st2.getLiveTrains(NOW + 2000).find(t => t.headcode === '1N34');
+  check('board blanks liveArr but keeps the row: last value retained', l2 ? l2.liveArr : null, '21:11');
+  check('board blanks liveDep but keeps the row: last value retained', l2 ? l2.liveDep : null, '21:12');
+  check('scheduled times unaffected', l2 ? l2.schedArr : null, '21:09');
+
   // A headcode reused much later in the day must not resolve to this morning's working.
   state.knownTrains.get('1H69').sourceSeenMs = NOW - 60 * 60000;
   state._mergeTrains();
   check('cache entry expires after its TTL', state.knownTrains.has('1H69'), false);
+}
+
+// ---- closeConfirmed / state derivation / west invariant ------------------
+console.log('  -- closeConfirmed + state + west invariant --');
+
+{
+  // closeConfirmed reflects the train that SETS the gating close, not just any strike.
+  const st = new CrossingState('t', classCfg);
+  const t = { ...mkT({ dir: 'east', headcode: '1H67', bestTimeMs: BASE }), callsAtApproach: false };
+  let p = st._computeClosures([t], new Date(BASE - 300000))[0];
+  check('unstruck period: closeConfirmed false', p.closeConfirmed, false);
+
+  setStrike(st, '1H67', BASE - 240000, 'east', '0008');
+  p = st._computeClosures([t], new Date(BASE - 200000))[0];
+  check('struck at its anchor: closeConfirmed true', p.closeConfirmed, true);
+  check('...and start == predictedStart', p.start, p.predictedStart);
+
+  // A strike on the WRONG berth for the class must not claim confirmation.
+  const st2 = new CrossingState('t', classCfg);
+  setStrike(st2, '1H67', BASE - 100000, 'east', '0006');   // class A anchors on 0008
+  const p2 = st2._computeClosures([t], new Date(BASE - 90000))[0];
+  check('strike on a berth this class does not anchor to: closeConfirmed false',
+    p2.closeConfirmed, false);
+}
+
+{
+  // _deriveState must not skip a period whose predicted close has passed but whose
+  // gating start has not — the window that exists because safetyNet < predictedLead.
+  const st = new CrossingState('t', classCfg);
+  const t = { ...mkT({ dir: 'east', headcode: '1H67', bestTimeMs: BASE }), callsAtApproach: false };
+  st.closurePeriods = st._computeClosures([t], new Date(BASE - 300000));
+  const pred = Date.parse(st.closurePeriods[0].predictedStart);   // BASE − 180s
+  const start = Date.parse(st.closurePeriods[0].start);           // BASE − 145s
+  check('the gap under test exists (start after predictedStart)', start > pred, true);
+  check('before the predicted close: CLOSING_SOON', st._deriveState(new Date(pred - 30000)), 'CLOSING_SOON');
+  check('predicted passed, gate not reached: still CLOSING_SOON (was OPEN)',
+    st._deriveState(new Date(pred + 10000)), 'CLOSING_SOON');
+  check('gate reached: CLOSED', st._deriveState(new Date(start + 1000)), 'CLOSED');
+}
+
+{
+  // The API's state must reflect request time, not the last recompute.
+  const st = new CrossingState('t', classCfg);
+  const t = { ...mkT({ dir: 'east', headcode: '1H67', bestTimeMs: Date.now() + 600000 }), callsAtApproach: false };
+  st.ldbTrains = [];
+  st.closurePeriods = st._computeClosures([t], new Date());
+  st.state = 'CLOSED';                                     // deliberately stale
+  check('getApiState derives state fresh rather than serving the stored value',
+    st.getApiState().state === 'CLOSED', false);
+}
+
+{
+  // West: the gated close must never sit later than the prediction it backs up.
+  const wCfg = JSON.parse(JSON.stringify(classCfg));
+  const nonStop = mkT({ dir: 'west', headcode: '6O99', type: 'freight', bestTimeMs: BASE, source: 'cif' });
+  const stW = new CrossingState('t', wCfg);
+  const pw = stW._computeClosures([nonStop], new Date(BASE - 400000))[0];
+  check('west non-stopping: gated close clamped to the prediction, not 60s later',
+    pw.start, pw.predictedStart);
+  check('...which is bestTime − closeBefore.west (150s)', pw.predictedStart, iso(BASE - 150000));
+
+  // ...and a west stopper is untouched: its backstop is already earlier.
+  const stopW = mkT({ dir: 'west', headcode: '2W30', bestTimeMs: BASE, source: 'ldb' });
+  const ps = new CrossingState('t', wCfg)._computeClosures([stopW], new Date(BASE - 400000))[0];
+  check('west stopper: still gated at bestTime − 90s (no regression)', ps.start, iso(BASE - 90000));
+  check('west stopper: prediction still departure − 45s', ps.predictedStart, iso(BASE - 45000));
 }
 
 console.log();

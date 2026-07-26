@@ -291,11 +291,33 @@ class CrossingState {
     return cached ? cached.train : null;
   }
 
+  // One of the four Portslade times: whatever a source is reporting right now, else the
+  // last non-empty value we held for this train. An OPEN tap is attributed to a train
+  // that has just left, so without this its estimates are blank exactly when the
+  // calibration needs them.
+  _lastKnownField(headcode, match, field) {
+    if (match && match[field]) return match[field];
+    const cached = this.knownTrains.get(headcode);
+    return (cached && cached.train && cached.train[field]) || null;
+  }
+
+  // Fields carried forward when a source stops reporting them. A blanked estimate is
+  // not new information about the timetable — it means the event has happened — so the
+  // last value we actually saw is still the best answer for the feedback picker.
+  static get STICKY_FIELDS() { return ['schedArr', 'schedDep', 'liveArr', 'liveDep']; }
+
   // Cache every train a source reported this cycle, and expire stale entries.
   _rememberTrains(merged, nowMs) {
     for (const t of merged) {
       if (!t.headcode) continue;
-      this.knownTrains.set(t.headcode, { train: t, sourceSeenMs: nowMs });
+      const prev = this.knownTrains.get(t.headcode);
+      const train = { ...t };
+      if (prev && prev.train) {
+        for (const k of CrossingState.STICKY_FIELDS) {
+          if (!train[k] && prev.train[k]) train[k] = prev.train[k];
+        }
+      }
+      this.knownTrains.set(t.headcode, { train, sourceSeenMs: nowMs });
     }
     for (const [hc, e] of this.knownTrains) {
       if (nowMs - e.sourceSeenMs > KNOWN_TRAIN_TTL_MS) this.knownTrains.delete(hc);
@@ -328,12 +350,17 @@ class CrossingState {
         stopping: onBoard ? true : 'unknown',
         origin: match ? (match.origin || null) : null,
         destination: match ? (match.destination || null) : null,
-        // Four Portslade times (LDB sta/std/eta/etd, HH:MM) from the matched known
-        // train, and the recent berth-strike history — both feed the feedback picker.
-        schedArr: match ? (match.schedArr || null) : null,
-        schedDep: match ? (match.schedDep || null) : null,
-        liveArr: match ? (match.liveArr || null) : null,
-        liveDep: match ? (match.liveDep || null) : null,
+        // Four Portslade times (LDB sta/std/eta/etd) and the recent berth-strike
+        // history — both feed the feedback picker. Resolved FIELD BY FIELD, not by
+        // picking one record: Darwin does not drop a departed service from the board,
+        // it keeps the row and BLANKS the estimates — liveArr as the train arrives,
+        // liveDep as it leaves. So the live match still wins the record lookup while
+        // holding nothing, and a record-level cache fallback never fires. Observed
+        // 2026-07-26: 1N34 crossed with both live fields already empty.
+        schedArr: this._lastKnownField(headcode, match, 'schedArr'),
+        schedDep: this._lastKnownField(headcode, match, 'schedDep'),
+        liveArr: this._lastKnownField(headcode, match, 'liveArr'),
+        liveDep: this._lastKnownField(headcode, match, 'liveDep'),
         history: (t.history || []).map(h => ({ berth: h.berth, ts: h.ts, event: h.event })),
         lastSeen: t.lastSeen,
         ageSecs: Math.round((now - t.lastSeen) / 1000)
@@ -581,6 +608,13 @@ class CrossingState {
     return cfg && cfg.approach ? cfg.approach.from : undefined;
   }
 
+  // The berth this train's close is anchored to — its class anchor where configured,
+  // otherwise the direction's single approach berth.
+  _anchorBerthFor(t) {
+    const a = this._closeAnchor(t);
+    return a ? a.berth : this._approachBerth(t.direction);
+  }
+
   // The close-anchor spec { berth, offsetSecs } for a train, or null when the crossing
   // isn't using per-class anchors (legacy single-berth config).
   _closeAnchor(t) {
@@ -720,7 +754,21 @@ class CrossingState {
 
     const c = ct[t.direction] || {};
     if (typeof c.safetyNetSecs === 'number') {
-      const backstop = t.bestTime.getTime() - c.safetyNetSecs * 1000;
+      let backstop = t.bestTime.getTime() - c.safetyNetSecs * 1000;
+      // A backstop LATER than the predicted close means the countdown reaches zero while
+      // the app still says the crossing is clear. Eastbound that is deliberate — it is
+      // what makes the "Soon" state live (safetyNetSecs 145 < predictedLeadSecs 180) —
+      // and is opted into per direction. Westbound it was an accident of two unrelated
+      // config values (safetyNetSecs 90 vs closeBefore 150), giving every CIF-sourced
+      // westbound a 60s window of "clear" after its own predicted barrier-down.
+      //
+      // Clamping rather than raising safetyNetSecs.west, because one number cannot serve
+      // both westbound classes: stoppers predict off departure−45 and non-stoppers off
+      // bestTime−150, so raising it to 150 would fix the latter and make CLOSED fire ~2
+      // min early for the former.
+      if (!c.confirmedMayFollowPredicted) {
+        backstop = Math.min(backstop, this._computeCloseTime(t, now).getTime());
+      }
       if (this._upstreamOfAnchor(t)) {
         // TD shows the train still short of its anchor berth, so the anchor strike is
         // genuinely still to come — HOLD the gated close in the near future rather than
@@ -821,7 +869,8 @@ class CrossingState {
       train: t,
       predClose: this._computeCloseTime(t, now),
       confClose: this._confirmedCloseTime(t, now),
-      openPred: this._openPred(t, now)
+      openPred: this._openPred(t, now),
+      struck: !!this._freshStrike(t, now, this._anchorBerthFor(t))
     }));
 
     const groups = [];
@@ -842,14 +891,21 @@ class CrossingState {
       const confStart = new Date(Math.min(...g.map(a => a.confClose.getTime())));
       const maxOpenPred = new Date(Math.max(...g.map(a => a.openPred.getTime())));
       const end = this._anchorEndToClearStep(maxOpenPred, groupTrains, now);
-      return this._makePeriod(confStart, end, groupTrains, predStart);
+      // Is the close that actually gates this period anchored to a physical berth
+      // strike, or still a timetable estimate? Read off the train that SET confStart,
+      // since that is the one the CLOSED state follows.
+      const driver = g.reduce((m, a) => (a.confClose < m.confClose ? a : m), g[0]);
+      return this._makePeriod(confStart, end, groupTrains, predStart, driver.struck);
     });
   }
 
   // start = CONFIRMED close (gated CLOSED onset). predictedStart = PREDICTED close
   // (countdown / closing-soon target); defaults to start for the legacy/no-trigger path.
-  // When not struck confirmedClose ≤ predictedClose, so start ≤ predictedStart; struck ⇒ equal.
-  _makePeriod(start, end, trains, predictedStart = start) {
+  // closeConfirmed = the gating close is anchored to a physical berth strike rather than
+  // a timetable estimate, so the client can show it without a confidence band instead of
+  // inferring that from start === predictedStart, which is only a coincidence of the
+  // current arithmetic.
+  _makePeriod(start, end, trains, predictedStart = start, closeConfirmed = false) {
     // Determine reason
     let reason = 'single_train';
     if (trains.length > 1) reason = 'merged_consecutive';
@@ -862,6 +918,7 @@ class CrossingState {
     return {
       start: start.toISOString(),
       predictedStart: (predictedStart || start).toISOString(),
+      closeConfirmed: !!closeConfirmed,
       end: end.toISOString(),
       durationMins: Math.round((end - start) / 60000),
       reason,
@@ -983,7 +1040,12 @@ class CrossingState {
     );
     if (currentClosure) return 'CLOSED';
 
-    const nextClosure = this.closurePeriods.find(p => closeTarget(p) > now);
+    // Pick the next period by whether it has STARTED, not by whether its predicted
+    // close is still ahead. Since safetyNet < predictedLead eastbound, there is a window
+    // where predictedStart has passed but the gating start has not; keying off
+    // closeTarget skipped such a period entirely and reported OPEN moments before the
+    // barrier came down — in exactly the window the state log exists to capture.
+    const nextClosure = this.closurePeriods.find(p => new Date(p.start) > now);
     if (nextClosure && (closeTarget(nextClosure) - now) <= CLOSING_SOON_WINDOW_MS) {
       return 'CLOSING_SOON';
     }
@@ -1001,7 +1063,11 @@ class CrossingState {
       crossingId: this.id,
       name: this.config.name,
       road: this.config.road,
-      state: this.state,
+      // Derived per request. closurePeriods only changes on _recompute (LDB poll / TD
+      // event), but the passage of time alone changes which period is current — so a
+      // stored value goes stale between events while currentClosure/nextClosure below
+      // are evaluated against request time, and the two disagreed.
+      state: this._deriveState(now),
       lastStateChange: this.lastStateChange.toISOString(),
       currentClosure: current || null,
       nextClosure: next || null,
