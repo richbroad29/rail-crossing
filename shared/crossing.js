@@ -39,10 +39,10 @@ function fmtCountdownRough(ms) {
 }
 // The "when" half of a closure pill, as a phrase rather than a bare value — the
 // template used to prefix "in " unconditionally, so a countdown sitting at or past
-// zero rendered "in now". Past zero it is "any moment", not a time. `rough` mirrors
-// the ± band: when the band is a minute or wider, second precision would be a lie.
+// zero rendered "in now". Past zero it is "any moment now", not a time. `rough`
+// mirrors the ± band: when the band is a minute or wider, second precision is a lie.
 function fmtWhen(ms, rough) {
-  if (ms <= 0) return 'any moment';
+  if (ms <= 0) return 'any moment now';
   if (!rough) return 'in ' + fmtCountdown(ms);
   return ms < 60000 ? 'in under a minute' : 'in ' + fmtCountdownRough(ms);
 }
@@ -298,12 +298,12 @@ function renderClosures() {
     // from it would overstate the closure and disagree with the Down For card.
     // Formatted with fmtDuration so this pill and the "Down For" card round the same
     // way — they were showing "~5 min" and "~4m 50s" side by side for one closure.
-    var duration = fmtDuration(p.end - (p.predictedStart || p.start));
+    var duration = fmtDuration(p.end - (p.predictedStart || p.start)).replace('~', '');
     html += '<div class="closure-card' + (isCurrent ? ' closure-active' : '') + '">';
     html += '<div class="closure-hdr">';
     if (isCurrent) {
       html += '<span class="closure-time" style="color:#FCA5A5">NOW \u2014 ' + fmtShort(p.end) + '</span>';
-      html += '<span class="closure-pill closure-pill-active">' + duration + ' \u00B7 opens ' + fmtCountdown(p.end.getTime() - now.getTime()) + '</span>';
+      html += '<span class="closure-pill closure-pill-active">Closed ' + duration + ' \u00B7 opens in ' + fmtCountdown(p.end.getTime() - now.getTime()) + '</span>';
     } else {
       var w = p.window || { imminent: false, halfWidthSecs: 120 };
       // Show the PREDICTED close time/countdown (matches the header countdown);
@@ -312,10 +312,10 @@ function renderClosures() {
       var secsUntil = pStart.getTime() - now.getTime();
       if (w.imminent) {
         html += '<div class="closure-time-group"><span class="closure-time closure-imminent">Any moment now</span></div>';
-        html += '<span class="closure-pill">' + duration + '</span>';
+        html += '<span class="closure-pill">Closed ' + duration + ' \u00B7 any moment now</span>';
       } else {
         html += '<div class="closure-time-group"><span class="closure-time">' + fmtShort(pStart) + '</span><span class="closure-uncertainty">\u00B1' + fmtUncertainty(w.halfWidthSecs) + '</span></div>';
-        html += '<span class="closure-pill">' + duration + ' \u00B7 ' + fmtWhen(secsUntil, w.halfWidthSecs >= 60) + '</span>';
+        html += '<span class="closure-pill">Closed ' + duration + ' \u00B7 ' + fmtWhen(secsUntil, w.halfWidthSecs >= 60) + '</span>';
       }
     }
     html += '</div>';
