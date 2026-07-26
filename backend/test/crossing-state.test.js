@@ -923,6 +923,133 @@ console.log('  -- closeConfirmed + state + west invariant --');
   check('west stopper: prediction still departure − 45s', ps.predictedStart, iso(BASE - 45000));
 }
 
+// ---- Berth projection: sharpening prediction ------------------------------
+// The prediction engine IS the close/open logic, fed a projected anchor time when the
+// real one hasn't happened yet. Measured transits are the only stored input, so
+// recalibrating an offset moves the projection with it — no regeneration.
+console.log('  -- berth projection --');
+
+const projCfg = JSON.parse(JSON.stringify(classCfg));
+projCfg.timing.openLagSecs = { east: { passenger: 45, freight: 70 }, west: { passenger: 18, freight: 30 } };
+projCfg.transits = {
+  east: {
+    stopping:      { '0010>0008': { secs: 157, sdSecs: 23, n: 2229 },
+                     '0010>XING': { secs: 355, sdSecs: 36, n: 2229 },
+                     '0008>XING': { secs: 189, sdSecs: 28, n: 2235 } },
+    stoppingLocal: { '0008>0006': { secs: 71, sdSecs: 14, n: 4553 } }
+  }
+};
+const NOW2 = Date.now();
+const eastT = (o) => ({ ...mkT({ dir: 'east', headcode: o.hc, bestTimeMs: o.bestMs }),
+                        callsAtApproach: o.fsg === undefined ? false : o.fsg });
+
+{
+  const st = new CrossingState('t', projCfg);
+  const t = eastT({ hc: '1H67', bestMs: NOW2 + 400000 });
+  st.recordTdBerth({ headcode: '1H67', to: '0010', from: '0012', ts: new Date(NOW2).toISOString() });
+
+  // 0010 → 0008 is 157s, and class A closes at 0008 + 40 ⇒ close ≈ now + 197s
+  const p = st._computeClosures([t], new Date(NOW2 + 1000))[0];
+  check('close projected from the current berth, not bestTime',
+    Math.round((Date.parse(p.predictedStart) - NOW2) / 1000), 197);
+
+  // ...and it is the CLOSE LOGIC being projected: change the offset, the projection moves
+  const cfg2 = JSON.parse(JSON.stringify(projCfg));
+  cfg2.timing.closeTrigger.east.classes.stopping.offsetSecs = 90;   // 40 -> 90
+  const st2 = new CrossingState('t', cfg2);
+  st2.recordTdBerth({ headcode: '1H67', to: '0010', from: '0012', ts: new Date(NOW2).toISOString() });
+  const p2 = st2._computeClosures([eastT({ hc: '1H67', bestMs: NOW2 + 400000 })], new Date(NOW2 + 1000))[0];
+  check('recalibrating the offset moves the projection with it (no regeneration)',
+    Math.round((Date.parse(p2.predictedStart) - NOW2) / 1000), 247);
+}
+
+{
+  // A real strike must beat a projection, and must collapse it to the exact value.
+  const st = new CrossingState('t', projCfg);
+  const t = eastT({ hc: '1H67', bestMs: NOW2 + 400000 });
+  st.recordTdBerth({ headcode: '1H67', to: '0010', from: '0012', ts: new Date(NOW2).toISOString() });
+  setStrike(st, '1H67', NOW2 + 150000, 'east', '0008');
+  const p = st._computeClosures([t], new Date(NOW2 + 151000))[0];
+  check('a real strike overrides the projection', p.predictedStart, iso(NOW2 + 190000));
+  check('...and the close is then confirmed', p.closeConfirmed, true);
+}
+
+{
+  // A projection is an estimate, never confirmation: it must not gate CLOSED.
+  const st = new CrossingState('t', projCfg);
+  const t = eastT({ hc: '1H67', bestMs: NOW2 + 400000 });
+  st.recordTdBerth({ headcode: '1H67', to: '0010', from: '0012', ts: new Date(NOW2).toISOString() });
+  const p = st._computeClosures([t], new Date(NOW2 + 1000))[0];
+  check('projected close does NOT mark the period confirmed', p.closeConfirmed, false);
+  check('projected close does NOT become the CLOSED gate', p.start === p.predictedStart, false);
+}
+
+{
+  // No live position, or no transit sample: fall back to the bestTime prediction exactly
+  // as before, so a crossing without a table is unaffected.
+  const st = new CrossingState('t', projCfg);
+  const t = eastT({ hc: '1H67', bestMs: NOW2 + 400000 });
+  const p = st._computeClosures([t], new Date(NOW2))[0];
+  check('no live position: falls back to bestTime − predictedLeadSecs',
+    Math.round((Date.parse(p.predictedStart) - NOW2) / 1000), 220);
+
+  const bare = new CrossingState('t', classCfg);      // no transits at all
+  bare.recordTdBerth({ headcode: '1H67', to: '0010', from: '0012', ts: new Date(NOW2).toISOString() });
+  const pb = bare._computeClosures([eastT({ hc: '1H67', bestMs: NOW2 + 400000 })], new Date(NOW2))[0];
+  check('no transit table: unchanged behaviour',
+    Math.round((Date.parse(pb.predictedStart) - NOW2) / 1000), 220);
+}
+
+{
+  // OPEN: reopen projected from the current berth instead of the now+60 placeholder that
+  // trailed the clock and made the countdown run backwards.
+  const st = new CrossingState('t', projCfg);
+  const t = eastT({ hc: '1H67', bestMs: NOW2 - 60000 });      // bestTime already passed
+  st.tdSeenToday.set('1H67', new Date(NOW2));
+  st.recordTdBerth({ headcode: '1H67', to: '0010', from: '0012', ts: new Date(NOW2).toISOString() });
+  const p = st._computeClosures([t], new Date(NOW2 + 1000))[0];
+  // 0010 → XING 355s, east passenger open lag 45s ⇒ reopen ≈ now + 400s
+  check('reopen projected from the berth (not now + 60s)',
+    Math.round((Date.parse(p.end) - NOW2) / 1000), 400);
+
+  // and it must never land in the past while the train demonstrably hasn't cleared
+  const late = st._computeClosures([t], new Date(NOW2 + 600000))[0];
+  check('a stale projection is floored into the future, never expiring the closure',
+    Date.parse(late.end) > NOW2 + 600000, true);
+}
+
+// ---- CIF merge: berth projection replaces the area-entry stopgap ----------
+console.log('  -- CIF projection replaces areaEntryLeadSecs --');
+{
+  const cfg2 = JSON.parse(JSON.stringify(projCfg));
+  const mk2 = () => ({ uid: 'C1', headcode: '1N63', direction: 'east', trainType: 'passenger',
+    estimatedCrossingMins: 0, origin: 'A', destination: 'B', operator: 'ZZ',
+    callsAtStation: true, callsAtApproach: false, source: 'schedule' });
+  const T = Date.now();
+
+  // Sighted entering area LA 20 min ago. The old rule projects sighting + 150s and drops
+  // the train 3 min after that — i.e. ~15 min before it actually crosses. Measured over
+  // 10 days this fires for 95% of eastbound trains.
+  const stale = new CrossingState('t', cfg2);
+  stale._scheduleTimeToDate = () => new Date(T - 10 * 60000);
+  stale.scheduleTrains = [mk2()];
+  stale.recordTdSighting('1N63', new Date(T - 20 * 60000));
+  check('old path: a long-sighted train is dropped even though it is still coming',
+    stale._mergeTrains().some(m => m.headcode === '1N63'), false);
+
+  // Same train, but TD has it on our chain at 0010.
+  const seen = new CrossingState('t', cfg2);
+  seen._scheduleTimeToDate = () => new Date(T - 10 * 60000);
+  seen.scheduleTrains = [mk2()];
+  seen.recordTdSighting('1N63', new Date(T - 20 * 60000));
+  seen.recordTdBerth({ headcode: '1N63', to: '0010', from: '0012', ts: new Date(T).toISOString() });
+  const m = seen._mergeTrains().find(x => x.headcode === '1N63');
+  check('berth projection keeps a train we can actually see', !!m, true);
+  check('...with bestTime measured from the berth (0010 → crossing = 355s)',
+    m ? Math.round((m.bestTime.getTime() - T) / 1000) : null, 355);
+  check('...and labelled as a position estimate', m ? m.etaText : null, 'Live (berth)');
+}
+
 console.log();
 if (fail > 0) { console.error(`${fail} FAILED, ${pass} passed`); process.exit(1); }
 else { console.log(`All ${pass} tests passed.`); }

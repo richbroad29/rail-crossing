@@ -1,5 +1,18 @@
+const fs = require('fs');
+const path = require('path');
 const logger = require('./logger');
 const { londonMinsToDate } = require('./time-utils');
+
+// Measured berth→berth transits (scripts/derive-transits.js). Purely empirical: no close
+// or open offsets are baked in, so recalibrating an offset or re-anchoring a class needs
+// no regeneration here. Absent file ⇒ projection disabled and every path falls back to
+// the bestTime estimates, so a crossing without a table behaves exactly as before.
+let TRANSITS = {};
+try {
+  TRANSITS = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'data', 'transits.json'), 'utf8'));
+} catch (e) {
+  console.warn('transits.json not loaded (' + e.code + ') — berth projection disabled');
+}
 
 // States: OPEN, CLOSING_SOON, CLOSED, OPENING_SOON
 //
@@ -79,6 +92,10 @@ class CrossingState {
     this.id = crossingId;
     this.config = config;
     this.timing = config.timing;
+    // Measured berth→berth transits for this crossing. config.transits wins so a test (or
+    // a second crossing) can supply its own; otherwise the generated file. Empty ⇒ no
+    // projection, and every path falls back to the bestTime estimates.
+    this.transits = config.transits || TRANSITS[crossingId] || {};
 
     // Data sources
     this.ldbTrains = [];           // From LDBSVWS polling
@@ -416,19 +433,29 @@ class CrossingState {
 
       const tdSighting = t.headcode ? this.tdSeenToday.get(t.headcode) : null;
 
-      // The 'sighting' event fires on ANY CA/CB step in TD area LA and carries
-      // only { headcode, ts } — NOT the approach berth. So it means "entered
-      // the LA area", a per-direction transit *before* the crossing, not the
-      // crossing itself. Project forward by that nominal lead.
+      // Where do we think this train reaches the road?
+      //
+      // FIRST CHOICE — measured, from where TD actually has it. A berth on our own
+      // approach chain plus the transit for its class is a real position-based estimate
+      // and it sharpens on every step.
+      //
+      // FALLBACK — the old area-entry projection: the 'sighting' event fires on ANY CA/CB
+      // step in area LA and carries no berth, so it only means "somewhere in LA". That is
+      // a poor estimate and, worse, it drives the drop rule below: measured over 10 days,
+      // first-sighting→crossing is a median 2,329s eastbound against a 330s deadline, so
+      // 95% of trains would breach it. Only reached now when we have no berth for the
+      // train, which is precisely when we genuinely don't know where it is.
+      const projected = this._projectBerth(t, 'XING', now);
       const leadMs = this._getAreaEntryLeadMs(t.direction);
-      const projectedFromSighting = tdSighting ? tdSighting.getTime() + leadMs : null;
+      const projectedFromSighting = projected ? projected.ts
+        : (tdSighting ? tdSighting.getTime() + leadMs : null);
 
       // Drop trains that have clearly gone:
       //  - Sighted (confirmed live): keep until SIGHTING_DROP_GRACE_MS past the
       //    *projected* crossing, so a late-runner is never removed mid-approach.
       //  - Un-sighted: drop once the *scheduled* crossing is SCHEDULE_PAST_GRACE_MS
       //    stale (already ran, or a no-show). This preserves the old behaviour.
-      if (tdSighting) {
+      if (tdSighting || projected) {
         if (now.getTime() > projectedFromSighting + SIGHTING_DROP_GRACE_MS) continue;
       } else if (estTime.getTime() < now.getTime() - SCHEDULE_PAST_GRACE_MS) {
         continue;
@@ -478,7 +505,13 @@ class CrossingState {
       let bestTime = estTime;
       let confidence = t.trainType === 'freight' ? 'low' : 'medium';
       let etaText = 'Timetabled';
-      if (tdSighting && (estTime.getTime() - now.getTime()) < TD_LOCK_LEAD_MS) {
+      if (projected) {
+        // We can see the train. A measured position beats the timetable outright, so use
+        // it whether or not the scheduled time has passed.
+        bestTime = new Date(projected.ts);
+        confidence = 'medium';
+        etaText = 'Live (berth)';
+      } else if (tdSighting && (estTime.getTime() - now.getTime()) < TD_LOCK_LEAD_MS) {
         bestTime = new Date(projectedFromSighting);
         confidence = 'low';
         etaText = 'Live (TD)';
@@ -608,6 +641,44 @@ class CrossingState {
     return cfg && cfg.approach ? cfg.approach.from : undefined;
   }
 
+  // Measured transit for this train's class between two berths, or null when we have no
+  // sample. `XING` is a valid destination (the road crossing / clear step).
+  _transit(t, from, to) {
+    const byDir = this.transits[t.direction];
+    if (!byDir) return null;
+    const k = t.direction === 'east' ? this._eastClass(t)
+      : (this._isStopping(t) ? 'stopping' : (t.trainType === 'freight' ? 'freight'
+        : t.trainType === 'ecs' ? 'ecs' : 'fast'));
+    const cell = (byDir[k] || {})[`${from}>${to}`];
+    return cell && typeof cell.secs === 'number' ? cell : null;
+  }
+
+  // PROJECTED arrival of a train at `berth`, from wherever TD last saw it, using measured
+  // transits for its class. This is the sharpening step: every berth the train strikes
+  // gives a fresher origin and a tighter spread, and the projection is replaced outright
+  // by the real event once it happens.
+  //
+  // Returns { ts, sdSecs, projected:true, from } or null when we can't project — no live
+  // position, no transit sample, or the train is already past `berth`.
+  _projectBerth(t, berth, now) {
+    if (!t.headcode) return null;
+    const live = this.liveTrains.get(t.headcode);
+    if (!live || !live.berth || !live.lastSeen) return null;
+    if (now.getTime() - live.lastSeen > this._getLiveTtlMs()) return null;
+    if (live.berth === berth) return null;              // already there; caller wants the real strike
+    const cell = this._transit(t, live.berth, berth);
+    if (!cell) return null;
+    return { ts: live.lastSeen + cell.secs * 1000, sdSecs: cell.sdSecs, projected: true, from: live.berth };
+  }
+
+  // The strike a prediction should use for `berth`: the real one if it has happened,
+  // otherwise a projection from the train's current position. Callers that gate a STATE
+  // (rather than display a prediction) must use _freshStrike directly — a projection is
+  // an estimate, never confirmation.
+  _strikeOrProjection(t, berth, now) {
+    return this._freshStrike(t, now, berth) || this._projectBerth(t, berth, now);
+  }
+
   // The berth this train's close is anchored to — its class anchor where configured,
   // otherwise the direction's single approach berth.
   _anchorBerthFor(t) {
@@ -660,11 +731,15 @@ class CrossingState {
       const c = ct.east || {};
       const anchor = this._closeAnchor(t);
       if (anchor) {
-        const struck = this._freshStrike(t, now, anchor.berth);
+        // Real strike if it has happened, else project it from wherever TD has the train
+        // now. Either way the SAME rule runs on it, so recalibrating offsetSecs moves the
+        // projection with it — the engine is the close logic, fed an estimated input.
+        const struck = this._strikeOrProjection(t, anchor.berth, now);
         if (struck) return new Date(struck.ts + anchor.offsetSecs * 1000);
       } else {
-        // Legacy flat config: one approach berth, class picked by type only.
-        const struck = this._freshStrike(t, now, this._approachBerth('east'));
+        // Legacy flat config: one approach berth, class picked by type only. Projected
+        // too, so a crossing on the older config shape gets the same sharpening.
+        const struck = this._strikeOrProjection(t, this._approachBerth('east'), now);
         const secs = t.trainType === 'freight' ? c.freightSecs
                    : (t.trainType === 'passenger' && stopping) ? c.stoppingSecs
                    : c.otherSecs;                        // non-stopping / ECS / unknown
@@ -677,9 +752,9 @@ class CrossingState {
       return new Date(t.bestTime.getTime() - lead * 1000);
     }
 
-    // west — still a single approach berth (0003); no Fishersgate-equivalent on this side.
+    // west — still a single approach berth (0003); no Southwick-equivalent on this side.
     const c = ct.west || {};
-    const struck = this._freshStrike(t, now, this._approachBerth('west'));
+    const struck = this._strikeOrProjection(t, this._approachBerth('west'), now);
     if (t.trainType === 'passenger' && stopping && this._hasLiveDeparture(t)) {
       // bestTime IS the LDB departure for westbound (extractTrain: et=etd||eta), so
       // dep − lead is meaningful. The _hasLiveDeparture guard keeps a CIF-sourced
@@ -802,11 +877,17 @@ class CrossingState {
   // Shortening is safe: callers take max() over the group and _anchorEndToClearStep
   // still owns the final train's end, so an intermediate clear can't end a period early.
   _openPred(t, now) {
+    const lagSecs = this._getOpenLagSecs(t.direction, t.trainType);
     const cleared = t.headcode ? this.clearStepSeen.get(t.headcode) : null;
     if (cleared && now && (now.getTime() - cleared.ts) <= CLEAR_STEP_TTL_MS) {
-      const lagSecs = this._getOpenLagSecs(t.direction, t.trainType);
       if (lagSecs != null) return new Date(cleared.ts + lagSecs * 1000);
     }
+    // Deliberately NOT projected. Tried and measured worse: this is the GROUPING key, and
+    // feeding it an estimate churns which trains merge, so predictedStart (the group
+    // minimum) starts coming from the wrong train. Replaying 2026-07-25, projecting here
+    // pushed westbound stopper error at T−300s from 62s to 84s while adding nothing
+    // eastbound. Grouping wants a stable key more than a sharp one; the displayed open
+    // is projected in _anchorEndToClearStep instead, where it can't reorder anything.
     return new Date(t.bestTime.getTime() + this._getOpenAfter(t.direction) * 60000);
   }
 
@@ -1001,8 +1082,23 @@ class CrossingState {
       return end; // configured direction/class missing a value — safe fallback
     }
 
-    // No fresh clear step. If the train is confirmed live (TD-sighted today), the
-    // barrier can't have opened yet — hold the closure open until the clear step.
+    // No clear step yet. PROJECT one from wherever TD has the train, and reopen at
+    // projectedClear + the same openLagSecs the real anchor would use — so the estimate
+    // sharpens berth by berth instead of sitting on a placeholder. Replaces the old
+    // `now + OPEN_HOLD_FLOOR_MS` floor, which trailed the clock and made the reopen
+    // countdown tick BACKWARDS as it was recomputed.
+    const lagSecs = this._getOpenLagSecs(finalTrain.direction, finalTrain.trainType);
+    const proj = this._projectBerth(finalTrain, 'XING', now);
+    if (proj && lagSecs != null) {
+      // Never in the past: the train demonstrably has not cleared, so the barrier cannot
+      // be up. A stale projection (train held at a signal past its expected transit) is
+      // floored rather than allowed to expire the closure.
+      return new Date(Math.max(proj.ts + lagSecs * 1000, now.getTime() + OPEN_HOLD_FLOOR_MS));
+    }
+
+    // No projection available (no live position, or no transit sample for this class):
+    // fall back to the old behaviour — hold into the near future so a TD-sighted train
+    // can never have its closure end before it has cleared.
     if (this.tdSeenToday.has(finalTrain.headcode)) {
       const floorMs = now.getTime() + OPEN_HOLD_FLOOR_MS;
       if (end.getTime() < floorMs) return new Date(floorMs);
