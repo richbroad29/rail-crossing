@@ -220,6 +220,32 @@ function nextFireAt(hour, minute) {
 }
 
 // Startup
+// Replay today's TD log into each crossing's first-sighting map. Cheap: one pass over a
+// file the listener is already appending to (~1MB/day), read once at startup.
+function seedSightingsFromLog(states) {
+  const file = path.join(__dirname, '..', 'data', 'logs', 'td', `td-${londonDateStamp()}.jsonl`);
+  let lines;
+  try {
+    lines = fs.readFileSync(file, 'utf8').split('\n');
+  } catch (e) {
+    console.log(`TD sighting seed: no log for today (${e.code}) — starting cold`);
+    return;
+  }
+  const entries = [];
+  for (const line of lines) {
+    if (!line) continue;
+    let r; try { r = JSON.parse(line); } catch (err) { continue; }
+    if (!r.area || !r.desc || !r.ts) continue;
+    entries.push({ area: r.area, headcode: r.desc, ts: r.ts });
+  }
+  for (const state of Object.values(states)) {
+    const area = state.config && state.config.td && state.config.td.area;
+    const mine = area ? entries.filter(e => e.area === area) : entries;
+    const n = state.seedSightings(mine);
+    console.log(`TD sighting seed: ${state.id} — ${n} headcodes from ${mine.length} events`);
+  }
+}
+
 async function main() {
   console.log('=== Rail Crossing Backend v2 ===');
   console.log(`Crossings: ${Object.keys(crossingsConfig).join(', ')}`);
@@ -257,6 +283,10 @@ async function main() {
   // Start TD feed listener and daily log rotation (additive — does not affect LDB/state path).
   // Route every TD sighting into each crossing-state so that CIF-sourced freight
   // predictions can be marked tdSeen=true once the train enters our area.
+  // Rebuild today's first-sighting map before the feed starts, so a restart doesn't
+  // resurrect trains that ran hours ago (see CrossingState.seedSightings).
+  seedSightingsFromLog(crossingStates);
+
   tdListener.on('sighting', (s) => {
     for (const state of Object.values(crossingStates)) {
       state.recordTdSighting(s.headcode, s.ts);

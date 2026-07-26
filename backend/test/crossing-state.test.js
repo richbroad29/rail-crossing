@@ -1050,6 +1050,50 @@ console.log('  -- CIF projection replaces areaEntryLeadSecs --');
   check('...and labelled as a position estimate', m ? m.etaText : null, 'Live (berth)');
 }
 
+// ---- Restart artefact: seed the first-sighting map --------------------------
+// tdSeenToday is memory-only, so a restart stamps every train then in area LA with a
+// "first sighting" at boot; any whose scheduled crossing has passed is re-projected as
+// imminent. Observed 2026-07-26 21:42:13 — two CIF services that never ran were merged
+// into a real closure and held BARRIERS DOWN for 5m31s.
+console.log('  -- restart: seeded sightings --');
+{
+  const T = Date.now();
+  const ghost = () => ({ uid: 'G1', headcode: '1H90', direction: 'west', trainType: 'passenger',
+    estimatedCrossingMins: 0, origin: 'A', destination: 'B', operator: 'ZZ' });
+
+  // Cold restart: the train ran an hour ago, but its only sighting is stamped now.
+  const cold = new CrossingState('t', cfg);
+  cold._scheduleTimeToDate = () => new Date(T - 60 * 60000);
+  cold.scheduleTrains = [ghost()];
+  cold.recordTdSighting('1H90', new Date(T));            // bogus "first" sighting at boot
+  const m = cold._mergeTrains().find(x => x.headcode === '1H90');
+  check('cold restart resurrects a train that ran an hour ago', !!m, true);
+  check('...and floors it into the near future', m ? m.bestTime.getTime() > T : null, true);
+
+  // Seeded from the day's log first: the real first sighting is an hour old, so the
+  // existing grace rules retire it exactly as they would have without the restart.
+  const seeded = new CrossingState('t', cfg);
+  seeded._scheduleTimeToDate = () => new Date(T - 60 * 60000);
+  seeded.scheduleTrains = [ghost()];
+  seeded.seedSightings([{ headcode: '1H90', ts: new Date(T - 65 * 60000).toISOString() }]);
+  seeded.recordTdSighting('1H90', new Date(T));          // later step must not overwrite
+  check('seeded: the real first sighting is kept',
+    seeded.tdSeenToday.get('1H90').getTime(), T - 65 * 60000);
+  check('seeded: the ghost is retired, not resurrected',
+    seeded._mergeTrains().some(x => x.headcode === '1H90'), false);
+
+  // A genuinely late train sighted just now is still re-projected — the Fix-1 behaviour
+  // this must not break.
+  const late = new CrossingState('t', cfg);
+  late._scheduleTimeToDate = () => new Date(T - 15 * 60000);
+  late.scheduleTrains = [{ ...ghost(), headcode: '6O99', trainType: 'freight' }];
+  late.seedSightings([{ headcode: '6O99', ts: new Date(T).toISOString() }]);
+  check('a genuinely late train, first seen now, is still kept',
+    late._mergeTrains().some(x => x.headcode === '6O99'), true);
+
+  check('seeding is idempotent', seeded.seedSightings([{ headcode: '1H90', ts: new Date(T).toISOString() }]), 0);
+}
+
 console.log();
 if (fail > 0) { console.error(`${fail} FAILED, ${pass} passed`); process.exit(1); }
 else { console.log(`All ${pass} tests passed.`); }

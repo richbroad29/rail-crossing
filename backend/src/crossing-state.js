@@ -164,6 +164,34 @@ class CrossingState {
     }
   }
 
+  // Rebuild today's first-sighting map from the day's TD log at startup.
+  //
+  // tdSeenToday is memory-only, so a restart wipes it and every train then in area LA
+  // gets its "first sighting" stamped at boot. Any whose scheduled crossing has already
+  // passed is then re-projected as imminent and floored into the near future,
+  // resurrecting trains that ran long ago. Observed 2026-07-26 21:42:13, 1.3s after a
+  // deploy: two CIF services that never ran were merged into a real closure and held
+  // BARRIERS DOWN for 5m31s.
+  //
+  // Seeding restores the real first-sighting times, so the existing grace rules retire
+  // those trains exactly as they would have without the restart. Deliberately does NOT
+  // recompute per entry — this runs before the first poll and would otherwise rebuild
+  // the closure list once per headcode.
+  seedSightings(entries) {
+    let n = 0;
+    for (const e of entries) {                       // caller supplies chronological order
+      if (!e || !e.headcode || !e.ts) continue;
+      const ts = e.ts instanceof Date ? e.ts : new Date(e.ts);
+      if (!Number.isFinite(ts.getTime())) continue;
+      const day = ts.toISOString().slice(0, 10);
+      if (this.tdSeenDay !== day) { this.tdSeenToday.clear(); this.tdSeenDay = day; }
+      if (this.tdSeenToday.has(e.headcode)) continue;
+      this.tdSeenToday.set(e.headcode, ts);
+      n++;
+    }
+    return n;
+  }
+
   // B1: record a TD berth step into the live-position map. Called from the same
   // 'sighting' hook as recordTdSighting, with the enriched payload that now
   // carries the berth. Intentionally does NOT _recompute — the live map is a
