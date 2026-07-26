@@ -63,6 +63,11 @@ const BERTH_HISTORY_MAX = 30;
 // Bounded in practice by the merged-list drop grace, so a sighted no-show can't hold
 // the barrier indefinitely.
 const OPEN_HOLD_FLOOR_MS = 60 * 1000;
+// --- Last-known train cache (see this.knownTrains) ---
+// How long a train's record stays available after its source last reported it. Long
+// enough to cover a feedback tap well after the train has gone, bounded so a headcode
+// reused later in the day can't resolve to this morning's working.
+const KNOWN_TRAIN_TTL_MS = 45 * 60 * 1000;
 // Mirror of OPEN_HOLD_FLOOR_MS for the close side: while TD shows a train still short
 // of its close-anchor berth, the gated (CLOSED) onset is held this far into the future
 // so a drifting bestTime can't close the barrier for a train we can see isn't there.
@@ -104,6 +109,17 @@ class CrossingState {
     // strike + a per-direction/class lag (timing.closeTrigger). Pruned by TTL so a
     // reused headcode can't match a stale approach from earlier in the day.
     this.closeStrikeSeen = new Map();
+
+    // headcode → { train, sourceSeenMs } — the last record we held for a train while one
+    // of its SOURCES (LDB board / CIF schedule) still reported it.
+    //
+    // Exists for the feedback picker. An LDB board lists only services still to call, so
+    // a departed train matches nothing but its CIF entry, and CIF entries carry no
+    // schedArr/schedDep/liveArr/liveDep at all — those fields are LDB-only. An OPEN tap is
+    // attributed to a just-cleared train by definition, so all four calibration anchors
+    // were being lost for precisely the events that need them. _matchKnownTrain falls back
+    // here so they survive the departure.
+    this.knownTrains = new Map();
 
     // Computed state
     this.closurePeriods = [];
@@ -258,13 +274,32 @@ class CrossingState {
     return (typeof secs === 'number' ? secs : 240) * 1000;
   }
 
-  // Find a known train (LDB first, then CIF schedule) by headcode, for enriching
-  // a live berth sighting with direction / origin / destination.
+  // Find a known train (LDB first, then CIF schedule, then the last-known cache) by
+  // headcode, for enriching a live berth sighting with direction / origin / destination
+  // and the four Portslade times.
+  //
+  // The cache fallback is what keeps the feedback picker honest: an LDB board only lists
+  // services that are still to call, so a train that has departed matches nothing but its
+  // CIF entry — and CIF entries carry no schedArr/schedDep/liveArr/liveDep at all. Since
+  // an OPEN event is always attributed to a train that has just left, those anchors were
+  // being lost for precisely the events the calibration depends on.
   _matchKnownTrain(headcode) {
     if (!headcode) return null;
     for (const t of this.ldbTrains) if (t.headcode === headcode) return t;
     for (const t of this.scheduleTrains) if (t.headcode === headcode) return t;
-    return null;
+    const cached = this.knownTrains.get(headcode);
+    return cached ? cached.train : null;
+  }
+
+  // Cache every train a source reported this cycle, and expire stale entries.
+  _rememberTrains(merged, nowMs) {
+    for (const t of merged) {
+      if (!t.headcode) continue;
+      this.knownTrains.set(t.headcode, { train: t, sourceSeenMs: nowMs });
+    }
+    for (const [hc, e] of this.knownTrains) {
+      if (nowMs - e.sourceSeenMs > KNOWN_TRAIN_TTL_MS) this.knownTrains.delete(hc);
+    }
   }
 
   // B1: current trains in the TD area, pruned by TTL and enriched from CIF/LDB.
@@ -279,7 +314,11 @@ class CrossingState {
     for (const [headcode, t] of this.liveTrains) {
       if (now - t.lastSeen > ttl) { this.liveTrains.delete(headcode); continue; }
       const match = this._matchKnownTrain(headcode);
-      const onBoard = this.ldbTrains.some(x => x.headcode === headcode);
+      // On the board now, or on it when we last saw this train — an LDB-sourced cached
+      // record is proof it was a calling service, so a departure shouldn't downgrade a
+      // known `true` back to "unknown" in the feedback payload.
+      const onBoard = this.ldbTrains.some(x => x.headcode === headcode) ||
+        (match && typeof match.source === 'string' && match.source.startsWith('ldb'));
       out.push({
         headcode,
         berth: t.berth,
@@ -449,6 +488,10 @@ class CrossingState {
         dedupKey: `cif|${t.uid || t.headcode || ''}|${t.estimatedCrossingMins}`
       });
     }
+
+    // Keep a last-known record of everything the sources reported, for the feedback
+    // picker to fall back on once a train has left the board.
+    this._rememberTrains(merged, now.getTime());
 
     merged.sort((a, b) => a.bestTime - b.bestTime);
     return merged;

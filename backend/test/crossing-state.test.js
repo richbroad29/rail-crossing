@@ -794,6 +794,51 @@ console.log('  -- 1H67 regression (2026-07-24) --');
     Math.round((T('20:44:58') - Date.parse(p2.predictedStart)) / 1000), 134);
 }
 
+// ---- Last-known train cache (feedback picker anchors) --------------------
+// An LDB board lists only services still to call, so once a train departs it matches
+// nothing but its CIF entry — and CIF entries carry no schedArr/schedDep/liveArr/liveDep
+// at all. An OPEN tap is attributed to a just-cleared train by definition, so all four
+// calibration anchors were being lost for exactly the events that need them.
+//
+// _mergeTrains reads the real clock (unlike _computeClosures, which takes an explicit
+// `now`), so these are built around Date.now() rather than the fixed BASE epoch.
+const NOW = Date.now();
+const iso2 = (ms) => new Date(ms).toISOString();
+const ldbTrain = (o) => ({
+  origin: 'A', destination: 'B', operator: 'ZZ',
+  scheduledTime: iso2(o.bestMs), bestTime: iso2(o.bestMs),
+  direction: o.dir, delayMins: 0, isUncertain: false, etaText: 'On time',
+  headcode: o.hc, uid: o.uid || null, trainType: 'passenger', source: 'ldbsv',
+  schedArr: o.schedArr || '21:17', schedDep: o.schedDep || '21:18',
+  liveArr: o.liveArr === undefined ? '21:18' : o.liveArr,
+  liveDep: o.liveDep === undefined ? '21:19' : o.liveDep,
+  dedupKey: 'x'
+});
+
+// ---- Feedback picker keeps its time anchors after departure ---------------
+console.log('  -- picker anchors survive departure --');
+{
+  const state = new CrossingState('t', classCfg);
+  state.ldbTrains = [ldbTrain({ hc: '1H69', dir: 'east', bestMs: NOW + 60000,
+    schedArr: '21:17', schedDep: '21:18', liveArr: '21:19', liveDep: '21:20' })];
+  state._mergeTrains();                                   // board still lists it: cached
+  state.recordTdBerth({ headcode: '1H69', to: '0002', from: '0004', ts: iso2(NOW) });
+  state.ldbTrains = [];                                   // departed: off the board
+  const live = state.getLiveTrains(NOW + 1000).find(t => t.headcode === '1H69');
+  check('departed train still resolves', !!live, true);
+  check('schedArr survives the departure', live ? live.schedArr : null, '21:17');
+  check('schedDep survives the departure', live ? live.schedDep : null, '21:18');
+  check('liveArr survives the departure', live ? live.liveArr : null, '21:19');
+  check('liveDep survives the departure', live ? live.liveDep : null, '21:20');
+  check('direction still resolved (not "unknown")', live ? live.direction : null, 'east');
+  check('stopping stays true rather than degrading to "unknown"', live ? live.stopping : null, true);
+
+  // A headcode reused much later in the day must not resolve to this morning's working.
+  state.knownTrains.get('1H69').sourceSeenMs = NOW - 60 * 60000;
+  state._mergeTrains();
+  check('cache entry expires after its TTL', state.knownTrains.has('1H69'), false);
+}
+
 console.log();
 if (fail > 0) { console.error(`${fail} FAILED, ${pass} passed`); process.exit(1); }
 else { console.log(`All ${pass} tests passed.`); }
