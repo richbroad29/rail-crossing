@@ -37,6 +37,15 @@ function fmtCountdownRough(ms) {
   var m = Math.round(ms / 60000);
   return m <= 0 ? 'now' : '~' + m + ' min';
 }
+// The "when" half of a closure pill, as a phrase rather than a bare value — the
+// template used to prefix "in " unconditionally, so a countdown sitting at or past
+// zero rendered "in now". Past zero it is "any moment", not a time. `rough` mirrors
+// the ± band: when the band is a minute or wider, second precision would be a lie.
+function fmtWhen(ms, rough) {
+  if (ms <= 0) return 'any moment';
+  if (!rough) return 'in ' + fmtCountdown(ms);
+  return ms < 60000 ? 'in under a minute' : 'in ' + fmtCountdownRough(ms);
+}
 // A countdown that has reached/passed zero but whose state hasn't advanced yet
 // (waiting on the berth strike, or a train running later than its live estimate)
 // reads "Soon" rather than "0s" / "NOW" or a negative value.
@@ -287,12 +296,14 @@ function renderClosures() {
     // sees (header countdown, the time on this row, the Down For card) targets the
     // predicted close, and `start` sits earlier by the safety-net margin — measuring
     // from it would overstate the closure and disagree with the Down For card.
-    var duration = Math.round((p.end - (p.predictedStart || p.start)) / 60000);
+    // Formatted with fmtDuration so this pill and the "Down For" card round the same
+    // way — they were showing "~5 min" and "~4m 50s" side by side for one closure.
+    var duration = fmtDuration(p.end - (p.predictedStart || p.start));
     html += '<div class="closure-card' + (isCurrent ? ' closure-active' : '') + '">';
     html += '<div class="closure-hdr">';
     if (isCurrent) {
       html += '<span class="closure-time" style="color:#FCA5A5">NOW \u2014 ' + fmtShort(p.end) + '</span>';
-      html += '<span class="closure-pill closure-pill-active">~' + duration + ' min \u00B7 opens ' + fmtCountdown(p.end.getTime() - now.getTime()) + '</span>';
+      html += '<span class="closure-pill closure-pill-active">' + duration + ' \u00B7 opens ' + fmtCountdown(p.end.getTime() - now.getTime()) + '</span>';
     } else {
       var w = p.window || { imminent: false, halfWidthSecs: 120 };
       // Show the PREDICTED close time/countdown (matches the header countdown);
@@ -301,11 +312,10 @@ function renderClosures() {
       var secsUntil = pStart.getTime() - now.getTime();
       if (w.imminent) {
         html += '<div class="closure-time-group"><span class="closure-time closure-imminent">Any moment now</span></div>';
-        html += '<span class="closure-pill">~' + duration + ' min</span>';
+        html += '<span class="closure-pill">' + duration + '</span>';
       } else {
         html += '<div class="closure-time-group"><span class="closure-time">' + fmtShort(pStart) + '</span><span class="closure-uncertainty">\u00B1' + fmtUncertainty(w.halfWidthSecs) + '</span></div>';
-        var countdownStr = w.halfWidthSecs >= 60 ? fmtCountdownRough(secsUntil) : fmtSoon(secsUntil);
-        html += '<span class="closure-pill">~' + duration + ' min \u00B7 in ' + countdownStr + '</span>';
+        html += '<span class="closure-pill">' + duration + ' \u00B7 ' + fmtWhen(secsUntil, w.halfWidthSecs >= 60) + '</span>';
       }
     }
     html += '</div>';
@@ -568,8 +578,14 @@ function fbEnrich(lt){
     // live (estimated) arrival & departure. Blank until the backend ships them — the
     // single closure-join time (schedStr/liveStr) is a display fallback.
     schedArr: fbHHMM(lt.schedArr), schedDep: fbHHMM(lt.schedDep),
-    // live = best estimate as HH:MM, falling back to scheduled when the feed gives no
-    // separate estimate (so the live columns are never blank when scheduled is known).
+    // The REAL live estimate, blank when the feed gives none. Kept separate from the
+    // display value below because the two must not be confused: a train that has lost
+    // its estimate was being shown — and logged — as "on time", since the fallback made
+    // live equal scheduled. This is the field the calibration payload carries, so a
+    // "live" column in the sheet always means an actual live estimate.
+    liveArrReal: fbHHMM(lt.liveArr), liveDepReal: fbHHMM(lt.liveDep),
+    // Display value: falls back to scheduled so the card is never blank. Safe only
+    // because fbTimeParts consults the Real fields before claiming punctuality.
     liveArr: fbHHMM(lt.liveArr) || fbHHMM(lt.schedArr), liveDep: fbHHMM(lt.liveDep) || fbHHMM(lt.schedDep),
     schedStr: tm.sched?fmtShort(tm.sched):'', liveStr: tm.live?fmtShort(tm.live):'',
     strikes: strikes
@@ -636,10 +652,15 @@ function fbHHMM(t){ if(!t) return ''; var m=String(t).match(/(\d{2}):(\d{2})/); 
 function fbTimeParts(t){
   var isWest = t.direction==='west';
   var live = isWest ? t.liveDep : t.liveArr;
+  var liveReal = isWest ? t.liveDepReal : t.liveArrReal;
   var sched = isWest ? t.schedDep : t.schedArr;
   var time = live || sched || t.liveStr || t.schedStr || '';
   if(!time) return { time:'', tag:'', cls:'' };
-  var lm = fbMinOf(live), sm = fbMinOf(sched);
+  // No real estimate means we are showing the timetable, so say so. Comparing the
+  // fallback against schedule would find them equal and label a train of unknown
+  // lateness "on time" — the worst answer, and it poisons the calibration set.
+  if(!liveReal) return { time:time, tag:'timetabled', cls:'' };
+  var lm = fbMinOf(liveReal), sm = fbMinOf(sched);
   if(lm!=null && sm!=null){
     var d = lm - sm;
     if(d===0) return { time:time, tag:'on time', cls:'fb-on' };
@@ -689,13 +710,13 @@ function fbBuildPayload(hc, completed){
     eventTimestamp: e.tsISO, event: e.type, predictedState: e.predictedState,
     ourGuessHeadcode: g?g.headcode:'', ourGuessRoute: g?g.route:'', ourGuessDirection: g?g.direction:'',
     ourGuessType: g?g.type:'',
-    ourGuessSchedArr: g?g.schedArr:'', ourGuessSchedDep: g?g.schedDep:'', ourGuessLiveArr: g?g.liveArr:'', ourGuessLiveDep: g?g.liveDep:'',
+    ourGuessSchedArr: g?g.schedArr:'', ourGuessSchedDep: g?g.schedDep:'', ourGuessLiveArr: g?g.liveArrReal:'', ourGuessLiveDep: g?g.liveDepReal:'',
     ourGuessPosition: g?g.posLabel:'', ourGuessBerth: g?g.berth:'',
     ourGuessBerthHistory: g?JSON.stringify(g.strikes||[]):'',
     submittedAt: new Date().toISOString(),
     selectedHeadcode: sel?sel.headcode:'', selectedRoute: sel?sel.route:'', selectedDirection: sel?sel.direction:'',
     selectedType: sel?sel.type:'',
-    selectedSchedArr: sel?sel.schedArr:'', selectedSchedDep: sel?sel.schedDep:'', selectedLiveArr: sel?sel.liveArr:'', selectedLiveDep: sel?sel.liveDep:'',
+    selectedSchedArr: sel?sel.schedArr:'', selectedSchedDep: sel?sel.schedDep:'', selectedLiveArr: sel?sel.liveArrReal:'', selectedLiveDep: sel?sel.liveDepReal:'',
     selectedPosition: sel?sel.posLabel:'', selectedBerth: sel?sel.berth:'',
     selectedBerthHistory: sel?JSON.stringify(sel.strikes||[]):'',
     wasOurGuess: !!(sel && g && sel.headcode===g.headcode), notSure: !!(completed && !hc)
