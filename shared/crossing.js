@@ -182,7 +182,10 @@ function buildClosuresFromVps(closures) {
     // start = CONFIRMED close (drives the CLOSED/DOWN state). predictedStart =
     // PREDICTED close (drives the countdown / closing-soon); backend adds it — fall
     // back to start for older payloads. end = raw predicted open (drives reopen).
-    var p = { start: new Date(c.start), predictedStart: new Date(c.predictedStart || c.start), end: new Date(c.end), trains: mapped };
+    var p = { start: new Date(c.start), predictedStart: new Date(c.predictedStart || c.start), end: new Date(c.end), trains: mapped,
+              // Backend flag: this close is anchored to a physical berth strike, not a
+              // timetable estimate. Absent on older payloads, so default false.
+              closeConfirmed: !!c.closeConfirmed };
     p.window = getWindowTier(p);
     periods.push(p);
   }
@@ -194,6 +197,12 @@ function getWindowTier(closure) {
   var cw = cfg.confidenceWindows || {};
   var now = new Date();
   var secsToStart = (closure.start.getTime() - now.getTime()) / 1000;
+
+  // The backend has anchored this close to a berth strike, so it knows the time to the
+  // second. Any ± band would be inventing doubt we do not have — this was the widest
+  // gap between what the app knew and what it showed (±2 min beside an exact time).
+  // Not `imminent`: that tier means "too close to give a time", the opposite of this.
+  if (closure.closeConfirmed) return { imminent: false, tier: 'confirmed', halfWidthSecs: 0 };
 
   for (var i = 0; i < closure.trains.length; i++) {
     var t = closure.trains[i];
@@ -314,7 +323,10 @@ function renderClosures() {
         html += '<div class="closure-time-group"><span class="closure-time closure-imminent">Any moment now</span></div>';
         html += '<span class="closure-pill">Closed ' + duration + ' \u00B7 any moment now</span>';
       } else {
-        html += '<div class="closure-time-group"><span class="closure-time">' + fmtShort(pStart) + '</span><span class="closure-uncertainty">\u00B1' + fmtUncertainty(w.halfWidthSecs) + '</span></div>';
+        var band = w.halfWidthSecs > 0
+          ? '<span class="closure-uncertainty">\u00B1' + fmtUncertainty(w.halfWidthSecs) + '</span>'
+          : '';
+        html += '<div class="closure-time-group"><span class="closure-time">' + fmtShort(pStart) + '</span>' + band + '</div>';
         html += '<span class="closure-pill">Closed ' + duration + ' \u00B7 ' + fmtWhen(secsUntil, w.halfWidthSecs >= 60) + '</span>';
       }
     }
