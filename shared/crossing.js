@@ -366,16 +366,45 @@ function renderDebugPanel() {
 // observer app's 28-day TD derivation (Portslade-specific).
 // ============================================================================
 function fbArrow(d){ return d==='east'?'▶':d==='west'?'◀':'·'; }
-function fbMins(s){ return '~'+Math.max(1, Math.round(s/60))+' min'; }
 function fbEsc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
-// The berth chain and the position maths are in shared/predict.js (PREDICT.proximity) so
-// the observer app measures distance-to-crossing exactly the same way. Only the WORDING
-// is this app's: a passer-by wants "Approaching (~3 min)", the field observer wants
-// seconds. That is the one thing the two apps are meant to differ on.
-function fbPosLabel(prox){
-  if(!prox) return 'Elsewhere in the area';
-  if(prox.stage==='passed') return 'Just passed the crossing';
-  return prox.etaSecs<=75 ? 'About to pass the crossing' : 'Approaching ('+fbMins(prox.etaSecs)+')';
+// A gap in words. Coarse above two minutes (where the estimate can't support seconds),
+// exact below it — which is the whole window in which someone is actually standing at the
+// barrier choosing a train, and the reason this ticks at all.
+function fbGap(secs){
+  if(secs >= 120) return '~'+Math.round(secs/60)+' min';
+  if(secs >= 60) return Math.floor(secs/60)+'m '+(secs%60)+'s';
+  return secs+'s';
+}
+// The berth chain and the position maths are in shared/predict.js (PREDICT.proximity /
+// PREDICT.eta) so the observer app measures distance-to-crossing exactly the same way.
+// Only the WORDING is this app's: a passer-by wants "Approaching (~3 min)", the field
+// observer wants seconds. That is the one thing the two apps are meant to differ on.
+//
+// Recomputed every second against `nowMs` rather than once per berth step. It used to be
+// the latter, and the labels were effectively frozen: on the 2026-07-27 recording an
+// eastbound train held "Approaching (~3 min)" for 177 s and then "About to pass the
+// crossing" for another 166 s, so across the 10–30 s it takes to pick a train nothing
+// moved at all — and the "~3 min" was still on screen when the train was 20 s out.
+function fbPosLabel(t, nowMs){
+  if(!t || !t.prox) return 'Elsewhere in the area';
+  var e = PREDICT.eta(t, nowMs);
+  // "Just" is a claim too — a train that cleared nine minutes ago is still on the chain,
+  // and calling that "just passed" invites attributing an open event to the wrong train.
+  if(t.prox.stage==='passed'){
+    return (e.sinceSecs <= 180 ? 'Just passed the crossing (' : 'Passed the crossing (')+fbGap(e.sinceSecs)+' ago)';
+  }
+  // Overdue against its own predicted crossing time by more than a couple of minutes:
+  // held at a signal, or sitting in a platform. Don't keep insisting it is imminent.
+  if(e.overdueSecs > 120) return 'Held near the crossing';
+  // "At the crossing" is a claim about where the train IS, so only make it when the berth
+  // feed agrees — the protecting berth is the last one before the crossing. Both time
+  // estimates will occasionally run a train's countdown to zero while it is still two
+  // minutes out (measured on the 2026-07-27 recording: 14 such samples for the predicted
+  // time, 17 for the berth median), and the berth is the half of this we actually know.
+  if(t.prox.role === 'protecting' && e.secs <= 20) return 'At the crossing now';
+  if(e.secs <= 5) return 'Any moment now';
+  if(e.secs <= 90) return 'About to pass the crossing ('+fbGap(e.secs)+')';
+  return 'Approaching ('+fbGap(e.secs)+')';
 }
 // Scheduled + live Portslade time for a headcode, joined from the closure trains.
 function fbTimes(hc){
@@ -385,7 +414,7 @@ function fbTimes(hc){
 }
 function fbEnrich(lt){
   var t = PREDICT.enrich(lt, fbTimes);
-  t.posLabel = fbPosLabel(t.prox);
+  t.posLabel = fbPosLabel(t);   // frozen at the event moment — this is what gets recorded
   return t;
 }
 function fetchLive(){
@@ -393,6 +422,13 @@ function fetchLive(){
     .then(function(r){ return r.ok ? r.json() : { trains:[] }; })
     .then(function(d){ return d.trains || []; })
     .catch(function(){ return []; });
+}
+// Seconds to the crossing for ranking: the live figure, so a stopper dwelling at
+// Southwick doesn't outrank a fast that will actually get here first. Falls back to the
+// static berth median for anything eta() can't place.
+function fbRank(t){
+  var e = PREDICT.eta(t);
+  return (e && e.secs != null) ? e.secs : (t.prox ? t.prox.rank : 100000);
 }
 // Pick the app's best-guess train: opening → the just-passed train; else the
 // nearest approaching one.
@@ -402,18 +438,19 @@ function fbSuggest(type, enriched){
     if(passed.length){ passed.sort(function(a,b){ return a.ageSecs-b.ageSecs; }); return passed[0]; }
   }
   var appr = enriched.filter(function(t){ return t.prox && t.prox.stage==='approach'; });
-  appr.sort(function(a,b){ return a.prox.rank-b.prox.rank; });
+  appr.sort(function(a,b){ return fbRank(a)-fbRank(b); });
   return appr[0] || null;
 }
 function fbSortKey(type, t){
   if(!t.prox) return 100000 + (t.ageSecs||0);                          // off-chain: last
   if(t.prox.stage==='passed') return (type==='opening') ? (t.ageSecs||0) : 90000+(t.ageSecs||0);
-  return t.prox.rank;                                                  // approaching: by eta
+  return fbRank(t);                                                    // approaching: by eta
 }
 
 var fbEvent = null;      // frozen event snapshot { type, tsISO, predictedState, snapshot, order, guess }
-var fbLivePos = {};      // headcode -> latest { posLabel } for live display only
+var fbLive = {};         // headcode -> latest enriched train, for the live position line only
 var fbPollTimer = null;
+var fbTickTimer = null;
 var fbMsgTimer = null;
 
 function openFeedbackPicker(type){
@@ -427,21 +464,38 @@ function openFeedbackPicker(type){
     fbEvent = { eventId: tsISO+'-'+Math.random().toString(36).slice(2,7), type:type, tsISO:tsISO,
                 crossing:crossingId, crossingName:CFG.name,
                 predictedState:$('statusTitle').textContent, snapshot:snap, order:order, guess:guess };
-    fbLivePos = {}; enriched.forEach(function(t){ fbLivePos[t.headcode] = { posLabel:t.posLabel }; });
+    fbLive = {}; enriched.forEach(function(t){ fbLive[t.headcode] = t; });
     var m = $('fbMsg'); m.classList.remove('fb-shown'); m.classList.add('hidden'); clearTimeout(fbMsgTimer);
     renderFbPicker();
     fbOpenPicker();
     if(fbPollTimer) clearInterval(fbPollTimer);
-    fbPollTimer = setInterval(fbPollLive, 2500);
+    if(fbTickTimer) clearInterval(fbTickTimer);
+    fbPollTimer = setInterval(fbPollLive, 2500);   // new berth positions
+    fbTickTimer = setInterval(fbTickPositions, 1000);  // the countdown between them
     fbPost(fbBuildPayload(null, false));  // capture the event at button-tap, even if never completed
   });
 }
 function fbPollLive(){
-  if(!fbEvent){ if(fbPollTimer){ clearInterval(fbPollTimer); fbPollTimer=null; } return; }
+  if(!fbEvent){ fbStopTimers(); return; }
   fetchLive().then(function(live){
-    live.forEach(function(lt){ fbLivePos[lt.headcode] = { posLabel: fbPosLabel(PREDICT.proximity(lt.berth, lt.direction)) }; });
+    live.forEach(function(lt){ fbLive[lt.headcode] = PREDICT.enrich(lt, fbTimes); });
     renderFbPicker();
   });
+}
+// The per-second update. Touches ONLY the position line's text — re-rendering the whole
+// picker every second would rebuild the candidate buttons under the user's finger while
+// they are reaching for one.
+function fbTickPositions(){
+  if(!fbEvent){ fbStopTimers(); return; }
+  var now = Date.now();
+  fbEvent.order.slice(0, 3).forEach(function(hc){
+    var el = $('fbPos-'+hc); if(!el) return;
+    el.textContent = fbPosLabel(fbLive[hc] || fbEvent.snapshot[hc], now);
+  });
+}
+function fbStopTimers(){
+  if(fbPollTimer){ clearInterval(fbPollTimer); fbPollTimer = null; }
+  if(fbTickTimer){ clearInterval(fbTickTimer); fbTickTimer = null; }
 }
 function fbMinOf(hhmm){ var m=/^(\d{1,2}):(\d{2})/.exec(hhmm||''); return m ? (parseInt(m[1],10)*60 + parseInt(m[2],10)) : null; }
 // Direction-appropriate time for the card's right column: westbound departure,
@@ -467,7 +521,10 @@ function fbTimeParts(t){
 }
 function fbCardHtml(hc, isGuess){
   var t = fbEvent.snapshot[hc]; if(!t) return '';
-  var pos = (fbLivePos[hc] && fbLivePos[hc].posLabel) || t.posLabel;
+  // Position is the one thing on the card that is LIVE — everything else is the frozen
+  // event-moment snapshot, because that is what gets recorded. fbTickPositions() rewrites
+  // this line by id every second.
+  var pos = fbPosLabel(fbLive[hc] || t);
   var typeTag = t.type==='freight'?'Freight · ':t.type==='ecs'?'Empty · ':'';
   var tm = fbTimeParts(t);
   var timeHtml = tm.time
@@ -479,7 +536,7 @@ function fbCardHtml(hc, isGuess){
       '<span class="fb-cand-route">'+fbArrow(t.direction)+' '+fbEsc(typeTag+t.route)+'</span>'+
       timeHtml+
     '</div>'+
-    '<div class="fb-cand-pos">'+fbEsc(pos)+'</div>'+
+    '<div class="fb-cand-pos" id="fbPos-'+fbEsc(hc)+'">'+fbEsc(pos)+'</div>'+
     '</button>';
 }
 function renderFbPicker(){
@@ -516,7 +573,7 @@ function fbSubmit(hc){
   var e = fbEvent; if(!e) return;
   var payload = fbBuildPayload(hc, true);         // completed — updates the button-tap row by eventId
   var sel = hc ? e.snapshot[hc] : null;
-  if(fbPollTimer){ clearInterval(fbPollTimer); fbPollTimer = null; }
+  fbStopTimers();
   fbClosePicker();                                // roll the picker up
   var when = fmtShort(new Date(e.tsISO));
   // Optimistic confirmation — reveals as one blind as the picker collapses.
@@ -525,7 +582,7 @@ function fbSubmit(hc){
   fbPost(payload);
 }
 function fbCancel(){
-  if(fbPollTimer){ clearInterval(fbPollTimer); fbPollTimer = null; }
+  fbStopTimers();
   fbEvent = null; fbClosePicker();
 }
 // Blind-style reveal/collapse for BOTH the picker and the confirmation, so the whole

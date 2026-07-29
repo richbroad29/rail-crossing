@@ -300,17 +300,63 @@
 
   // Where a train is on its chain. Returns null when the berth isn't on the Portslade
   // chain (or the direction is unknown) → "elsewhere in the area".
-  //   { stage:'approach'|'passed', role, index, etaSecs, rank }
-  // etaSecs is the STATIC per-berth median. Callers that want a live countdown pass the
-  // train through PREDICT.eta() instead — see the note there for why the median alone
-  // is not good enough.
+  //   { stage:'approach'|'passed', role, index, etaSecs, sinceSecs, rank }
+  // etaSecs/sinceSecs are the STATIC per-berth medians. Callers wanting a countdown that
+  // actually moves use PREDICT.eta() — see the note there for why a median alone isn't
+  // good enough.
   function proximity(berth, direction) {
     var c = CHAININ[direction]; if (!c) return null;
     var i = c.idx[berth]; if (i === undefined) return null;
     var node = CHAIN[direction][i];
-    if (i > c.xi) return { stage: 'passed', role: node.role || null, index: i, etaSecs: null, rank: 9999 };
+    if (i > c.xi) {
+      // tac = seconds from the crossing to ENTERING this berth, so it is the floor on
+      // "how long ago did it cross". The clear berth itself has none: stepping into it
+      // IS the crossing, so that floor is zero.
+      var since = (node.tac && node.tac.med != null) ? node.tac.med : 0;
+      return { stage: 'passed', role: node.role || null, index: i, etaSecs: null, sinceSecs: since, rank: 9999 };
+    }
     var eta = (node.ttc && node.ttc.med != null) ? node.ttc.med : etaToCrossing(direction, i);
-    return { stage: 'approach', role: node.role || null, index: i, etaSecs: eta, rank: eta };
+    return { stage: 'approach', role: node.role || null, index: i, etaSecs: eta, sinceSecs: null, rank: eta };
+  }
+
+  // How far a train is from the crossing RIGHT NOW, as of nowMs. Returns
+  //   { secs, sinceSecs, basis:'predicted'|'berth', overdueSecs }
+  // or null when the train isn't on the chain.
+  //
+  // Why this is not just "the berth's median minus time in the berth": eastbound berth
+  // 0006 contains Southwick station. A service that calls there sits in the berth ~160 s
+  // longer than one that runs through, so the berth median describes two populations at
+  // once and fits neither. Measured on the 2026-07-27 recording, a median-decay countdown
+  // for 2Y21 reached zero 134 s before the train actually reached the crossing — and did
+  // it confidently.
+  //
+  // So when the train is joined to a closure we use the BACKEND's own predicted crossing
+  // time (bestTime), which is class-aware and position-projected, and which the closure
+  // list and the header countdown are already showing. Same recording: bestTime lands
+  // within ~±30 s for most trains inside T-120 s. Two wins — better numbers, and the
+  // picker stops being a third independent estimate that contradicts the two on screen.
+  //
+  // The berth median stays as the fallback for a train with no closure join at all
+  // (unmatched freight, direction "unknown"), where it is the only thing we have. Past
+  // zero it reports overdueSecs and the caller says so, rather than counting negative or
+  // parking on a confident "now".
+  function eta(t, nowMs) {
+    if (!t || !t.prox) return null;
+    nowMs = nowMs || Date.now();
+    var inBerthSecs = t.strikeAtMs ? Math.max(0, (nowMs - t.strikeAtMs) / 1000) : 0;
+    if (t.prox.stage === 'passed') {
+      return { secs: null, sinceSecs: Math.round((t.prox.sinceSecs || 0) + inBerthSecs),
+               basis: 'berth', overdueSecs: 0 };
+    }
+    var secs;
+    if (t.bestTime) {
+      secs = Math.round((t.bestTime.getTime() - nowMs) / 1000);
+      return { secs: Math.max(0, secs), sinceSecs: null, basis: 'predicted',
+               overdueSecs: secs < 0 ? -secs : 0 };
+    }
+    secs = Math.round((t.prox.etaSecs || 0) - inBerthSecs);
+    return { secs: Math.max(0, secs), sinceSecs: null, basis: 'berth',
+             overdueSecs: secs < 0 ? -secs : 0 };
   }
 
   // ---- live-train enrichment (feedback / attribution) -----------------------------
@@ -331,6 +377,11 @@
       route: (lt.origin || '?') + ' → ' + (lt.destination || '?'),
       type: trainKind(lt.headcode), berth: lt.berth || '', ageSecs: lt.ageSecs || 0,
       prox: prox,
+      // When this train stepped into its current berth, on the DEVICE clock: the feed's
+      // ageSecs is server-computed, so subtracting it from local "now" at the moment the
+      // response lands gives a device-consistent instant with no clock-skew correction
+      // needed. Drives the live countdown in eta().
+      strikeAtMs: Date.now() - (lt.ageSecs || 0) * 1000,
       // Four Portslade times from the live feed (backend-provided): scheduled & live
       // (estimated) arrival & departure.
       schedArr: hhmm(lt.schedArr), schedDep: hhmm(lt.schedDep),
@@ -390,7 +441,7 @@
     fmtDuration: fmtDuration, fmtDownFor: fmtDownFor,
     buildClosures: buildClosures, getWindowTier: getWindowTier, parseTrains: parseTrains,
     derive: derive,
-    proximity: proximity, etaToCrossing: etaToCrossing,
+    proximity: proximity, etaToCrossing: etaToCrossing, eta: eta,
     trainKind: trainKind, hhmm: hhmm, enrich: enrich, feedbackPayload: feedbackPayload
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);
