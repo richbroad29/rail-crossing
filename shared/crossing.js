@@ -22,57 +22,15 @@ var isAndroid = /Android/.test(navigator.userAgent);
 var lastRefreshTs = null;
 
 function $(id) { return document.getElementById(id); }
-function fmtTime(d) { if (!d) return '--:--'; return d.toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit',second:'2-digit'}); }
-function fmtShort(d) { if (!d) return ''; return d.toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit'}); }
-function fmtCountdown(ms) {
-  if (ms <= 0) return 'NOW';
-  var s = Math.floor(ms / 1000), m = Math.floor(s / 60), sec = s % 60;
-  return m > 0 ? m + 'm ' + sec + 's' : sec + 's';
-}
-function fmtUncertainty(secs) {
-  if (secs % 60 === 0) return (secs / 60) + ' min';
-  return secs + 's';
-}
-function fmtCountdownRough(ms) {
-  var m = Math.round(ms / 60000);
-  return m <= 0 ? 'now' : '~' + m + ' min';
-}
-// The "when" half of a closure pill, as a phrase rather than a bare value — the
-// template used to prefix "in " unconditionally, so a countdown sitting at or past
-// zero rendered "in now". Past zero it is "any moment now", not a time. `rough`
-// mirrors the ± band: when the band is a minute or wider, second precision is a lie.
-function fmtWhen(ms, rough) {
-  if (ms <= 0) return 'any moment now';
-  if (!rough) return 'in ' + fmtCountdown(ms);
-  return ms < 60000 ? 'in under a minute' : 'in ' + fmtCountdownRough(ms);
-}
-// A countdown that has reached/passed zero but whose state hasn't advanced yet
-// (waiting on the berth strike, or a train running later than its live estimate)
-// reads "Soon" rather than "0s" / "NOW" or a negative value.
-function fmtSoon(ms) { return ms <= 0 ? 'Soon' : fmtCountdown(ms); }
-// A duration (not a countdown) — reads as a length of time, to the nearest 10 s:
-// "~50s", "~2m 40s", "~3m". Ten seconds is about the resolution the underlying
-// prediction can honestly support, so don't tighten it without better calibration.
-function fmtDuration(ms) {
-  var s = Math.max(10, Math.round(ms / 10000) * 10);
-  if (s < 60) return '~' + s + 's';
-  var m = Math.floor(s / 60), sec = s % 60;
-  return sec === 0 ? '~' + m + 'm' : '~' + m + 'm ' + sec + 's';
-}
-// The "Down For" card version of the same duration. Two differences from the pill
-// above, both because this one is read on its own rather than inside a sentence:
-// no leading "~" (the uncertainty is expressed by the ± band on the closure row,
-// and a tilde against a bare number just read as noise), and a whole-minute value
-// spells its unit out — "3m" alone was easy to scan as seconds. Mixed values stay
-// compact ("2m 40s"); spelling those out overflows the card. Same 10 s rounding, so
-// the card and the pill can never disagree.
-function fmtDownFor(ms) {
-  var s = Math.max(10, Math.round(ms / 10000) * 10);
-  if (s < 60) return s + ' secs';
-  var m = Math.floor(s / 60), sec = s % 60;
-  if (sec === 0) return m + (m === 1 ? ' min' : ' mins');
-  return m + 'm ' + sec + 's';
-}
+// The formatters, the closure mapping and the prediction itself all live in
+// shared/predict.js, and the observer app renders the same values from the same
+// functions — so neither app can drift into its own idea of what the barrier is doing.
+// Aliased here so the call sites below read as they always did. Do NOT reintroduce a
+// local copy of any of these: a second implementation is exactly the failure this file
+// was split to prevent.
+var fmtTime = PREDICT.fmtTime, fmtShort = PREDICT.fmtShort, fmtCountdown = PREDICT.fmtCountdown,
+    fmtUncertainty = PREDICT.fmtUncertainty, fmtWhen = PREDICT.fmtWhen, fmtSoon = PREDICT.fmtSoon,
+    fmtDuration = PREDICT.fmtDuration, fmtDownFor = PREDICT.fmtDownFor;
 function getColors(st) {
   switch(st) {
     case 'CLOSED': return {bg:'#DC2626',text:'#FFF',glow:'0 0 30px rgba(220,38,38,.5)'};
@@ -111,126 +69,12 @@ async function fetchNationalRail() {
   }
 }
 
-// Convert the VPS /crossing/<id> JSON into the train-array shape the rest of the app expects.
-// Pulls trains from upcomingClosures (backend already deduped + sorted).
-function parseVpsResponse(data) {
-  var results = [];
-  var seen = {};
-  var closures = data.upcomingClosures || [];
-  for (var i = 0; i < closures.length; i++) {
-    var ts = closures[i].trains || [];
-    for (var j = 0; j < ts.length; j++) {
-      var t = ts[j];
-      var key = t.dedupKey || ((t.headcode || '') + '|' + t.bestTime + '|' + t.destination);
-      if (seen[key]) continue;
-      seen[key] = true;
-      var delayMins = t.delayMins || 0;
-      results.push({
-        origin: t.origin,
-        destination: t.destination,
-        operator: t.operator,
-        direction: t.direction,
-        bestTime: new Date(t.bestTime),
-        scheduledTime: t.scheduledTime ? new Date(t.scheduledTime) : null,
-        delayMins: delayMins,
-        isDelayed: delayMins > 0,
-        isUncertain: !!t.isUncertain,
-        isRealtime: true,
-        etaText: t.etaText,
-        dedupKey: key,
-        source: t.source,
-        headcode: t.headcode,
-        trainType: t.trainType,
-        tdBerth: t.tdBerth,
-        runsAsRequired: !!t.runsAsRequired,
-        recentRunRate: typeof t.recentRunRate === 'number' ? t.recentRunRate : null,
-        recentRunSeen: t.recentRunSeen || 0,
-        recentRunApplicable: t.recentRunApplicable || 0,
-        tdSeen: !!t.tdSeen,
-        tdSeenAt: t.tdSeenAt || null
-      });
-    }
-  }
-  results.sort(function(a, b) { return a.bestTime - b.bestTime; });
-  return results;
-}
-
+// Both of these are thin wrappers over the shared core — see shared/predict.js.
+// Convert the VPS /crossing/<id> JSON into the train-array shape the rest of the app
+// expects (backend already deduped + sorted).
+function parseVpsResponse(data) { return PREDICT.parseTrains(data); }
 // Build display periods straight from the backend's pre-computed closures.
-// The backend owns the authoritative timing — crucially the TD clear-step-anchored
-// OPEN (period end) and the "hold the closure open until the train has physically
-// cleared" behaviour — neither of which the client can reproduce (it has no berth-
-// step feed, only each train's bestTime). So we render the backend's periods
-// verbatim (start/end parsed to Dates) and only attach the client-side confidence
-// window for display. buildClosuresFromVps([]) safely returns [] when the backend
-// sent no pre-computed closures.
-function buildClosuresFromVps(closures) {
-  var periods = [];
-  for (var i = 0; i < closures.length; i++) {
-    var c = closures[i];
-    if (!c || !c.start || !c.end) continue;
-    var ts = c.trains || [];
-    var mapped = [];
-    for (var j = 0; j < ts.length; j++) {
-      var t = ts[j];
-      var delayMins = t.delayMins || 0;
-      mapped.push({
-        origin: t.origin,
-        destination: t.destination,
-        operator: t.operator,
-        direction: t.direction,
-        bestTime: new Date(t.bestTime),
-        scheduledTime: t.scheduledTime ? new Date(t.scheduledTime) : null,
-        delayMins: delayMins,
-        isDelayed: delayMins > 0,
-        isUncertain: !!t.isUncertain,
-        etaText: t.etaText,
-        source: t.source,
-        headcode: t.headcode,
-        trainType: t.trainType,
-        tdBerth: t.tdBerth,
-        runsAsRequired: !!t.runsAsRequired,
-        recentRunRate: typeof t.recentRunRate === 'number' ? t.recentRunRate : null,
-        tdSeen: !!t.tdSeen
-      });
-    }
-    // start = CONFIRMED close (drives the CLOSED/DOWN state). predictedStart =
-    // PREDICTED close (drives the countdown / closing-soon); backend adds it — fall
-    // back to start for older payloads. end = raw predicted open (drives reopen).
-    var p = { start: new Date(c.start), predictedStart: new Date(c.predictedStart || c.start), end: new Date(c.end), trains: mapped,
-              // Backend flag: this close is anchored to a physical berth strike, not a
-              // timetable estimate. Absent on older payloads, so default false.
-              closeConfirmed: !!c.closeConfirmed };
-    p.window = getWindowTier(p);
-    periods.push(p);
-  }
-  return periods;
-}
-
-function getWindowTier(closure) {
-  var cfg = CFG || {};
-  var cw = cfg.confidenceWindows || {};
-  var now = new Date();
-  var secsToStart = (closure.start.getTime() - now.getTime()) / 1000;
-
-  // The backend has anchored this close to a berth strike, so it knows the time to the
-  // second. Any ± band would be inventing doubt we do not have — this was the widest
-  // gap between what the app knew and what it showed (±2 min beside an exact time).
-  // Not `imminent`: that tier means "too close to give a time", the opposite of this.
-  if (closure.closeConfirmed) return { imminent: false, tier: 'confirmed', halfWidthSecs: 0 };
-
-  for (var i = 0; i < closure.trains.length; i++) {
-    var t = closure.trains[i];
-    if (t.tdBerth === 'imminent')   return { imminent: true,  tier: 'td_imminent',   halfWidthSecs: 0 };
-    if (t.tdBerth === 'protecting') return { imminent: false, tier: 'td_protecting', halfWidthSecs: cw.td_protecting_secs || 30 };
-    if (t.tdBerth === 'approach')   return { imminent: false, tier: 'td_approach',   halfWidthSecs: cw.td_approach_secs  || 60 };
-  }
-
-  var hasLdb = closure.trains.some(function(t) { return !t.source || t.source === 'ldb' || t.source === 'ldbsv'; });
-  if (hasLdb && secsToStart <= 300) {
-    return { imminent: false, tier: 'ldb', halfWidthSecs: cw.ldb_near_secs || 90 };
-  }
-  return { imminent: false, tier: 'schedule', halfWidthSecs: cw.schedule_secs || 120 };
-}
+function buildClosuresFromVps(closures) { return PREDICT.buildClosures(closures, CFG); }
 
 var refreshSvgArrow = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 8a6 6 0 11-1.5-4"/><path d="M14 2v4h-4"/></svg>';
 var refreshSvgTick = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8.5l3.5 3.5 6.5-8"/></svg>';
@@ -411,38 +255,17 @@ function showMoreClosures() {
   renderClosures();
 }
 
-// How long the barrier is down for a period, measured from the PREDICTED close (the
-// barrier-down estimate the countdown targets) to the period end — not from `start`,
-// which is the conservative confirmed-close gate and would overstate the duration.
-function setDownFor(p) {
-  if (!p) return;
-  var from = p.predictedStart || p.start;
-  downForMs = p.end.getTime() - from.getTime();
-  downForRange = fmtShort(from) + '–' + fmtShort(p.end);
-}
-
 function updateStatus() {
   var now = new Date();
-  var status = 'OPEN', msg = 'No upcoming closures found';
-  nextCloseTime = null; nextOpenTime = null;
-  downForMs = null; downForRange = null;
-  var currentClosure = null, upcoming = null;
   var t = now.getTime();
-  for (var i = 0; i < closurePeriods.length; i++) {
-    var p = closurePeriods[i];
-    // Find BOTH the current closure and the next upcoming one (don't stop at the
-    // current) — so while CLOSED we can still show the countdown to the next close.
-    if (!currentClosure && t >= p.start.getTime() && t <= p.end.getTime()) { currentClosure = p; }
-    else if (!upcoming && p.start.getTime() > t) { upcoming = p; }
-  }
+  // THE prediction — the same call the observer app makes, so the two can never show a
+  // different state for the same moment. Everything below this line is presentation.
+  var pr = PREDICT.derive(closurePeriods, now);
+  var status = pr.status, msg = 'No upcoming closures found';
+  var currentClosure = pr.current, upcoming = pr.upcoming;
+  nextCloseTime = pr.nextCloseTime; nextOpenTime = pr.nextOpenTime;
+  downForMs = pr.downForMs; downForRange = pr.downForRange;
   if (currentClosure) {
-    status = 'CLOSED';
-    nextOpenTime = currentClosure.end;
-    // Even while down, surface the countdown to the NEXT closure if another is coming
-    // (back-to-back closures are a useful heads-up). Targets the predicted close.
-    if (upcoming) nextCloseTime = upcoming.predictedStart || upcoming.start;
-    // "Down For" describes the closure we're IN — it pairs with Next Open above.
-    setDownFor(currentClosure);
     var openMs = currentClosure.end.getTime() - t;
     msg = 'Barriers likely DOWN. ' + (openMs <= 0 ? 'Reopens soon' : 'Reopens in ~' + fmtCountdown(openMs));
     $('statusTime').textContent = 'Opens ~' + fmtShort(currentClosure.end);
@@ -451,14 +274,8 @@ function updateStatus() {
   } else {
     $('statusCard').classList.remove('pulse');
     if (upcoming) {
-      // Close countdown / closing-soon target the PREDICTED close (barrier-down);
-      // the CLOSED state itself gates on the confirmed start (the loop above).
-      var closeTarget = upcoming.predictedStart || upcoming.start;
-      var ms = closeTarget.getTime() - t;
-      nextCloseTime = closeTarget; nextOpenTime = upcoming.end;
-      setDownFor(upcoming);
-      // CLOSING_SOON fires 90 s before the predicted closure (barrier-down) time.
-      if (ms <= 90000) { status = 'CLOSING_SOON'; msg = ms <= 0 ? 'Closing soon' : 'Closing in ~' + fmtCountdown(ms); }
+      var ms = nextCloseTime.getTime() - t;
+      if (status === 'CLOSING_SOON') { msg = ms <= 0 ? 'Closing soon' : 'Closing in ~' + fmtCountdown(ms); }
       else { msg = 'Next closure in ~' + fmtCountdown(ms); }
     } else { msg = 'No more closures expected today'; }
     $('statusTime').classList.add('hidden');
@@ -548,40 +365,17 @@ function renderDebugPanel() {
 // event-moment snapshot. Berth topology + time-to-crossing are ported from the
 // observer app's 28-day TD derivation (Portslade-specific).
 // ============================================================================
-var FB_CHAIN = {
-  east: [
-    { b:'0016', gap:132, ttc:671 }, { b:'0014', gap:74, ttc:537 }, { b:'0012', gap:37, ttc:462 },
-    { b:'0010', gap:143, ttc:422 }, { b:'0008', gap:75, ttc:278 },
-    { b:'0006', gap:142, role:'approach', ttc:206 }, { b:'0004', gap:79, role:'protecting', ttc:64 },
-    { x:true }, { b:'0002', gap:115, role:'clear' }, { b:'T686', gap:53 }, { b:'T684' }
-  ],
-  west: [
-    { b:'T682', gap:90 }, { b:'T677', gap:126, ttc:336 }, { b:'0001', gap:45, ttc:201 },
-    { b:'0003', gap:36, role:'approach', ttc:152 }, { b:'0005', gap:115, role:'protecting', ttc:115 },
-    { x:true }, { b:'0007', gap:43, role:'clear' }, { b:'0009', gap:70 }, { b:'0011', gap:140 },
-    { b:'0013', gap:144 }, { b:'0015', gap:84 }, { b:'0017' }
-  ]
-};
-var FB_IN = {};
-Object.keys(FB_CHAIN).forEach(function(d){
-  var idx = {}, xi = -1;
-  FB_CHAIN[d].forEach(function(n,i){ if(n.x) xi = i; else idx[n.b] = i; });
-  FB_IN[d] = { idx:idx, xi:xi };
-});
-function fbTrainKind(hc){ if(!hc) return 'passenger'; var c=hc.charAt(0); if(c==='6'||c==='7') return 'freight'; if(c==='5') return 'ecs'; if(c==='3') return 'test'; return 'passenger'; }
 function fbArrow(d){ return d==='east'?'▶':d==='west'?'◀':'·'; }
 function fbMins(s){ return '~'+Math.max(1, Math.round(s/60))+' min'; }
-function fbEtaToXing(d,i){ var c=FB_IN[d]; if(i<0||i>=c.xi) return 0; var s=0; for(var j=i;j<c.xi;j++){ s+=(FB_CHAIN[d][j].gap||60); } return s; }
 function fbEsc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
-// Layman position for a berth+direction. null → off the Portslade chain.
-function fbProximity(berth, direction){
-  var c = FB_IN[direction]; if(!c) return null;
-  var i = c.idx[berth]; if(i===undefined) return null;
-  if(i > c.xi) return { stage:'passed', label:'Just passed the crossing', etaSecs:null, rank:9999 };
-  var node = FB_CHAIN[direction][i];
-  var eta = (node.ttc != null) ? node.ttc : fbEtaToXing(direction,i);
-  var label = eta<=75 ? 'About to pass the crossing' : 'Approaching ('+fbMins(eta)+')';
-  return { stage:'approach', label:label, etaSecs:eta, rank:eta };
+// The berth chain and the position maths are in shared/predict.js (PREDICT.proximity) so
+// the observer app measures distance-to-crossing exactly the same way. Only the WORDING
+// is this app's: a passer-by wants "Approaching (~3 min)", the field observer wants
+// seconds. That is the one thing the two apps are meant to differ on.
+function fbPosLabel(prox){
+  if(!prox) return 'Elsewhere in the area';
+  if(prox.stage==='passed') return 'Just passed the crossing';
+  return prox.etaSecs<=75 ? 'About to pass the crossing' : 'Approaching ('+fbMins(prox.etaSecs)+')';
 }
 // Scheduled + live Portslade time for a headcode, joined from the closure trains.
 function fbTimes(hc){
@@ -590,32 +384,9 @@ function fbTimes(hc){
   return { sched:null, live:null };
 }
 function fbEnrich(lt){
-  var tm = fbTimes(lt.headcode);
-  var prox = fbProximity(lt.berth, lt.direction);
-  // Recent berth-strike history for this train (server-provided; each { berth, ts }).
-  // Captured as-of the event snapshot for calibration; empty until the backend ships it.
-  var strikes = (lt.history || []).map(function(h){ return { berth:h.berth||h.to||'', ts:h.ts||'', event:h.event||'' }; });
-  return {
-    headcode: lt.headcode, direction: lt.direction||'',
-    route: (lt.origin||'?')+' → '+(lt.destination||'?'),
-    type: fbTrainKind(lt.headcode), berth: lt.berth||'', ageSecs: lt.ageSecs||0,
-    prox: prox, posLabel: prox?prox.label:'Elsewhere in the area',
-    // Four Portslade times from the live feed (backend-provided; HH:MM): scheduled &
-    // live (estimated) arrival & departure. Blank until the backend ships them — the
-    // single closure-join time (schedStr/liveStr) is a display fallback.
-    schedArr: fbHHMM(lt.schedArr), schedDep: fbHHMM(lt.schedDep),
-    // The REAL live estimate, blank when the feed gives none. Kept separate from the
-    // display value below because the two must not be confused: a train that has lost
-    // its estimate was being shown — and logged — as "on time", since the fallback made
-    // live equal scheduled. This is the field the calibration payload carries, so a
-    // "live" column in the sheet always means an actual live estimate.
-    liveArrReal: fbHHMM(lt.liveArr), liveDepReal: fbHHMM(lt.liveDep),
-    // Display value: falls back to scheduled so the card is never blank. Safe only
-    // because fbTimeParts consults the Real fields before claiming punctuality.
-    liveArr: fbHHMM(lt.liveArr) || fbHHMM(lt.schedArr), liveDep: fbHHMM(lt.liveDep) || fbHHMM(lt.schedDep),
-    schedStr: tm.sched?fmtShort(tm.sched):'', liveStr: tm.live?fmtShort(tm.live):'',
-    strikes: strikes
-  };
+  var t = PREDICT.enrich(lt, fbTimes);
+  t.posLabel = fbPosLabel(t.prox);
+  return t;
 }
 function fetchLive(){
   return fetch(API_BASE+'/crossing/'+crossingId+'/live')
@@ -653,7 +424,9 @@ function openFeedbackPicker(type){
     var guess = fbSuggest(type, enriched);
     if(guess){ order = order.filter(function(h){ return h!==guess.headcode; }); order.unshift(guess.headcode); }
     var snap = {}; enriched.forEach(function(t){ snap[t.headcode] = t; });
-    fbEvent = { eventId: tsISO+'-'+Math.random().toString(36).slice(2,7), type:type, tsISO:tsISO, predictedState:$('statusTitle').textContent, snapshot:snap, order:order, guess:guess };
+    fbEvent = { eventId: tsISO+'-'+Math.random().toString(36).slice(2,7), type:type, tsISO:tsISO,
+                crossing:crossingId, crossingName:CFG.name,
+                predictedState:$('statusTitle').textContent, snapshot:snap, order:order, guess:guess };
     fbLivePos = {}; enriched.forEach(function(t){ fbLivePos[t.headcode] = { posLabel:t.posLabel }; });
     var m = $('fbMsg'); m.classList.remove('fb-shown'); m.classList.add('hidden'); clearTimeout(fbMsgTimer);
     renderFbPicker();
@@ -666,13 +439,11 @@ function openFeedbackPicker(type){
 function fbPollLive(){
   if(!fbEvent){ if(fbPollTimer){ clearInterval(fbPollTimer); fbPollTimer=null; } return; }
   fetchLive().then(function(live){
-    live.forEach(function(lt){ var p=fbProximity(lt.berth, lt.direction); fbLivePos[lt.headcode] = { posLabel: p?p.label:'Elsewhere in the area' }; });
+    live.forEach(function(lt){ fbLivePos[lt.headcode] = { posLabel: fbPosLabel(PREDICT.proximity(lt.berth, lt.direction)) }; });
     renderFbPicker();
   });
 }
 function fbMinOf(hhmm){ var m=/^(\d{1,2}):(\d{2})/.exec(hhmm||''); return m ? (parseInt(m[1],10)*60 + parseInt(m[2],10)) : null; }
-// Extract HH:MM from a feed time (full ISO like 2026-07-24T08:29:00, or already HH:MM).
-function fbHHMM(t){ if(!t) return ''; var m=String(t).match(/(\d{2}):(\d{2})/); return m?m[0]:''; }
 // Direction-appropriate time for the card's right column: westbound departure,
 // eastbound arrival, with a lateness tag vs schedule. Returns { time, tag, cls }.
 function fbTimeParts(t){
@@ -731,28 +502,11 @@ function renderFbPicker(){
 }
 // Build the feedback payload. Shared by the button-tap capture (completed=false, no
 // selection yet) and the final submission (completed=true). eventId ties them to one
-// row so a later selection updates the row already written at button-tap.
+// row so a later selection updates the row already written at button-tap. The shape
+// lives in shared/predict.js so an observer-recorded row means the same thing as a
+// public-app one, column for column.
 function fbBuildPayload(hc, completed){
-  var e = fbEvent; if(!e) return null;
-  var sel = hc ? e.snapshot[hc] : null;
-  var g = e.guess;
-  return {
-    eventId: e.eventId, completed: !!completed,
-    crossing: crossingId, crossingName: CFG.name,
-    eventTimestamp: e.tsISO, event: e.type, predictedState: e.predictedState,
-    ourGuessHeadcode: g?g.headcode:'', ourGuessRoute: g?g.route:'', ourGuessDirection: g?g.direction:'',
-    ourGuessType: g?g.type:'',
-    ourGuessSchedArr: g?g.schedArr:'', ourGuessSchedDep: g?g.schedDep:'', ourGuessLiveArr: g?g.liveArrReal:'', ourGuessLiveDep: g?g.liveDepReal:'',
-    ourGuessPosition: g?g.posLabel:'', ourGuessBerth: g?g.berth:'',
-    ourGuessBerthHistory: g?JSON.stringify(g.strikes||[]):'',
-    submittedAt: new Date().toISOString(),
-    selectedHeadcode: sel?sel.headcode:'', selectedRoute: sel?sel.route:'', selectedDirection: sel?sel.direction:'',
-    selectedType: sel?sel.type:'',
-    selectedSchedArr: sel?sel.schedArr:'', selectedSchedDep: sel?sel.schedDep:'', selectedLiveArr: sel?sel.liveArrReal:'', selectedLiveDep: sel?sel.liveDepReal:'',
-    selectedPosition: sel?sel.posLabel:'', selectedBerth: sel?sel.berth:'',
-    selectedBerthHistory: sel?JSON.stringify(sel.strikes||[]):'',
-    wasOurGuess: !!(sel && g && sel.headcode===g.headcode), notSure: !!(completed && !hc)
-  };
+  return PREDICT.feedbackPayload(fbEvent, hc, completed);
 }
 function fbPost(payload){
   if(!payload) return;
