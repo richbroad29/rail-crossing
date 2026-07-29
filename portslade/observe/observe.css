@@ -11,6 +11,23 @@ body{background:#0F172A;color:#E2E8F0;font-family:-apple-system,BlinkMacSystemFo
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;vertical-align:middle;margin-right:3px}
 .dot-ok{background:#22C55E}.dot-warn{background:#F59E0B}.dot-bad{background:#EF4444}
 
+/* Prediction panel — the public app's state, deliberately quieter than the capture
+   button below it. This is context for the observation, not the thing being recorded. */
+.pred{background:#1E293B;border-radius:12px;padding:10px 12px 12px;margin-bottom:14px;border:1px solid #334155}
+.pred-hdr{display:flex;justify-content:space-between;align-items:baseline;font-size:10px;color:#94A3B8;text-transform:uppercase;letter-spacing:.6px}
+.pred-age{font-size:10px;color:#64748B;text-transform:none;letter-spacing:0;font-variant-numeric:tabular-nums}
+.pred-age.bad{color:#FCA5A5}
+.pred-state{text-align:center;font-size:17px;font-weight:800;letter-spacing:.5px;margin:6px 0 8px;color:#64748B}
+.pred-state.is-open{color:#4ADE80}
+.pred-state.is-closing_soon{color:#FBBF24}
+.pred-state.is-closed{color:#F87171}
+.pred-cards{display:flex;gap:8px}
+.pred-card{flex:1;background:#0F172A;border-radius:9px;padding:8px 6px;text-align:center;min-width:0}
+.pred-label{font-size:8px;color:#94A3B8;text-transform:uppercase;letter-spacing:.8px}
+.pred-val{font-size:16px;font-weight:700;font-variant-numeric:tabular-nums;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pred-sub{font-size:9px;color:#64748B;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pred .info-text{margin-top:8px}
+
 /* Capture — single alternating button (large, one-handed) + skip */
 .cap-btn{border:none;border-radius:16px;padding:22px 8px;display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer;color:#fff;font-family:inherit;min-height:96px;transition:transform .05s}
 .cap-btn:active{transform:scale(.97)}

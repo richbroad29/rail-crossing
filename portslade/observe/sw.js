@@ -7,9 +7,12 @@
  * network and simply fails gracefully when offline (capture never depends on it).
  */
 
-var CACHE = 'observer-v6';
+var CACHE = 'observer-v7';
 var SHELL = [
   './', './index.html', './observe.css', './observe.js', './manifest.webmanifest',
+  // The shared prediction core and its config. predict.js is a hard dependency now — the
+  // app will not start without it — so it belongs in the offline shell, not on the network.
+  '../../shared/predict.js', '../../shared/crossings.json',
   '../../shared/icon-180.png', '../../shared/icon.svg'
 ];
 

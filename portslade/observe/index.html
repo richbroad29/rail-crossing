@@ -31,6 +31,19 @@
     </div>
   </div>
 
+  <!-- The public app's live prediction, from the same shared core (shared/predict.js).
+       Here so an observation can be compared with what the app was claiming at the time. -->
+  <div class="pred" id="predPanel">
+    <div class="pred-hdr"><span>Prediction · what the public app is showing</span><span class="pred-age" id="predAge">—</span></div>
+    <div class="pred-state" id="predState">…</div>
+    <div class="pred-cards">
+      <div class="pred-card"><div class="pred-label">Next Close</div><div class="pred-val" id="predClose">--</div><div class="pred-sub" id="predCloseAt"></div></div>
+      <div class="pred-card"><div class="pred-label">Next Open</div><div class="pred-val" id="predOpen">--</div><div class="pred-sub" id="predOpenAt"></div></div>
+      <div class="pred-card"><div class="pred-label">Down For</div><div class="pred-val" id="predDown">--</div><div class="pred-sub" id="predDownRange"></div></div>
+    </div>
+    <div class="info-text">Same endpoint and same code path as railcrossing.uk, so these figures are what a user is looking at right now — a mismatch is a real bug, not a difference between the two apps. Every capture below records this state and the gap between it and what you actually saw.</div>
+  </div>
+
   <!-- Capture: single alternating button (timestamp at tap) + skip. The button
        always offers the only valid next event for the current barrier state. -->
   <div class="arrival hidden" id="arrivalPrompt">
@@ -115,6 +128,7 @@
 
 <div class="toast hidden" id="toast"></div>
 
+<script src="../../shared/predict.js"></script>
 <script src="observe.js"></script>
 </body>
 </html>

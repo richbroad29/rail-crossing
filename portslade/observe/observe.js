@@ -25,55 +25,22 @@
  * with a leading "+" (time SINCE the crossing) to distinguish from the approach
  * countdown. The crossing reference for both is the train stepping out of the
  * protecting berth — i.e. the TRAIN on the crossing, not the barrier.
+ *
+ * v2 — the berth chain, the position maths, the live-train enrichment and the OPEN/CLOSE
+ * PREDICTION all come from shared/predict.js, the same core the public app runs. This app
+ * used to own a private copy of the chain and no prediction at all, so the two could
+ * disagree about the same crossing at the same moment. Now they cannot: a mismatch between
+ * this panel and railcrossing.uk is a bug, not a difference of implementation.
  */
 
 (function () {
   var API_BASE = 'https://api.railcrossing.uk';
   var CROSSING_ID = 'portslade';
   var POLL_MS = 2500;
+  var PRED_POLL_MS = 30000;   // matches the public app's refresh cadence
 
-  // Derived berth chain toward/through the crossing. gap = median seconds a train
-  // dwells in that berth (≈ time to the next berth). role marks the confirmed
-  // Portslade berths; {x:true} is the crossing itself (after protecting).
-  // ttc = {q1,med,q3} seconds from ENTERING this approach berth to passing the
-  // crossing; tac = {q1,med,q3} seconds from passing the crossing to entering
-  // this cleared berth (both over 28 days of TD logs — backend derive-ttc.js).
-  var CHAIN = {
-    east: [
-      { b: '0016', gap: 132, ttc: { q1: 613, med: 671, q3: 743 } },
-      { b: '0014', gap: 74, ttc: { q1: 479, med: 537, q3: 608 } },
-      { b: '0012', gap: 37, ttc: { q1: 402, med: 462, q3: 531 } },
-      { b: '0010', gap: 143, ttc: { q1: 362, med: 422, q3: 488 } },
-      { b: '0008', gap: 75, ttc: { q1: 201, med: 278, q3: 346 } },
-      { b: '0006', gap: 142, role: 'approach', ttc: { q1: 122, med: 206, q3: 270 } },
-      { b: '0004', gap: 79, role: 'protecting', ttc: { q1: 55, med: 64, q3: 122 } },
-      { x: true },
-      { b: '0002', gap: 115, role: 'clear' },
-      { b: 'T686', gap: 53, tac: { q1: 107, med: 116, q3: 128 } },
-      { b: 'T684', tac: { q1: 159, med: 170, q3: 186 } }
-    ],
-    west: [
-      { b: 'T682', gap: 90 },
-      { b: 'T677', gap: 126, ttc: { q1: 311, med: 336, q3: 385 } },
-      { b: '0001', gap: 45, ttc: { q1: 185, med: 201, q3: 258 } },
-      { b: '0003', gap: 36, role: 'approach', ttc: { q1: 142, med: 152, q3: 164 } },
-      { b: '0005', gap: 115, role: 'protecting', ttc: { q1: 107, med: 115, q3: 125 } },
-      { x: true },
-      { b: '0007', gap: 43, role: 'clear' },
-      { b: '0009', gap: 70, tac: { q1: 41, med: 42, q3: 45 } },
-      { b: '0011', gap: 140, tac: { q1: 103, med: 111, q3: 181 } },
-      { b: '0013', gap: 144, tac: { q1: 198, med: 258, q3: 317 } },
-      { b: '0015', gap: 84, tac: { q1: 349, med: 412, q3: 467 } },
-      { b: '0017', gap: 47, tac: { q1: 437, med: 496, q3: 554 } }
-    ]
-  };
-  // Precompute, per direction: berth → node index, and the crossing index.
-  var CHAININ = {};
-  Object.keys(CHAIN).forEach(function (d) {
-    var idx = {}, xi = -1;
-    CHAIN[d].forEach(function (n, i) { if (n.x) xi = i; else idx[n.b] = i; });
-    CHAININ[d] = { idx: idx, xi: xi };
-  });
+  // Berth chain + index, from the shared core. See shared/predict.js for the derivation.
+  var CHAIN = PREDICT.CHAIN, CHAININ = PREDICT.CHAININ;
 
   // Off-chain berths that nonetheless lead to the crossing, with the median
   // observed seconds-to-crossing (derived from TD timestamps). Used only to order
@@ -87,30 +54,27 @@
   function offChainEta(d, berth) { var m = BERTH_ETA[d]; var v = m && m[berth]; return typeof v === 'number' ? v : null; }
 
   // ---- pure helpers ----
-  function trainKind(hc) { if (!hc) return 'passenger'; var c = hc.charAt(0); if (c === '6' || c === '7') return 'freight'; if (c === '5') return 'ecs'; if (c === '3') return 'test'; return 'passenger'; }
+  var trainKind = PREDICT.trainKind, proximity = PREDICT.proximity;
   function dirWord(d) { return d === 'east' ? 'Eastbound' : d === 'west' ? 'Westbound' : 'Direction unknown'; }
   function dirArrow(d) { return d === 'east' ? '▶' : d === 'west' ? '◀' : '·'; }
 
-  // Sum of gaps from node index i up to (and including) the protecting berth —
-  // the estimated seconds from entering berth i to reaching the crossing.
-  function etaToCrossing(d, i) {
-    var c = CHAININ[d]; if (i < 0 || i >= c.xi) return 0;
-    var s = 0; for (var j = i; j < c.xi; j++) { var n = CHAIN[d][j]; s += (n.gap || 60); } return s;
+  // Position of a train in words, recomputed on every render rather than only when the
+  // train steps berth — the same fix as the public app's picker, and for the same reason:
+  // berth dwells run to nearly three minutes, so a label pinned to the berth is a label
+  // that doesn't move. Wording is second-level here (this is a stopwatch tool, not a
+  // passer-by's phone); the arithmetic underneath is the shared PREDICT.eta.
+  function posLabel(t, nowMs) {
+    var p = t.prox || proximity(t.berth, t.direction);
+    if (!p) return null;
+    var e = PREDICT.eta(t, nowMs);
+    if (!e) return p.stage === 'passed' ? 'Passed' : 'Approaching';
+    if (p.stage === 'passed') return 'Passed (+' + fmtEta(e.sinceSecs) + ')';
+    if (e.overdueSecs > 120) return 'Held (' + fmtEta(e.overdueSecs) + ' overdue)';
+    if (p.role === 'protecting' && e.secs <= 20) return 'At the crossing';
+    if (e.secs <= 5) return 'Any moment';
+    return (e.secs <= 90 ? 'Close (' : 'Approaching (') + fmtEta(e.secs) + ')';
   }
-  // Position of a train on its chain: stage + plain label + etaSecs + rank.
-  // null if the berth isn't on the Portslade chain (→ "elsewhere in area").
-  function proximity(berth, direction) {
-    var c = CHAININ[direction]; if (!c) return null;
-    var i = c.idx[berth]; if (i === undefined) return null;
-    if (i > c.xi) return { stage: 'passed', label: 'Just passed', etaSecs: null, rank: 9999, index: i };
-    var node = CHAIN[direction][i];
-    // Prefer the empirical median time-to-crossing for this berth (28-day TD
-    // distribution); fall back to summed gaps for any berth without it.
-    var eta = (node.ttc && node.ttc.med != null) ? node.ttc.med : etaToCrossing(direction, i);
-    var label = eta <= 25 ? 'At the crossing' : eta <= 90 ? 'Close (~' + fmtEta(eta) + ')' : 'Approaching (~' + fmtEta(eta) + ')';
-    return { stage: 'approach', label: label, etaSecs: eta, rank: eta, index: i };
-  }
-  function isApproaching(t) { return proximity(t.berth, t.direction) !== null; }
+  function isApproaching(t) { return (t.prox || proximity(t.berth, t.direction)) !== null; }
   function fmtEta(s) { if (s == null) return ''; if (s < 60) return s + 's'; var m = Math.floor(s / 60), r = s % 60; return r ? (m + 'm' + (r < 10 ? '0' + r : r) + 's') : (m + 'm'); }
   // Compact per-berth crossing time: bold median + the lower–upper quartile range.
   // after=true prefixes "+" (time SINCE the crossing) vs the approach countdown.
@@ -130,13 +94,13 @@
   function shortName(t) { return t.destination ? t.destination.split(/[ (,]/)[0] : t.headcode; }
 
   function suggestForClose(trains) {
-    var cand = trains.filter(function (t) { var p = proximity(t.berth, t.direction); return p && p.stage === 'approach'; });
+    var cand = trains.filter(function (t) { var p = t.prox; return p && p.stage === 'approach'; });
     if (!cand.length) return null;
-    cand.sort(function (a, b) { return proximity(a.berth, a.direction).rank - proximity(b.berth, b.direction).rank; });
+    cand.sort(function (a, b) { return liveRank(a) - liveRank(b); });
     return cand[0];
   }
   function suggestForOpen(trains) {
-    var cleared = trains.filter(function (t) { var p = proximity(t.berth, t.direction); return p && p.stage === 'passed'; });
+    var cleared = trains.filter(function (t) { var p = t.prox; return p && p.stage === 'passed'; });
     if (cleared.length) { cleared.sort(function (a, b) { return (a.ageSecs || 0) - (b.ageSecs || 0); }); return cleared[0]; }
     var appr = trains.filter(isApproaching);
     appr.sort(function (a, b) { return (a.ageSecs || 0) - (b.ageSecs || 0); });
@@ -191,6 +155,12 @@
   var episodeSet = {}, lastCaptureId = null, pending = null, showElsewhere = false;
   var barrierUp = null;                          // null = unknown (ask arrival state)
   var ARRIVAL_KEY = 'observer-arrival-' + CROSSING_ID;
+  // ---- prediction state (the public app's, via the shared core) ----
+  var CFG = null;                 // shared/crossings.json entry — confidence-window tiers
+  var predPeriods = [];           // backend closures, mapped
+  var predTrains = [];            // the closures' trains, for the headcode → bestTime join
+  var pred = null;                // last PREDICT.derive result
+  var predAt = 0, predOk = false;
 
   function $(id) { return document.getElementById(id); }
   function el(tag, cls, html) { var e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; }
@@ -210,6 +180,22 @@
     });
   }
 
+  // Scheduled + live Portslade time for a headcode, out of the predicted closures. The
+  // public app's fbTimes does exactly this against the same payload — it is what gives
+  // PREDICT.eta the backend's own predicted crossing time for a train.
+  function joinTimes(hc) {
+    for (var i = 0; i < predTrains.length; i++) {
+      if (predTrains[i].headcode === hc) return { sched: predTrains[i].scheduledTime || null, live: predTrains[i].bestTime || null };
+    }
+    return { sched: null, live: null };
+  }
+  // Seconds to the crossing for ranking: the live figure, so a stopper dwelling at
+  // Southwick doesn't outrank a fast that will actually get here first.
+  function liveRank(t) {
+    var e = PREDICT.eta(t);
+    return (e && e.secs != null) ? e.secs : (t.prox ? t.prox.rank : 100000);
+  }
+
   // ---- live feed poll (B1) ----
   function poll() {
     var t0 = Date.now();
@@ -218,12 +204,73 @@
       .then(function (data) {
         var t1 = Date.now();
         if (typeof data.serverTime === 'number') { lastRtt = t1 - t0; clockOffsetMs = Math.round(data.serverTime - (t0 + lastRtt / 2)); }
-        liveTrains = Array.isArray(data.trains) ? data.trains : [];
+        // Enriched, not raw: an enriched train is a superset of the feed record and carries
+        // its chain position, berth-entry instant and predicted crossing time, which is what
+        // the labels, the ranking and the feedback payload all need.
+        var raw = Array.isArray(data.trains) ? data.trains : [];
+        liveTrains = raw.map(function (t) { return PREDICT.enrich(t, joinTimes); });
         liveTrains.forEach(function (t) { if (t.headcode) episodeSet[t.headcode] = true; });
         lastPollAt = Date.now(); lastPollOk = true;
         renderStrip(); renderElsewhere(); renderStatus(); if (pending) renderPicker();
       })
       .catch(function () { lastPollOk = false; renderStatus(); });
+  }
+
+  // ---- prediction poll (the same endpoint and the same core as the public app) ----
+  function pollPrediction() {
+    fetch(API_BASE + '/crossing/' + CROSSING_ID, { cache: 'no-store' })
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function (data) {
+        predPeriods = PREDICT.buildClosures(data.upcomingClosures, CFG);
+        predTrains = PREDICT.parseTrains(data);
+        predAt = Date.now(); predOk = true;
+        renderPrediction();
+      })
+      .catch(function () { predOk = false; renderPrediction(); });
+  }
+  // Re-derived every second, because the passage of time alone changes the answer.
+  //
+  // On the DEVICE clock, not the server-corrected one, even though this app has the
+  // correction available. The panel's claim is "this is what the public app is showing",
+  // and the public app has only the device clock — deriving from a better clock here would
+  // make the two disagree in exactly the situation the panel is meant to detect. The
+  // correction is applied where it is physically necessary instead: the capture timestamp
+  // and the observed-minus-predicted delta (see predStamp).
+  function renderPrediction() {
+    pred = predPeriods.length ? PREDICT.derive(predPeriods, new Date()) : null;
+    var age = predAt ? Math.round((Date.now() - predAt) / 1000) : null;
+    $('predAge').textContent = !predOk ? 'offline' : (age != null ? age + 's ago' : '—');
+    $('predAge').className = 'pred-age' + (!predOk || (age != null && age > 90) ? ' bad' : '');
+    var st = pred ? pred.status : null;
+    $('predState').textContent = st === 'CLOSED' ? 'BARRIERS DOWN' : st === 'CLOSING_SOON' ? 'CLOSING SOON'
+      : st === 'OPEN' ? 'CROSSING CLEAR' : 'no prediction';
+    $('predState').className = 'pred-state' + (st ? ' is-' + st.toLowerCase() : '');
+    var t = Date.now();
+    setPredCard('predClose', 'predCloseAt', pred && pred.nextCloseTime, t);
+    setPredCard('predOpen', 'predOpenAt', pred && pred.nextOpenTime, t);
+    var dfm = pred && pred.downForMs;
+    $('predDown').textContent = (dfm != null && dfm > 0) ? PREDICT.fmtDownFor(dfm) : '--';
+    $('predDownRange').textContent = (dfm != null && dfm > 0) ? pred.downForRange : '';
+  }
+  function setPredCard(valId, subId, when, nowMs) {
+    $(valId).textContent = when ? PREDICT.fmtSoon(when.getTime() - nowMs) : '--';
+    $(subId).textContent = when ? PREDICT.fmtShort(when) : '';
+  }
+  // The prediction as it stood at the instant of a capture, plus the number this whole
+  // exercise exists to produce: observed minus predicted, in seconds. Positive = the
+  // barrier moved LATER than the app said.
+  function predStamp(type, tCorrected) {
+    if (!pred) return { predictedState: '', predictedCloseTime: '', predictedOpenTime: '', predictedDownForSecs: '', deltaVsPredictedSecs: '' };
+    var target = type === 'CLOSE'
+      ? (pred.current ? (pred.current.predictedStart || pred.current.start) : pred.nextCloseTime)
+      : (pred.current ? pred.current.end : (pred.upcoming ? pred.upcoming.end : null));
+    return {
+      predictedState: pred.status,
+      predictedCloseTime: pred.nextCloseTime ? pred.nextCloseTime.toISOString() : '',
+      predictedOpenTime: pred.nextOpenTime ? pred.nextOpenTime.toISOString() : '',
+      predictedDownForSecs: pred.downForMs != null ? Math.round(pred.downForMs / 1000) : '',
+      deltaVsPredictedSecs: target ? Math.round((tCorrected - target.getTime()) / 1000) : ''
+    };
   }
 
   // ---- capture (single alternating action) ----
@@ -252,6 +299,9 @@
       train: sug ? { headcode: sug.headcode, direction: sug.direction, stopping: sug.stopping } : null,
       suggestedHeadcode: sug ? sug.headcode : null, suggestionAccepted: false, confidence: null,
       episodeTrains: type === 'OPEN' ? Object.keys(episodeSet) : [], liveSnapshot: buildSnapshot(),
+      // What the app was predicting at this instant, frozen with the observation. Without
+      // it the timestamp says when the barrier moved but not what we got wrong.
+      pred: predStamp(type, tDev + clockOffsetMs),
       note: '', offsetMs: clockOffsetMs, createdAt: Date.now()
     };
     if (type === 'CLOSE') { episodeSet = {}; liveTrains.forEach(function (t) { if (t.headcode) episodeSet[t.headcode] = true; }); }
@@ -272,6 +322,7 @@
       tCapturedDevice: tDev, tCorrected: tDev + clockOffsetMs, crossingId: CROSSING_ID,
       train: null, suggestedHeadcode: null, suggestionAccepted: false, confidence: null,
       episodeTrains: type === 'OPEN' ? Object.keys(episodeSet) : [], liveSnapshot: buildSnapshot(),
+      pred: predStamp(type, tDev + clockOffsetMs),
       note: 'missed (skipped) — time approximate', offsetMs: clockOffsetMs, createdAt: Date.now()
     };
     if (type === 'CLOSE') { episodeSet = {}; liveTrains.forEach(function (t) { if (t.headcode) episodeSet[t.headcode] = true; }); }
@@ -302,16 +353,16 @@
     $('attrTitle').textContent = 'Which train caused this ' + rec.eventType + '?';
     $('attrTime').textContent = hms(rec.tCorrected);
     var sug = rec.suggestedHeadcode ? liveTrains.filter(function (t) { return t.headcode === rec.suggestedHeadcode; })[0] : null;
-    if (sug) { var p = proximity(sug.berth, sug.direction); $('attrSuggest').innerHTML = 'Suggested: <b>' + identity(sug) + '</b><br>' + dirWord(sug.direction) + (p ? ' · ' + p.label : '') + ' · <span class="mono">' + sug.headcode + '</span>'; }
+    if (sug) { var p = posLabel(sug); $('attrSuggest').innerHTML = 'Suggested: <b>' + identity(sug) + '</b><br>' + dirWord(sug.direction) + (p ? ' · ' + p : '') + ' · <span class="mono">' + sug.headcode + '</span>'; }
     else $('attrSuggest').innerHTML = 'No clear approaching train — pick from the list, or mark Unknown.';
     $('attrNote').value = pending.note;
     renderConf(); renderPicker(); $('attrPanel').classList.remove('hidden'); $('attrPanel').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
   function renderConf() { var b = document.querySelectorAll('.conf-btn'); for (var i = 0; i < b.length; i++) b[i].classList.toggle('sel', b[i].dataset.conf === pending.confidence); }
   function pickRow(t) {
-    var sel = pending.train && pending.train.headcode === t.headcode, p = proximity(t.berth, t.direction);
+    var sel = pending.train && pending.train.headcode === t.headcode, p = posLabel(t);
     var row = el('div', 'pick' + (sel ? ' sel' : '') + (t.headcode === pending.suggestedHeadcode ? ' suggested' : ''));
-    row.innerHTML = '<span class="dir">' + dirArrow(t.direction) + '</span><span class="pick-main"><span class="pick-id">' + identity(t) + '</span><span class="pick-sub">' + dirWord(t.direction) + (p ? ' · ' + p.label : '') + '</span></span><span class="meta"><span class="mono">' + t.headcode + '</span><br>' + (t.berth || '?') + ' · ' + ageStr(t) + '</span>';
+    row.innerHTML = '<span class="dir">' + dirArrow(t.direction) + '</span><span class="pick-main"><span class="pick-id">' + identity(t) + '</span><span class="pick-sub">' + dirWord(t.direction) + (p ? ' · ' + p : '') + '</span></span><span class="meta"><span class="mono">' + t.headcode + '</span><br>' + (t.berth || '?') + ' · ' + ageStr(t) + '</span>';
     row.onclick = function () { pending.train = { headcode: t.headcode, direction: t.direction, stopping: t.stopping }; renderPicker(); };
     return row;
   }
@@ -320,7 +371,7 @@
     if (!liveTrains.length) { box.innerHTML = '<div class="empty">No trains in feed — mark Unknown or add a note.</div>'; return; }
     parts.appr.sort(function (a, b) {
       if (a.headcode === pending.suggestedHeadcode) return -1; if (b.headcode === pending.suggestedHeadcode) return 1;
-      return proximity(a.berth, a.direction).rank - proximity(b.berth, b.direction).rank;
+      return liveRank(a) - liveRank(b);
     });
     if (parts.appr.length) { box.appendChild(el('div', 'pick-group', 'On the Portslade approach')); parts.appr.forEach(function (t) { box.appendChild(pickRow(t)); }); }
     if (parts.rest.length) {
@@ -516,6 +567,15 @@
     renderClock(); setInterval(renderClock, 250);
     renderStatus(); setInterval(renderStatus, 1000);
     openDb().then(function () { refreshLocal(); }).catch(function (e) { toast('Storage error: ' + e.message); });
+    // Config first: the confidence-window tiers come from the same shared/crossings.json the
+    // public app reads. The prediction poll starts either way — the tiers only affect the ±
+    // band, which this panel doesn't show, so a config failure must not cost us a prediction.
+    fetch('../../shared/crossings.json', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (all) { CFG = all[CROSSING_ID] || null; })
+      .catch(function () { })
+      .then(function () { pollPrediction(); setInterval(pollPrediction, PRED_POLL_MS); });
+    renderPrediction(); setInterval(renderPrediction, 1000);
     poll(); setInterval(poll, POLL_MS);
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function () { });
   }

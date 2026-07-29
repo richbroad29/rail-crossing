@@ -376,6 +376,11 @@
       headcode: lt.headcode, direction: lt.direction || '',
       route: (lt.origin || '?') + ' → ' + (lt.destination || '?'),
       type: trainKind(lt.headcode), berth: lt.berth || '', ageSecs: lt.ageSecs || 0,
+      // Feed fields passed straight through, so an enriched train is a superset of the raw
+      // one and callers never need to keep both.
+      origin: lt.origin || null, destination: lt.destination || null,
+      stopping: lt.stopping, fromBerth: lt.fromBerth || null, event: lt.event || null,
+      lastSeen: lt.lastSeen || null,
       prox: prox,
       // When this train stepped into its current berth, on the DEVICE clock: the feed's
       // ageSecs is server-computed, so subtracting it from local "now" at the moment the
