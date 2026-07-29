@@ -154,7 +154,9 @@
   var clockOffsetMs = 0, lastRtt = 0, lastPollAt = 0, lastPollOk = false;
   var episodeSet = {}, lastCaptureId = null, pending = null, showElsewhere = false;
   var barrierUp = null;                          // null = unknown (ask arrival state)
+  var endArmed = false;                          // "End session" tapped once, awaiting confirm
   var ARRIVAL_KEY = 'observer-arrival-' + CROSSING_ID;
+  var SESSION_END_KEY = 'observer-session-end-' + CROSSING_ID;
   // ---- prediction state (the public app's, via the shared core) ----
   var CFG = null;                 // shared/crossings.json entry — confidence-window tiers
   var predPeriods = [];           // backend closures, mapped
@@ -283,8 +285,37 @@
     });
   }
   function setArrival(up) {
-    barrierUp = up; try { localStorage.setItem(ARRIVAL_KEY, up ? 'up' : 'down'); } catch (e) { }
+    barrierUp = up;
+    try { localStorage.setItem(ARRIVAL_KEY, up ? 'up' : 'down'); localStorage.removeItem(SESSION_END_KEY); } catch (e) { }
+    endArmed = false;
     renderCaptureControls(); toast('Barrier set ' + (up ? 'UP ▲' : 'DOWN ▼'));
+  }
+  // End the session: forget which way the barrier is, so the next visit starts from the
+  // "when you arrived, was the barrier…" question again.
+  //
+  // Nulling barrierUp is not enough — recomputeState() re-derives it from the last event in
+  // the log on every refresh, so it would come straight back. A timestamp marker is what
+  // makes it stick: events before it belong to a finished session and no longer imply a
+  // current state. NOTHING is deleted. The captures, the tally and the export are all
+  // untouched; this ends a session, it does not discard one.
+  //
+  // Two taps to confirm, and no confirm() dialog — a modal dialog blocks the page, and this
+  // app's whole job is being ready for a barrier that moves without warning.
+  function endSession() {
+    if (!endArmed) {
+      endArmed = true; renderCaptureControls();
+      clearTimeout(endSession._t);
+      endSession._t = setTimeout(function () { endArmed = false; renderCaptureControls(); }, 4000);
+      return;
+    }
+    endArmed = false;
+    try { localStorage.setItem(SESSION_END_KEY, String(Date.now())); localStorage.removeItem(ARRIVAL_KEY); } catch (e) { }
+    barrierUp = null; episodeSet = {}; lastCaptureId = null;
+    if (pending) { pending = null; $('attrPanel').classList.add('hidden'); }
+    renderCaptureControls(); refreshLocal(); toast('Session ended — captures kept');
+  }
+  function sessionEndedAt() {
+    try { var v = parseInt(localStorage.getItem(SESSION_END_KEY) || '', 10); return isFinite(v) ? v : 0; } catch (e) { return 0; }
   }
   function capture() {
     if (barrierUp === null) { toast('First set the barrier state on arrival'); return; }
@@ -334,7 +365,13 @@
   function renderCaptureControls() {
     var arrival = $('arrivalPrompt'), main = $('capMain');
     if (!arrival || !main) return;
-    if (barrierUp === null) { arrival.classList.remove('hidden'); main.classList.add('hidden'); return; }
+    // No known barrier state means there is no session to end, so disarm — otherwise a
+    // half-tapped "End session" survives in the hidden panel into the next session.
+    if (barrierUp === null) {
+      arrival.classList.remove('hidden'); main.classList.add('hidden');
+      endArmed = false; $('btnEnd').textContent = 'End session'; $('btnEnd').classList.remove('armed');
+      return;
+    }
     arrival.classList.add('hidden'); main.classList.remove('hidden');
     var type = barrierUp ? 'CLOSE' : 'OPEN', btn = $('btnAction');
     btn.classList.toggle('is-close', type === 'CLOSE');
@@ -345,6 +382,9 @@
       ? 'Barrier is <b class="up">UP ▲</b> — tap when the red lights start'
       : 'Barrier is <b class="down">DOWN ▼</b> — tap when the booms are fully up';
     $('btnSkip').textContent = 'Missed the ' + type + ' — skip ▸';
+    var eb = $('btnEnd');
+    eb.textContent = endArmed ? 'Tap again to end the session' : 'End session';
+    eb.classList.toggle('armed', endArmed);
   }
 
   // ---- attribution ----
@@ -394,12 +434,15 @@
   // ---- state / episodes ----
   function activeOf(all) { return all.filter(function (r) { return !r.deleted; }); }
   function chrono(list) { return list.slice().sort(function (a, b) { return a.createdAt - b.createdAt; }); }
-  // Current barrier state = the resulting state of the last event (every event,
-  // observed or skipped, sets a definite state by its type). Empty log → arrival
-  // memory (localStorage), else unknown.
+  // Current barrier state = the resulting state of the last event of THIS session (every
+  // event, observed or skipped, sets a definite state by its type). Events from before the
+  // last "End session" are history, not state — the barrier has moved any number of times
+  // since. No event this session → arrival memory (localStorage), else unknown.
   function recomputeState(ac) {
-    if (!ac.length) { var s = null; try { s = localStorage.getItem(ARRIVAL_KEY); } catch (e) { } barrierUp = s === 'up' ? true : s === 'down' ? false : null; return; }
-    barrierUp = ac[ac.length - 1].eventType === 'OPEN';
+    var since = sessionEndedAt();
+    var mine = since ? ac.filter(function (r) { return r.createdAt > since; }) : ac;
+    if (!mine.length) { var s = null; try { s = localStorage.getItem(ARRIVAL_KEY); } catch (e) { } barrierUp = s === 'up' ? true : s === 'down' ? false : null; return; }
+    barrierUp = mine[mine.length - 1].eventType === 'OPEN';
   }
   // Pair CLOSE→OPEN into closure episodes → {id: {episodeIndex, role, durationMs,
   // hasSkip}}. An OPEN with no preceding CLOSE (barrier already down on arrival)
@@ -555,6 +598,7 @@
   function init() {
     $('btnAction').onclick = capture;
     $('btnSkip').onclick = skip;
+    $('btnEnd').onclick = endSession;
     $('arrUp').onclick = function () { setArrival(true); };
     $('arrDown').onclick = function () { setArrival(false); };
     $('attrSave').onclick = saveAttr;

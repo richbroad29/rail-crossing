@@ -44,6 +44,11 @@ body{background:#0F172A;color:#E2E8F0;font-family:-apple-system,BlinkMacSystemFo
 .state-ind b.up{color:#6EE7B7}.state-ind b.down{color:#FCA5A5}
 .cap-skip{width:100%;margin-top:10px;padding:13px;border-radius:12px;border:1px dashed #475569;background:#0F172A;color:#CBD5E1;font-size:13px;font-weight:600;cursor:pointer}
 .cap-skip:active{background:#1E293B}
+/* End session — deliberately the quietest control on the screen, and it arms before it
+   fires. Losing the barrier state mid-session costs you the next capture. */
+.cap-end{width:100%;margin-top:8px;padding:9px;border-radius:10px;border:1px solid transparent;background:none;color:#64748B;font-size:11px;font-family:inherit;cursor:pointer}
+.cap-end:active{color:#CBD5E1}
+.cap-end.armed{border-color:#B45309;color:#FBBF24;font-weight:600}
 
 /* Arrival state prompt — shown only when the barrier state is unknown */
 .arrival{background:#1E293B;border-radius:16px;padding:16px;margin-bottom:14px;border:1px solid #334155}
