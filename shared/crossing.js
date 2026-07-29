@@ -59,6 +59,20 @@ function fmtDuration(ms) {
   var m = Math.floor(s / 60), sec = s % 60;
   return sec === 0 ? '~' + m + 'm' : '~' + m + 'm ' + sec + 's';
 }
+// The "Down For" card version of the same duration. Two differences from the pill
+// above, both because this one is read on its own rather than inside a sentence:
+// no leading "~" (the uncertainty is expressed by the ± band on the closure row,
+// and a tilde against a bare number just read as noise), and a whole-minute value
+// spells its unit out — "3m" alone was easy to scan as seconds. Mixed values stay
+// compact ("2m 40s"); spelling those out overflows the card. Same 10 s rounding, so
+// the card and the pill can never disagree.
+function fmtDownFor(ms) {
+  var s = Math.max(10, Math.round(ms / 10000) * 10);
+  if (s < 60) return s + ' secs';
+  var m = Math.floor(s / 60), sec = s % 60;
+  if (sec === 0) return m + (m === 1 ? ' min' : ' mins');
+  return m + 'm ' + sec + 's';
+}
 function getColors(st) {
   switch(st) {
     case 'CLOSED': return {bg:'#DC2626',text:'#FFF',glow:'0 0 30px rgba(220,38,38,.5)'};
@@ -474,7 +488,7 @@ function updateStatus() {
   else { $('nextCloseCountdown').textContent = '--'; $('nextCloseCountdown').style.color = '#475569'; $('nextCloseTime').textContent = ''; }
   if (nextOpenTime) { $('nextOpenCountdown').textContent = fmtSoon(nextOpenTime.getTime() - t); $('nextOpenCountdown').style.color = '#16A34A'; $('nextOpenTime').textContent = fmtShort(nextOpenTime); }
   else { $('nextOpenCountdown').textContent = '--'; $('nextOpenCountdown').style.color = '#475569'; $('nextOpenTime').textContent = ''; }
-  if (downForMs !== null && downForMs > 0) { $('closureLength').textContent = fmtDuration(downForMs); $('closureLength').style.color = '#94A3B8'; $('closureLengthSub').textContent = downForRange; }
+  if (downForMs !== null && downForMs > 0) { $('closureLength').textContent = fmtDownFor(downForMs); $('closureLength').style.color = '#94A3B8'; $('closureLengthSub').textContent = downForRange; }
   else { $('closureLength').textContent = '--'; $('closureLength').style.color = '#475569'; $('closureLengthSub').textContent = ''; }
   renderClosures();
 
@@ -700,12 +714,18 @@ function fbCardHtml(hc, isGuess){
 function renderFbPicker(){
   if(!fbEvent) return;
   var verb = fbEvent.type==='closing' ? 'closing' : 'opening';
+  // The instruction has to name the direction of time, not just "the train you can
+  // see": at a close the causing train has not reached the crossing yet, at an open
+  // it already has, and "the train you can see" pointed at the wrong one half the time.
+  var sub = fbEvent.type==='closing'
+    ? 'Tap the train that next crosses the crossing — it helps us learn the exact timings'
+    : 'Tap the train that just crossed the crossing — it helps us learn the exact timings';
   var order = fbEvent.order.slice(0, 3);
   var cards = order.map(function(hc){ return fbCardHtml(hc, fbEvent.guess && hc===fbEvent.guess.headcode); }).join('');
   if(!cards) cards = '<div class="fb-none">No trains detected nearby right now — tap below to just log the time.</div>';
   $('fbPicker').innerHTML =
     '<div class="fb-picker-hdr">Which train is '+verb+' the barrier?</div>'+
-    '<div class="fb-picker-sub">Tap the train you can see — it helps us learn the exact timings.</div>'+
+    '<div class="fb-picker-sub">'+sub+'</div>'+
     '<div class="fb-cands">'+cards+'</div>'+
     '<button class="fb-notsure" onclick="fbSubmit(null)">Not sure / no train visible</button>';
 }
