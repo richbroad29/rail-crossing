@@ -18,13 +18,31 @@ Goals, in order of priority:
 ```
 index.html                       Landing page
 portslade/index.html             The actual app (Boundary Road)
-shared/crossing.js               All app logic — ~560 lines, single file
+shared/predict.js                PREDICTION CORE — shared by BOTH apps (see below)
+shared/crossing.js               Public app: presentation over the core
 shared/crossings.json            Per-crossing config (timing params, IDs, feedback URL)
 shared/crossing.css              Styles
+shared/apps-script-feedback.gs   Copy of the Google Apps Script behind the feedback Sheet
 shared/icon-180.png, icon.svg    Icons
 README.md                        Almost empty
 portslade/observe/               Barrier-observation PWA — field data-collection tool (separate app, /portslade/observe/)
 ```
+
+### `shared/predict.js` — read this before touching either front-end
+
+Anything the two apps must **agree** on lives here: the closure mapping and confidence
+tiers, the `OPEN`/`CLOSING_SOON`/`CLOSED` derivation (`PREDICT.derive`), the formatters, the
+Portslade berth chain and position maths (`PREDICT.proximity` / `PREDICT.eta`), live-train
+enrichment, and the feedback payload shape. Both apps load it as a plain `<script>`; there
+is no build step.
+
+Anything about how one app **looks** does not live here. Each app keeps its own thin label
+formatter over the shared position maths — "Approaching (~3 min)" for a passer-by,
+"Approaching (3m20s)" for someone at the crossing with a stopwatch.
+
+**Do not add a second implementation of any of it.** The observer previously carried its own
+copy of the berth chain and no prediction at all, which is exactly how the two apps came to
+be able to disagree about the same crossing at the same moment.
 
 The **frontend has no build step** — edit files, push to `main`, GitHub Pages deploys within ~1 minute.
 
@@ -105,7 +123,11 @@ Feedback flow: when the user reports a wrong prediction, the frontend POSTs to a
 
 ## Observer app (`/portslade/observe/`)
 
-A separate installable PWA (`portslade/observe/`, live at https://railcrossing.uk/portslade/observe/ , deployed on `main` via GitHub Pages) for on-site collection of real barrier event timestamps — **step 1 of position-based closure triggering**, not a prediction surface. It is read-only on train data and (v1) writes only to local device storage.
+A separate installable PWA (`portslade/observe/`, live at https://railcrossing.uk/portslade/observe/ , deployed on `main` via GitHub Pages) for on-site collection of real barrier event timestamps — **step 1 of position-based closure triggering**. It is read-only on train data.
+
+- **Shows the public app's prediction** (2026-07-29) in a panel above the capture button, from the same `shared/predict.js` core and the same `GET /crossing/:id` — so a mismatch between it and railcrossing.uk is a bug, not a difference of implementation. Derived on the **device** clock, because the claim is "this is what a user is seeing", and the public app has only the device clock. Each capture freezes that prediction into the record along with `deltaVsPredictedSecs` (observed − predicted), which is the calibration measurement.
+- **Writes to the Google Sheet** as well as local storage (2026-07-29): the same `Feedback v2` tab, the same payload builder as the public app, distinguished by a `source` column. Posted twice per event on one `eventId` — at the tap and again on Save — which the Apps Script upserts onto one row. Local IndexedDB + CSV export remain the record of truth: the POST is `no-cors`, so success only means the request left the device, and the export note reports anything that never got sent.
+- **"End session"** returns the app to the arrival question. Backed by a `observer-session-end-<id>` localStorage timestamp, because `recomputeState()` otherwise re-derives the barrier state from the last event in the log however old it is. Deletes nothing.
 
 - Polls the backend's **B1 live endpoint** `GET /crossing/:id/live` (~2.5s) for trains currently in TD area LA. The endpoint feeds the observer the per-train `{ headcode, berth, fromBerth, event, direction, stopping, origin, destination, lastSeen, ageSecs }` plus `serverTime` (for device clock-offset). B1 lives in `backend-v2`: `td-listener` emits the berth, `crossing-state.recordTdBerth`/`getLiveTrains` keep a TTL-pruned `liveTrains` map (config `live.ttlSecs`), `api.js` serves it. Direction is from a headcode→LDB/CIF join (`"unknown"` if no match); `stopping` is `true` only if on the PLD board, else `"unknown"` (never `false`).
 - Captures **two events only** — CLOSE (red lights start) / OPEN (booms fully up) — each attributed to a **single** train: CLOSE → nearest *approaching* train, OPEN → *just-cleared* train. Attribution leans on direction + the **confirmed Portslade approach berths only** (`berths.east/west` in `shared/crossings.json`), never raw berth proximity across all of LA (that mapping is the later berth-chain analysis).
@@ -205,12 +227,21 @@ External services should be free unless the value clearly justifies a paid tier.
 - **When stuck, escalate honestly** — if a series of fixes keeps hitting blockers, stop and say the path is wrong. Don't burn time on increasingly desperate workarounds.
 - **No filler reflection** — when you make a mistake, name the failure mode in one short sentence and apply the corrective behaviour next message. Don't write self-flagellating apology paragraphs.
 
+## Auditing the live app for bugs
+
+Invoke the **`crossing-audit`** skill (`.claude/skills/crossing-audit/`). It holds the
+record-first playbook, the harness that replays recorded API payloads through the real
+`shared/crossing.js`, the ground-truth/detector scripts, and `KNOWN-ISSUES.md` — a register
+to re-check at the start of every audit so regressions are caught. Read `SKILL.md` before
+starting a watch; the ordering of its first phase matters (start recording before reading code).
+
 ## Common tasks — quick reference
 
 - **Tweak timing parameters**: edit `backend/config/crossings.json` on `backend-v2` (`closeBefore` / `openAfter` / `openLagSecs` / `consecutiveWindow`) and deploy — the frontend renders the backend's closures. (`shared/crossings.json` feeds only the client-side confidence-window / debug-panel display.)
 - **Change closure logic**: backend `_computeClosures()` / `_anchorEndToClearStep()` in `backend/src/crossing-state.js` (authoritative); frontend just maps them via `buildClosuresFromVps()` in `shared/crossing.js`.
 - **Change direction detection**: it's backend-side now — `analyseRoute()` in `backend/src/schedule-parser.js` (CIF) and the LDB poller. The frontend just reads `t.direction`.
-- **Change rendering / status**: `renderClosures()`, `updateStatus()` in `shared/crossing.js`.
+- **Change rendering / status**: `renderClosures()`, `updateStatus()` in `shared/crossing.js` — but the values themselves come from `PREDICT.derive` in `shared/predict.js`, and the observer renders the same ones. Change the numbers in the core, the presentation in the app.
+- **Add a feedback field**: append it to the payload in `PREDICT.feedbackPayload` (or the app's `extra`), then append the same name to `FIELDS` in `shared/apps-script-feedback.gs` and paste that file over the spreadsheet's Apps Script. The header row and column count migrate themselves on the next post.
 - **Add a new crossing**: append entry to `shared/crossings.json`, create `<crossing-name>/index.html` mirroring `portslade/index.html`, call `initCrossing('<id>')`.
 - **Test changes**: open `portslade/index.html` directly in a browser (`open portslade/index.html` on macOS) — the VPS API URL is hard-coded (`API_BASE` in `shared/crossing.js`) so it works against live data.
 

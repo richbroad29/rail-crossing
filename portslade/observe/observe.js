@@ -69,6 +69,7 @@
     var e = PREDICT.eta(t, nowMs);
     if (!e) return p.stage === 'passed' ? 'Passed' : 'Approaching';
     if (p.stage === 'passed') return 'Passed (+' + fmtEta(e.sinceSecs) + ')';
+    if (e.overdueSecs > 600) return 'Held near the crossing';
     if (e.overdueSecs > 120) return 'Held (' + fmtEta(e.overdueSecs) + ' overdue)';
     if (p.role === 'protecting' && e.secs <= 20) return 'At the crossing';
     if (e.secs <= 5) return 'Any moment';
@@ -125,17 +126,24 @@
 
   function csvCell(v) { if (v === null || v === undefined) return ''; var s = String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }
   function toCsv(records) {
-    var cols = ['id', 'eventType', 'observed', 'isSkip', 'tCapturedDevice', 'tCorrected', 'tCorrectedISO', 'crossingId',
+    var cols = ['id', 'eventId', 'eventType', 'observed', 'isSkip', 'tCapturedDevice', 'tCorrected', 'tCorrectedISO', 'crossingId',
       'headcode', 'direction', 'stopping', 'suggestedHeadcode', 'suggestionAccepted', 'confidence', 'priorState',
-      'episodeIndex', 'episodeRole', 'durationMs', 'hasSkip', 'episodeTrains', 'snapshotCount', 'note', 'deleted', 'createdAt'];
+      'episodeIndex', 'episodeRole', 'durationMs', 'hasSkip', 'episodeTrains', 'snapshotCount', 'note',
+      // The prediction as it stood at the capture instant, and the gap to what was observed.
+      'predictedState', 'predictedCloseTime', 'predictedOpenTime', 'predictedDownForSecs', 'deltaVsPredictedSecs',
+      'sentToSheet', 'deleted', 'createdAt'];
     var lines = [cols.join(',')];
     records.forEach(function (r) {
-      lines.push([r.id, r.eventType, r.observed === false ? 'no' : 'yes', r.isSkip ? 'yes' : 'no',
+      var p = r.pred || {};
+      lines.push([r.id, r.eventId || '', r.eventType, r.observed === false ? 'no' : 'yes', r.isSkip ? 'yes' : 'no',
         r.tCapturedDevice, r.tCorrected, r.tCorrected ? new Date(r.tCorrected).toISOString() : '', r.crossingId,
         r.train ? r.train.headcode : '', r.train ? r.train.direction : '', r.train ? r.train.stopping : '',
         r.suggestedHeadcode || '', r.suggestionAccepted ? 'yes' : 'no', r.confidence || '', r.priorState || '',
         r.episodeIndex || '', r.episodeRole || '', r.durationMs != null ? r.durationMs : '', r.hasSkip ? 'yes' : 'no',
-        (r.episodeTrains || []).join(' '), (r.liveSnapshot || []).length, r.note || '', r.deleted ? 'yes' : '', r.createdAt].map(csvCell).join(','));
+        (r.episodeTrains || []).join(' '), (r.liveSnapshot || []).length, r.note || '',
+        p.predictedState || '', p.predictedCloseTime || '', p.predictedOpenTime || '',
+        p.predictedDownForSecs != null ? p.predictedDownForSecs : '', p.deltaVsPredictedSecs != null ? p.deltaVsPredictedSecs : '',
+        r.postedAt ? 'yes' : 'no', r.deleted ? 'yes' : '', r.createdAt].map(csvCell).join(','));
     });
     return lines.join('\n');
   }
@@ -244,8 +252,7 @@
     $('predAge').textContent = !predOk ? 'offline' : (age != null ? age + 's ago' : '—');
     $('predAge').className = 'pred-age' + (!predOk || (age != null && age > 90) ? ' bad' : '');
     var st = pred ? pred.status : null;
-    $('predState').textContent = st === 'CLOSED' ? 'BARRIERS DOWN' : st === 'CLOSING_SOON' ? 'CLOSING SOON'
-      : st === 'OPEN' ? 'CROSSING CLEAR' : 'no prediction';
+    $('predState').textContent = PREDICT.stateLabel(st) || 'no prediction';
     $('predState').className = 'pred-state' + (st ? ' is-' + st.toLowerCase() : '');
     var t = Date.now();
     setPredCard('predClose', 'predCloseAt', pred && pred.nextCloseTime, t);
@@ -267,7 +274,7 @@
       ? (pred.current ? (pred.current.predictedStart || pred.current.start) : pred.nextCloseTime)
       : (pred.current ? pred.current.end : (pred.upcoming ? pred.upcoming.end : null));
     return {
-      predictedState: pred.status,
+      predictedState: PREDICT.stateLabel(pred.status),
       predictedCloseTime: pred.nextCloseTime ? pred.nextCloseTime.toISOString() : '',
       predictedOpenTime: pred.nextOpenTime ? pred.nextOpenTime.toISOString() : '',
       predictedDownForSecs: pred.downForMs != null ? Math.round(pred.downForMs / 1000) : '',
@@ -279,9 +286,14 @@
   // The barrier is a 2-state machine; the one button always offers the only
   // valid next transition. barrierUp===null means we don't yet know the state
   // (fresh log) and must ask for it on arrival.
+  // The full enriched feed, frozen at the capture instant with each train's position label
+  // as it read AT THAT MOMENT. Positions keep moving afterwards; the recorded one must not,
+  // or the calibration row describes a train's position minutes after the barrier moved.
   function buildSnapshot() {
     return liveTrains.map(function (t) {
-      return { headcode: t.headcode, berth: t.berth, fromBerth: t.fromBerth, direction: t.direction, stopping: t.stopping, ageSecs: t.ageSecs };
+      var c = Object.assign({}, t);
+      c.posLabel = posLabel(t) || 'Elsewhere in the area';
+      return c;
     });
   }
   function setArrival(up) {
@@ -333,13 +345,15 @@
       // What the app was predicting at this instant, frozen with the observation. Without
       // it the timestamp says when the barrier moved but not what we got wrong.
       pred: predStamp(type, tDev + clockOffsetMs),
+      // Ties the tap-time row and the post-Save row together in the sheet.
+      eventId: (tDev + clockOffsetMs) + '-' + Math.random().toString(36).slice(2, 7),
       note: '', offsetMs: clockOffsetMs, createdAt: Date.now()
     };
     if (type === 'CLOSE') { episodeSet = {}; liveTrains.forEach(function (t) { if (t.headcode) episodeSet[t.headcode] = true; }); }
     barrierUp = (type === 'OPEN');               // optimistic flip; refreshLocal reconciles from DB
     try { localStorage.removeItem(ARRIVAL_KEY); } catch (e) { }
     renderCaptureControls();
-    dbAdd(rec).then(function (id) { rec.id = id; lastCaptureId = id; openAttr(rec); refreshLocal(); });
+    dbAdd(rec).then(function (id) { rec.id = id; lastCaptureId = id; openAttr(rec); refreshLocal(); fbSend(rec, false); });
   }
   // Skip = "a transition happened here I didn't capture": logs the expected event
   // as UNOBSERVED (time approximate, no train) and advances the state.
@@ -354,13 +368,14 @@
       train: null, suggestedHeadcode: null, suggestionAccepted: false, confidence: null,
       episodeTrains: type === 'OPEN' ? Object.keys(episodeSet) : [], liveSnapshot: buildSnapshot(),
       pred: predStamp(type, tDev + clockOffsetMs),
+      eventId: (tDev + clockOffsetMs) + '-' + Math.random().toString(36).slice(2, 7),
       note: 'missed (skipped) — time approximate', offsetMs: clockOffsetMs, createdAt: Date.now()
     };
     if (type === 'CLOSE') { episodeSet = {}; liveTrains.forEach(function (t) { if (t.headcode) episodeSet[t.headcode] = true; }); }
     barrierUp = (type === 'OPEN');
     try { localStorage.removeItem(ARRIVAL_KEY); } catch (e) { }
     renderCaptureControls();
-    dbAdd(rec).then(function (id) { rec.id = id; lastCaptureId = id; refreshLocal(); toast('Marked a missed ' + type); });
+    dbAdd(rec).then(function (id) { rec.id = id; lastCaptureId = id; refreshLocal(); fbSend(rec, true); toast('Marked a missed ' + type); });
   }
   function renderCaptureControls() {
     var arrival = $('arrivalPrompt'), main = $('capMain');
@@ -385,6 +400,71 @@
     var eb = $('btnEnd');
     eb.textContent = endArmed ? 'Tap again to end the session' : 'End session';
     eb.classList.toggle('armed', endArmed);
+  }
+
+  // ---- feedback sheet ----
+  // Observer captures go to the SAME Google Sheet tab as the public app's feedback, through
+  // the shared PREDICT.feedbackPayload, so a row means the same thing whichever app recorded
+  // it — the Source column says which. Posted twice on one eventId: once at the tap (so an
+  // abandoned attribution is still on record) and again on Save, which the Apps Script
+  // upserts onto the same row.
+  //
+  // CLOSE/OPEN map to closing/opening because that is the public app's vocabulary for the
+  // Event column, and one column should not speak two languages.
+  function fbEventFor(rec) {
+    var snap = {};
+    (rec.liveSnapshot || []).forEach(function (t) { if (t.headcode) snap[t.headcode] = t; });
+    return {
+      eventId: rec.eventId,
+      type: rec.eventType === 'CLOSE' ? 'closing' : 'opening',
+      tsISO: new Date(rec.tCorrected).toISOString(),
+      crossing: CROSSING_ID, crossingName: (CFG && CFG.name) || CROSSING_ID,
+      predictedState: (rec.pred && rec.pred.predictedState) || '',
+      snapshot: snap,
+      guess: rec.suggestedHeadcode ? (snap[rec.suggestedHeadcode] || null) : null
+    };
+  }
+  // The observer-only columns. Everything here is either unavailable to the public app
+  // (a human's confidence, a note, a missed transition) or only meaningful beside a
+  // human-observed instant (the delta against what we predicted).
+  function fbExtraFor(rec, ep) {
+    var p = rec.pred || {};
+    var m = (ep && ep[rec.id]) || {};
+    return {
+      source: 'observer',
+      observed: !rec.isSkip && rec.observed !== false,
+      confidence: rec.confidence || '',
+      note: rec.note || '',
+      episodeIndex: m.episodeIndex || '',
+      closureDurationMs: m.durationMs != null ? m.durationMs : '',
+      deviceOffsetMs: rec.offsetMs != null ? rec.offsetMs : '',
+      predictedCloseTime: p.predictedCloseTime || '',
+      predictedOpenTime: p.predictedOpenTime || '',
+      predictedDownForSecs: p.predictedDownForSecs != null ? p.predictedDownForSecs : '',
+      deltaVsPredictedSecs: p.deltaVsPredictedSecs != null ? p.deltaVsPredictedSecs : ''
+    };
+  }
+  // Fire-and-forget, exactly as the public app posts: no-cors, so the response is opaque
+  // and cannot be checked. postedAt therefore means "the request left the device", not
+  // "the sheet has it" — the local DB and the CSV export stay the record of truth, and the
+  // export note surfaces anything that never got sent.
+  function fbSend(rec, completed, ep) {
+    if (!CFG || !CFG.feedbackUrl || !rec.eventId) return;
+    var payload = PREDICT.feedbackPayload(fbEventFor(rec), completed ? (rec.train ? rec.train.headcode : null) : null,
+                                          completed, fbExtraFor(rec, ep));
+    if (!payload) return;
+    if (completed) payload.notSure = !rec.train;
+    fetch(CFG.feedbackUrl, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+      .then(function () { markPosted(rec.id); })
+      .catch(function () { });
+  }
+  function markPosted(id) {
+    if (id == null) return;
+    dbAll().then(function (all) {
+      var rec = all.filter(function (r) { return r.id === id; })[0];
+      if (!rec || rec.postedAt) return;
+      rec.postedAt = Date.now(); dbPut(rec).then(refreshLocal);
+    });
   }
 
   // ---- attribution ----
@@ -427,7 +507,11 @@
       rec.train = pending.train ? Object.assign({}, pending.train) : null;
       rec.suggestionAccepted = !!(rec.train && rec.suggestedHeadcode && rec.train.headcode === rec.suggestedHeadcode);
       rec.confidence = pending.confidence; rec.note = $('attrNote').value.trim();
-      dbPut(rec).then(function () { $('attrPanel').classList.add('hidden'); pending = null; refreshLocal(); toast('Saved'); });
+      dbPut(rec).then(function () {
+        $('attrPanel').classList.add('hidden'); pending = null; refreshLocal();
+        fbSend(rec, true, computeEpisodes(chrono(activeOf(all))));
+        toast('Saved');
+      });
     });
   }
 
@@ -502,7 +586,13 @@
     var active = activeOf(all), del = all.length - active.length;
     $('storedCount').textContent = active.length + ' stored' + (del ? (' · ' + del + ' removed') : '');
     var ne = active.filter(function (r) { return !r.exportedAt; }).length;
-    $('exportNote').textContent = ne ? (ne + ' not yet exported') : (all.length ? 'all exported' : 'nothing to export yet');
+    // A capture is stored locally whatever the network does. Say plainly when one never
+    // reached the sheet, so a session in a bad-signal spot doesn't look like it synced.
+    var ns = active.filter(function (r) { return !r.postedAt; }).length;
+    $('exportNote').textContent = [
+      ne ? (ne + ' not yet exported') : (all.length ? 'all exported' : 'nothing to export yet'),
+      ns ? (ns + ' not sent to the sheet — the export below still has them') : ''
+    ].filter(Boolean).join(' · ');
   }
   // Soft-delete: never erase — mark the record so the export keeps a full trail.
   function delObs(id) {

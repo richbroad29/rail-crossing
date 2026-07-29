@@ -563,7 +563,8 @@ function renderFbPicker(){
 // lives in shared/predict.js so an observer-recorded row means the same thing as a
 // public-app one, column for column.
 function fbBuildPayload(hc, completed){
-  return PREDICT.feedbackPayload(fbEvent, hc, completed);
+  // `source` distinguishes these rows from the observer's, which land in the same tab.
+  return PREDICT.feedbackPayload(fbEvent, hc, completed, { source:'public' });
 }
 function fbPost(payload){
   if(!payload) return;

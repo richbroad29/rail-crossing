@@ -244,6 +244,15 @@
     out.downForRange = fmtShort(from) + '–' + fmtShort(p.end);
   }
 
+  // The state in the words a user sees. Lives here because it is recorded into a single
+  // sheet column by both apps — the public app has always written these words, so the
+  // observer must write them too rather than the internal OPEN/CLOSING_SOON/CLOSED.
+  function stateLabel(status) {
+    return status === 'CLOSED' ? 'BARRIERS DOWN'
+      : status === 'CLOSING_SOON' ? 'CLOSING SOON'
+      : status === 'OPEN' ? 'CROSSING CLEAR' : '';
+  }
+
   // ---- Portslade berth chain ------------------------------------------------------
   // Derived berth chain toward/through the crossing. gap = median seconds a train
   // dwells in that berth (≈ time to the next berth). role marks the confirmed
@@ -445,7 +454,7 @@
     fmtCountdownRough: fmtCountdownRough, fmtWhen: fmtWhen, fmtSoon: fmtSoon,
     fmtDuration: fmtDuration, fmtDownFor: fmtDownFor,
     buildClosures: buildClosures, getWindowTier: getWindowTier, parseTrains: parseTrains,
-    derive: derive,
+    derive: derive, stateLabel: stateLabel,
     proximity: proximity, etaToCrossing: etaToCrossing, eta: eta,
     trainKind: trainKind, hhmm: hhmm, enrich: enrich, feedbackPayload: feedbackPayload
   };
