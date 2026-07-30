@@ -103,8 +103,9 @@ class CrossingState {
 
     // B1 live-position map: headcode → { berth, fromBerth, event, lastSeen(ms) }.
     // Updated on every TD berth step (the TD feed is area-wide for LA), pruned by
-    // TTL on read. Read-only feed for the observer app — deliberately NOT in the
-    // prediction path (recordTdBerth does not trigger _recompute).
+    // TTL on read. Serves the observer app AND — since the position-based projection
+    // shipped — feeds the prediction, so an on-chain step marks the state dirty
+    // (see recordTdBerth and _markDirty).
     this.liveTrains = new Map();
 
     // headcode → Date of first TD sighting in our area today. Trains entering
@@ -142,6 +143,40 @@ class CrossingState {
     this.closurePeriods = [];
     this.state = 'OPEN';
     this.lastStateChange = new Date();
+
+    // Set when a TD event has changed something a prediction depends on, cleared when the
+    // coalesced recompute runs. See _markDirty.
+    this._dirtyScheduled = false;
+  }
+
+  // Request a recompute, coalescing everything that arrives in the same tick into one.
+  //
+  // Why coalesce rather than recompute inline: td-listener parses each STOMP frame into an
+  // ARRAY and emits one 'sighting' per message synchronously, and each of those runs all
+  // four recorders. A recompute measured at ~13 ms against a real 234-train day, so
+  // recomputing per message would block the event loop for N x 13 ms per frame — with the
+  // HTTP API queued behind it. Coalescing makes it one recompute per frame however many
+  // messages it carried.
+  //
+  // It also fixes an ordering wrinkle: previously three recorders each recomputed
+  // independently, so recordTdClearStep's recompute ran before recordTdCloseStrike had
+  // written closeStrikeSeen — one recompute against a half-updated state, corrected by the
+  // next. Deferring to the end of the tick means every recompute sees a consistent snapshot.
+  //
+  // setImmediate, not process.nextTick: a pending API response should go out before we
+  // spend 13 ms of CPU. The try/catch matters because a throw inside a deferred callback
+  // has no caller to catch it and would take the process down.
+  _markDirty() {
+    if (this._dirtyScheduled) return;
+    this._dirtyScheduled = true;
+    setImmediate(() => {
+      this._dirtyScheduled = false;
+      try {
+        this._recompute();
+      } catch (err) {
+        console.error(`[${this.id}] deferred recompute failed:`, err && err.message);
+      }
+    });
   }
 
   // Record a TD sighting (called from td-listener for each CA/CB event we
@@ -160,7 +195,7 @@ class CrossingState {
     if (!this.tdSeenToday.has(headcode)) {
       this.tdSeenToday.set(headcode, ts);
       // Recompute so any CIF entry with this headcode picks up tdSeen=true.
-      this._recompute();
+      this._markDirty();
     }
   }
 
@@ -194,8 +229,11 @@ class CrossingState {
 
   // B1: record a TD berth step into the live-position map. Called from the same
   // 'sighting' hook as recordTdSighting, with the enriched payload that now
-  // carries the berth. Intentionally does NOT _recompute — the live map is a
-  // separate read-only feed and must not touch predictions.
+  // carries the berth.
+  //
+  // This used to say the live map "must not touch predictions", which stopped being true on
+  // 2026-07-26 when the projection started reading it. It now marks the state dirty for an
+  // on-chain step — see the note at the bottom of this method.
   recordTdBerth(evt) {
     if (!evt || !evt.headcode) return;
     const ms = evt.ts ? new Date(evt.ts).getTime() : Date.now();
@@ -217,6 +255,21 @@ class CrossingState {
       lastSeen: ms,
       history
     });
+    // Register #13. The projection is computed FROM this map (_strikeOrProjection ->
+    // _chainIndex -> liveTrains), so a step that moves a train along its approach chain has
+    // just made a sharper estimate available. Without this the new position waited for the
+    // next LDB poll — up to 30 s — and the countdown lurched instead of tightening.
+    //
+    // Gated on the berth being on a configured approach chain: _chainIndex returns null for
+    // anything else, so an off-chain step cannot change a prediction and recomputing for it
+    // would be pure cost. Measured on 2026-07-29 that gate is the difference between 7,672
+    // and 1,234 recompute requests a day.
+    //
+    // A step from a chain berth to an off-chain berth that is not the clear step
+    // deliberately does NOT mark dirty: the projection then keeps the last known chain
+    // position, which beats falling back to a timetable estimate, and the next LDB poll
+    // reconciles it anyway.
+    if (berth && this._matchCloseStrikeBerth(berth)) this._markDirty();
   }
 
   // TD-triggered open: record a train performing the crossing CLEAR step. Only the
@@ -231,7 +284,7 @@ class CrossingState {
     if (!Number.isFinite(ms)) return;
     this.clearStepSeen.set(evt.headcode, { ts: ms, direction });
     this._pruneClearSteps(ms);
-    this._recompute();
+    this._markDirty();
   }
 
   // Which direction's crossing clear step (from→to) is, or null if it isn't one.
@@ -273,7 +326,7 @@ class CrossingState {
     this.closeStrikeSeen.set(this._strikeKey(evt.headcode, evt.to),
       { ts: ms, direction: dir, headcode: evt.headcode, berth: evt.to });
     this._pruneCloseStrikes(ms);
-    if (this._isAnchorBerth(dir, evt.to)) this._recompute();
+    if (this._isAnchorBerth(dir, evt.to)) this._markDirty();
   }
 
   _strikeKey(headcode, berth) { return `${headcode}|${berth}`; }

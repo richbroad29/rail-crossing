@@ -1094,6 +1094,68 @@ console.log('  -- restart: seeded sightings --');
   check('seeding is idempotent', seeded.seedSightings([{ headcode: '1H90', ts: new Date(T).toISOString() }]), 0);
 }
 
-console.log();
-if (fail > 0) { console.error(`${fail} FAILED, ${pass} passed`); process.exit(1); }
-else { console.log(`All ${pass} tests passed.`); }
+// ---- Register #13: a berth step on the approach chain refreshes the prediction ---------
+// The projection is computed FROM liveTrains, so a step along the chain has just made a
+// sharper estimate available. Before this, the new position waited for the next LDB poll.
+// Recomputes are coalesced to one per tick, so each case awaits a macrotask.
+console.log('  -- #13 recompute on berth steps (coalesced) --');
+{
+  const tick = () => new Promise(r => setImmediate(r));
+  // Count recomputes without changing behaviour.
+  function spy(state) {
+    const real = state._recompute.bind(state);
+    state._recomputes = 0;
+    state._recompute = () => { state._recomputes++; return real(); };
+    return state;
+  }
+
+  (async () => {
+    // 1. on-chain step marks dirty, and exactly once per tick
+    const a = spy(new CrossingState('t', classCfg));
+    a.recordTdBerth({ headcode: '1A01', to: '0008', from: '0010', ts: iso(BASE), event: 'CA' });
+    check('on-chain step does not recompute synchronously', a._recomputes, 0);
+    await tick();
+    check('on-chain step recomputes after one tick', a._recomputes, 1);
+
+    // 2. off-chain step must not recompute — _chainIndex cannot use it
+    const b = spy(new CrossingState('t', classCfg));
+    b.recordTdBerth({ headcode: '9Z99', to: '9999', from: '9998', ts: iso(BASE), event: 'CA' });
+    await tick();
+    check('off-chain step does not recompute', b._recomputes, 0);
+    checkTruthy('off-chain step still lands in the live map', b.liveTrains.has('9Z99'));
+
+    // 3. a whole STOMP frame's worth of synchronous events collapses into ONE recompute.
+    //    This is the property that makes a 13 ms recompute affordable on the TD hot path.
+    const c = spy(new CrossingState('t', classCfg));
+    for (let i = 0; i < 10; i++) {
+      c.recordTdSighting(`1A0${i}`, new Date(BASE));
+      c.recordTdBerth({ headcode: `1A0${i}`, to: '0008', from: '0010', ts: iso(BASE), event: 'CA' });
+      c.recordTdCloseStrike({ headcode: `1A0${i}`, to: '0006', from: '0008', ts: iso(BASE) });
+    }
+    check('30 synchronous recorder calls in one tick => 1 recompute', c._recomputes, 0);
+    await tick();
+    check('…and exactly 1 after the tick', c._recomputes, 1);
+
+    // 4. The user-facing symptom, end to end: a berth step must reach closurePeriods with
+    //    no LDB poll. projCfg has a measured 0010>0008 transit of 157s and the east stopping
+    //    class closes at 0008+40s, so a train seen at 0010 NOW should predict a close at
+    //    now+197s. Without the fix closurePeriods would still hold the bestTime fallback
+    //    (bestTime − predictedLeadSecs 180 = now+220s), which is what makes the two
+    //    distinguishable — this asserts the projection actually got through, not just that
+    //    a number changed.
+    const d = new CrossingState('t', projCfg);
+    const stepAt = Date.now();
+    d.ldbTrains = [eastT({ hc: '1H67', bestMs: stepAt + 400000 })];
+    d.recordTdBerth({ headcode: '1H67', to: '0010', from: '0012', ts: new Date(stepAt).toISOString() });
+    await tick();
+    const got = d.closurePeriods[0] && Math.round((Date.parse(d.closurePeriods[0].predictedStart) - stepAt) / 1000);
+    checkTruthy('a berth step alone produces a closure period', !!d.closurePeriods[0]);
+    checkTruthy(`berth step reaches the prediction without an LDB poll (projected +197s, got +${got}s)`,
+      got !== null && Math.abs(got - 197) <= 2);
+    checkTruthy('…and it is the projection, not the bestTime fallback (+220s)', got !== null && Math.abs(got - 220) > 2);
+
+    console.log();
+    if (fail > 0) { console.error(`${fail} FAILED, ${pass} passed`); process.exit(1); }
+    else { console.log(`All ${pass} tests passed.`); }
+  })();
+}
