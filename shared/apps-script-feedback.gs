@@ -16,9 +16,15 @@ function doPost(e) {
   var lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
-    var sheet = ss.getSheetByName('Feedback v2') || ss.insertSheet('Feedback v2');
     var data = JSON.parse(e.postData.contents);
+    // A post with test:true goes to a scratch tab, never to the real one — so the write
+    // path, the header migration and the eventId upsert can all be exercised end to end
+    // without a test row landing in the calibration data. Duplicate "Feedback v2" to
+    // "Feedback v2 TEST" first if you want the migration tested against the real starting
+    // layout rather than an empty tab. Set by ?test=1 on the observer app.
+    var TAB = (data.test === true) ? 'Feedback v2 TEST' : 'Feedback v2';
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName(TAB) || ss.insertSheet(TAB);
 
     var FIELDS = [
       'eventId', 'completed', 'receivedAt',
@@ -51,7 +57,11 @@ function doPost(e) {
       // What the app was PREDICTING at the instant of the observation, and the gap between
       // prediction and reality. deltaVsPredictedSecs is positive when the barrier moved
       // LATER than predicted. This is the calibration measurement.
-      'predictedCloseTime', 'predictedOpenTime', 'predictedDownForSecs', 'deltaVsPredictedSecs'
+      'predictedCloseTime', 'predictedOpenTime', 'predictedDownForSecs', 'deltaVsPredictedSecs',
+      // true only for rows written by the observer's ?test=1 mode. Those land in the
+      // "Feedback v2 TEST" tab, so this column should read blank/false on every row of the
+      // real tab — if it ever reads true there, the routing above has broken.
+      'test'
     ];
 
     // --- self-migration, so adding a field above needs no manual sheet edit ---

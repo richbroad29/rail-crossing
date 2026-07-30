@@ -42,6 +42,14 @@
   // Berth chain + index, from the shared core. See shared/predict.js for the derivation.
   var CHAIN = PREDICT.CHAIN, CHAININ = PREDICT.CHAININ;
 
+  // TEST MODE (?test=1) — for proving the sheet link works without writing a test row into
+  // the calibration data. Captures still travel the whole real path (IndexedDB → attribute
+  // → save → POST), but they carry test:true, which routes the row to a scratch tab in the
+  // spreadsheet, and they are excluded from the tally here. Loud on screen on purpose: a
+  // field session accidentally left in test mode would quietly produce unusable data, which
+  // is a worse outcome than any bug this mode is meant to catch.
+  var TEST_MODE = /(?:^|[?&])test=1(?:&|$)/.test(location.search);
+
   // Off-chain berths that nonetheless lead to the crossing, with the median
   // observed seconds-to-crossing (derived from TD timestamps). Used only to order
   // "Other trains in the area" by proximity — trains far out on the Portslade line
@@ -109,6 +117,7 @@
   }
 
   function categoryOf(rec) {
+    if (rec.test) return null;                  // test-mode capture: not a real observation
     if (rec.isSkip || rec.eventType !== 'CLOSE') return null;
     if (!rec.train) return 'other';
     if (rec.episodeTrains && rec.episodeTrains.length > 1) return 'consec';
@@ -131,7 +140,7 @@
       'episodeIndex', 'episodeRole', 'durationMs', 'hasSkip', 'episodeTrains', 'snapshotCount', 'note',
       // The prediction as it stood at the capture instant, and the gap to what was observed.
       'predictedState', 'predictedCloseTime', 'predictedOpenTime', 'predictedDownForSecs', 'deltaVsPredictedSecs',
-      'sentToSheet', 'deleted', 'createdAt'];
+      'sentToSheet', 'test', 'deleted', 'createdAt'];
     var lines = [cols.join(',')];
     records.forEach(function (r) {
       var p = r.pred || {};
@@ -143,7 +152,7 @@
         (r.episodeTrains || []).join(' '), (r.liveSnapshot || []).length, r.note || '',
         p.predictedState || '', p.predictedCloseTime || '', p.predictedOpenTime || '',
         p.predictedDownForSecs != null ? p.predictedDownForSecs : '', p.deltaVsPredictedSecs != null ? p.deltaVsPredictedSecs : '',
-        r.postedAt ? 'yes' : 'no', r.deleted ? 'yes' : '', r.createdAt].map(csvCell).join(','));
+        r.postedAt ? 'yes' : 'no', r.test ? 'yes' : '', r.deleted ? 'yes' : '', r.createdAt].map(csvCell).join(','));
     });
     return lines.join('\n');
   }
@@ -347,6 +356,7 @@
       pred: predStamp(type, tDev + clockOffsetMs),
       // Ties the tap-time row and the post-Save row together in the sheet.
       eventId: (tDev + clockOffsetMs) + '-' + Math.random().toString(36).slice(2, 7),
+      test: TEST_MODE || undefined,
       note: '', offsetMs: clockOffsetMs, createdAt: Date.now()
     };
     if (type === 'CLOSE') { episodeSet = {}; liveTrains.forEach(function (t) { if (t.headcode) episodeSet[t.headcode] = true; }); }
@@ -369,6 +379,7 @@
       episodeTrains: type === 'OPEN' ? Object.keys(episodeSet) : [], liveSnapshot: buildSnapshot(),
       pred: predStamp(type, tDev + clockOffsetMs),
       eventId: (tDev + clockOffsetMs) + '-' + Math.random().toString(36).slice(2, 7),
+      test: TEST_MODE || undefined,
       note: 'missed (skipped) — time approximate', offsetMs: clockOffsetMs, createdAt: Date.now()
     };
     if (type === 'CLOSE') { episodeSet = {}; liveTrains.forEach(function (t) { if (t.headcode) episodeSet[t.headcode] = true; }); }
@@ -432,6 +443,7 @@
     var m = (ep && ep[rec.id]) || {};
     return {
       source: 'observer',
+      test: !!rec.test,
       observed: !rec.isSkip && rec.observed !== false,
       confidence: rec.confidence || '',
       note: rec.note || '',
@@ -568,7 +580,7 @@
       var m = ep[r.id] || {};
       var who = r.isSkip ? 'missed — not observed' : (r.train ? (r.train.headcode + ' ' + dirArrow(r.train.direction)) : (r.note ? 'note' : 'unknown'));
       var dur = (m.role === 'open' && m.durationMs != null) ? ' · closed ' + fmtDur(m.durationMs) : '';
-      var div = el('div', 'rec' + (r.isSkip ? ' rec-skip' : ''), '<span class="tag ' + (r.eventType === 'CLOSE' ? 'tag-close' : 'tag-open') + '">' + (r.isSkip ? 'SKIP' : r.eventType) + '</span><span class="rt">' + (r.isSkip ? '~' : '') + hms(r.tCorrected) + '</span><span class="rmeta">' + who + (r.confidence ? ' · ' + r.confidence : '') + dur + '</span><span class="ractions"></span>');
+      var div = el('div', 'rec' + (r.isSkip ? ' rec-skip' : '') + (r.test ? ' rec-test' : ''), '<span class="tag ' + (r.test ? 'tag-test' : r.eventType === 'CLOSE' ? 'tag-close' : 'tag-open') + '">' + (r.test ? 'TEST' : r.isSkip ? 'SKIP' : r.eventType) + '</span><span class="rt">' + (r.isSkip ? '~' : '') + hms(r.tCorrected) + '</span><span class="rmeta">' + who + (r.confidence ? ' · ' + r.confidence : '') + dur + '</span><span class="ractions"></span>');
       var act = div.querySelector('.ractions');
       if (!r.isSkip) { var e = el('button', null, 'Edit'); e.onclick = function () { openAttr(r); }; act.appendChild(e); }
       var d = el('button', null, 'Del'); d.onclick = function () { delObs(r.id); }; act.appendChild(d);
@@ -698,6 +710,10 @@
     $('exportJson').onclick = function () { exportAs('json'); };
     var cb = document.querySelectorAll('.conf-btn');
     for (var i = 0; i < cb.length; i++) cb[i].onclick = (function (b) { return function () { if (pending) { pending.confidence = b.dataset.conf; renderConf(); } }; })(cb[i]);
+    if (TEST_MODE) {
+      var b = el('div', 'test-banner', 'TEST MODE — captures go to the scratch tab and are excluded from the tally. Reload without ?test=1 for a real session.');
+      document.querySelector('.wrap').insertBefore(b, document.querySelector('.wrap').firstChild);
+    }
     renderClock(); setInterval(renderClock, 250);
     renderStatus(); setInterval(renderStatus, 1000);
     openDb().then(function () { refreshLocal(); }).catch(function (e) { toast('Storage error: ' + e.message); });

@@ -147,3 +147,9 @@ body{background:#0F172A;color:#E2E8F0;font-family:-apple-system,BlinkMacSystemFo
 .mono{font-variant-numeric:tabular-nums;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;color:#94A3B8}
 
 .toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:#334155;color:#fff;padding:10px 16px;border-radius:10px;font-size:13px;z-index:50;box-shadow:0 4px 16px rgba(0,0,0,.4)}
+
+/* Test mode (?test=1) — deliberately loud. A field session accidentally left in test mode
+   produces unusable data, which is worse than the bugs this mode exists to catch. */
+.test-banner{background:#7C2D12;border:1px solid #EA580C;color:#FED7AA;border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:11px;font-weight:600;text-align:center;line-height:1.4}
+.rec.rec-test{opacity:.75}
+.tag-test{background:#7C2D12;color:#FED7AA}
