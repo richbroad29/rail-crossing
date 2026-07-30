@@ -72,6 +72,9 @@ function analyseRoute(locations, crossingConfig) {
   // and the in-memory schedule persists across the crossing.)
   let prevTime = null;
   let offset = 0;
+  // Every call that lands on one side or the other, in route order. Only read on the
+  // ambiguous path below, to describe WHY a schedule was dropped.
+  const marks = [];
 
   for (const loc of locations) {
     const tip = loc.tiploc_code;
@@ -84,14 +87,17 @@ function analyseRoute(locations, crossingConfig) {
     const time = raw + offset;
     prevTime = time;
 
-    if (westSet.has(tip)) {
+    const isWest = westSet.has(tip);
+    const isEast = eastSet.has(tip);
+    if (isWest) {
       if (!firstWest) firstWest = { tiploc: tip, time };
       lastWest = { tiploc: tip, time };
     }
-    if (eastSet.has(tip)) {
+    if (isEast) {
       if (!firstEast) firstEast = { tiploc: tip, time };
       lastEast = { tiploc: tip, time };
     }
+    if (isWest || isEast) marks.push({ side: isWest ? 'W' : 'E', tiploc: tip, time });
   }
 
   // Train must have calls on BOTH sides of the crossing
@@ -116,8 +122,37 @@ function analyseRoute(locations, crossingConfig) {
     };
   }
 
-  // Ambiguous — might be a reversing service
-  return { traverses: false };
+  // Ambiguous — west and east calls interleave, so this is a reversing service or a
+  // multiple traversal, and we cannot express it: the pipeline downstream assumes one
+  // crossing per train per day (UID-keyed schedule map, headcode-keyed sighting and
+  // strike maps). So it is still DROPPED, exactly as before — `traverses:false`.
+  //
+  // What is new is that the drop is no longer silent. `transitions` describes each
+  // west<->east change of side, and `bracketPair` says whether that change is the
+  // configured interpolation pair (the two timing points that actually bracket the
+  // crossing). That flag is the discriminator any real fix needs, because interleaving
+  // does NOT imply traversal: measured on the 2026-07-30 extract, 4 schedules land here
+  // and only 3 are genuine double traversals (SHRHMBS<->HOVE, 7-11.5 min apart). The
+  // fourth, 1Q76, touches Arundel Jn and Preston Park 81 and 228 min apart via the Arun
+  // valley and never comes near Portslade — treating it as a traversal would invent two
+  // closures a week. All 4 are Q-flagged departmental paths, and none was sighted by TD
+  // in 83 days, which is why this stays a log line rather than a feature.
+  const interp = crossingConfig.interpolation || {};
+  const transitions = [];
+  for (let i = 1; i < marks.length; i++) {
+    if (marks[i].side === marks[i - 1].side) continue;
+    const from = marks[i - 1], to = marks[i];
+    const direction = from.side === 'W' ? 'east' : 'west';
+    const pair = interp[direction === 'east' ? 'eastbound' : 'westbound'] || {};
+    transitions.push({
+      direction,
+      from: from.tiploc,
+      to: to.tiploc,
+      gapMins: Math.round((to.time - from.time) * 10) / 10,
+      bracketPair: from.tiploc === pair.from && to.tiploc === pair.to
+    });
+  }
+  return { traverses: false, ambiguous: true, transitions };
 }
 
 // Estimate crossing time by interpolation between two timing points
@@ -197,12 +232,22 @@ function callsAt(locations, tiploc) {
 }
 
 // Build the per-crossing train entry for a record that traverses, or null.
-function buildCrossingEntry(fields, locations, crossingCfg) {
+function buildCrossingEntry(fields, locations, crossingCfg, ambiguousOut) {
   const schedCfg = crossingCfg.schedule;
   if (!schedCfg) return null;
 
   const route = analyseRoute(locations, schedCfg);
-  if (!route.traverses) return null;
+  if (!route.traverses) {
+    // Still dropped — this only records WHY, for the parse summary.
+    if (route.ambiguous && Array.isArray(ambiguousOut)) {
+      ambiguousOut.push({
+        headcode: fields.headcode || '----', uid: fields.uid,
+        runsAsRequired: !!fields.runsAsRequired, daysPattern: fields.daysPattern,
+        transitions: route.transitions || []
+      });
+    }
+    return null;
+  }
 
   const estMins = estimateCrossingTime(
     route.nearWest, route.nearEast, route.direction, schedCfg.interpolation
@@ -304,6 +349,10 @@ async function parseScheduleFile(filePath, crossingsConfig) {
   // they are visible rather than silently dropped, per the catch-every-closure
   // posture (if this assumption ever breaks, the counts make it obvious).
   const skipped = { tiInsert: 0, taAmend: 0, tiplocOther: 0, crLocations: 0, crOnTraversing: 0 };
+  // Schedules dropped by analyseRoute's ambiguous branch — interleaved west/east calls we
+  // cannot express as a single traversal. Collected so the drop is visible in the log
+  // instead of silent; see the comment at that branch for why they stay dropped.
+  const ambiguous = [];
 
   const lineCount = await streamScheduleRecords(filePath, (sched, obj) => {
     if (!sched) {
@@ -341,7 +390,7 @@ async function parseScheduleFile(filePath, crossingsConfig) {
     // Check each crossing
     let traversed = false;
     for (const [crossingId, crossingCfg] of Object.entries(crossingsConfig)) {
-      const entry = buildCrossingEntry(fields, locations, crossingCfg);
+      const entry = buildCrossingEntry(fields, locations, crossingCfg, ambiguous);
       if (!entry) continue;
       traversed = true;
       mergeByStp(schedulesByUid, `${crossingId}|${fields.uid}`, entry);
@@ -377,7 +426,22 @@ async function parseScheduleFile(filePath, crossingsConfig) {
     `CR-en-route locations=${skipped.crLocations} (on traversing trains=${skipped.crOnTraversing})`
   );
 
-  lastParseStats = { ...skipped, lineCount, scheduleCount };
+  // One line per parse. `bracket` counts side-changes that ARE the configured
+  // interpolation pair, i.e. the ones that plausibly cross; a schedule with 0 of those is
+  // almost certainly on another route and would be a phantom if it were ever re-added.
+  if (ambiguous.length) {
+    const detail = ambiguous.map(a => {
+      const b = a.transitions.filter(t => t.bracketPair).length;
+      return `${a.headcode}(${a.transitions.length} transition(s), ${b} bracket-pair` +
+             `${a.runsAsRequired ? ', Q' : ''})`;
+    }).join(', ');
+    console.log(
+      `Schedule: dropped ${ambiguous.length} ambiguous multi-traversal/reversing ` +
+      `schedule(s) — ${detail}. Register #1: still dropped by design; revisit only if TD ` +
+      `sights one of these headcodes.`
+    );
+  }
+  lastParseStats = { ...skipped, lineCount, scheduleCount, ambiguousDropped: ambiguous.length, ambiguous };
   return results;
 }
 
