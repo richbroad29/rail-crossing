@@ -58,6 +58,22 @@ function doPost(e) {
       // prediction and reality. deltaVsPredictedSecs is positive when the barrier moved
       // LATER than predicted. This is the calibration measurement.
       'predictedCloseTime', 'predictedOpenTime', 'predictedDownForSecs', 'deltaVsPredictedSecs',
+      // --- appended 2026-07-31 ---
+      // The class the PREDICTION used, and the flags that decide it, for both the app's guess
+      // and the train actually selected. Without these, calibration has to re-derive the class
+      // from protecting-berth dwell, which only works after the train has crossed — so it is
+      // unavailable at the moment of a close, which is when the prediction needs it.
+      //
+      // *Class is one of: stoppingLocal (calls the crossing station AND the station inside the
+      // approach berth) / stopping (crossing station only) / fast (neither) / ecs / freight.
+      // NOTE it can legitimately disagree with ourGuessType/selectedType — those are the app's
+      // own guess from the headcode's first character, this is the backend's real answer.
+      //
+      // *Stopping/CallsAt* are tri-state: TRUE / FALSE / blank, where blank means unknowable.
+      // Blank is NOT false — "we don't know" and "it doesn't call" select different anchors, so
+      // filter on TRUE/FALSE explicitly rather than on truthiness.
+      'ourGuessStopping', 'ourGuessClass', 'ourGuessCallsAtStation', 'ourGuessCallsAtApproach',
+      'selectedStopping', 'selectedClass', 'selectedCallsAtStation', 'selectedCallsAtApproach',
       // true only for rows written by the observer's ?test=1 mode. Those land in the
       // "Feedback v2 TEST" tab, so this column should read blank/false on every row of the
       // real tab — if it ever reads true there, the routing above has broken.

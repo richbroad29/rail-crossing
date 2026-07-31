@@ -390,6 +390,14 @@
       origin: lt.origin || null, destination: lt.destination || null,
       stopping: lt.stopping, fromBerth: lt.fromBerth || null, event: lt.event || null,
       lastSeen: lt.lastSeen || null,
+      // The class the BACKEND's prediction used, and the two flags that decide it. Recorded
+      // with every barrier observation so calibration groups trains exactly the way the
+      // predictor groups them. `type` above is this app's own guess from the headcode's first
+      // character; trainClass is the real thing and the two can legitimately disagree.
+      // Tri-state is preserved: null means unknowable, which is not the same as false.
+      trainClass: lt.trainClass || null,
+      callsAtStation: lt.callsAtStation === undefined ? null : lt.callsAtStation,
+      callsAtApproach: lt.callsAtApproach === undefined ? null : lt.callsAtApproach,
       prox: prox,
       // When this train stepped into its current berth, on the DEVICE clock: the feed's
       // ageSecs is server-computed, so subtracting it from local "now" at the moment the
@@ -422,6 +430,13 @@
   // the recorder-specific columns (source, confidence, note, prediction snapshot…).
   // eventId ties the button-tap post and the final submission to one row, so a later
   // selection updates the row already written at the tap.
+  // A tri-state flag as a sheet cell. true/false survive as booleans; null, undefined and
+  // the feed's literal "unknown" all become blank. Writing false for "we don't know" would
+  // silently merge two different states that select different close anchors.
+  function tri(v) {
+    if (v === true || v === false) return v;
+    return '';
+  }
   function feedbackPayload(evt, hc, completed, extra) {
     if (!evt) return null;
     var sel = hc ? evt.snapshot[hc] : null;
@@ -435,12 +450,16 @@
       ourGuessSchedArr: g?g.schedArr:'', ourGuessSchedDep: g?g.schedDep:'', ourGuessLiveArr: g?g.liveArrReal:'', ourGuessLiveDep: g?g.liveDepReal:'',
       ourGuessPosition: g?g.posLabel:'', ourGuessBerth: g?g.berth:'',
       ourGuessBerthHistory: g?JSON.stringify(g.strikes||[]):'',
+      ourGuessStopping: tri(g && g.stopping), ourGuessClass: (g && g.trainClass) || '',
+      ourGuessCallsAtStation: tri(g && g.callsAtStation), ourGuessCallsAtApproach: tri(g && g.callsAtApproach),
       submittedAt: new Date().toISOString(),
       selectedHeadcode: sel?sel.headcode:'', selectedRoute: sel?sel.route:'', selectedDirection: sel?sel.direction:'',
       selectedType: sel?sel.type:'',
       selectedSchedArr: sel?sel.schedArr:'', selectedSchedDep: sel?sel.schedDep:'', selectedLiveArr: sel?sel.liveArrReal:'', selectedLiveDep: sel?sel.liveDepReal:'',
       selectedPosition: sel?sel.posLabel:'', selectedBerth: sel?sel.berth:'',
       selectedBerthHistory: sel?JSON.stringify(sel.strikes||[]):'',
+      selectedStopping: tri(sel && sel.stopping), selectedClass: (sel && sel.trainClass) || '',
+      selectedCallsAtStation: tri(sel && sel.callsAtStation), selectedCallsAtApproach: tri(sel && sel.callsAtApproach),
       wasOurGuess: !!(sel && g && sel.headcode===g.headcode), notSure: !!(completed && !hc)
     };
     if (extra) { for (var k in extra) { if (Object.prototype.hasOwnProperty.call(extra, k)) out[k] = extra[k]; } }
