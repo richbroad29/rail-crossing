@@ -96,8 +96,6 @@ The frontend polls `GET /crossing/portslade` and renders the backend's **pre-com
 
 **TLS** is auto-provisioned by Caddy via Let's Encrypt (HTTP-01 challenge). The DuckDNS subdomain (`railcrossing.duckdns.org`) is kept alive by a cron on the VPS that hits the DuckDNS update endpoint every 5 minutes. The DuckDNS token lives in that crontab.
 
-**Cloudflare Worker** — retired (2026-07). The old `rail-crossing-api.richardbroad29.workers.dev` SOAP proxy has been removed from the repo and torn down; the frontend calls the VPS backend directly.
-
 **Prediction-pipeline status:**
 
 *LDBSVWS* — active. Near-term passenger services (up to ~2h ahead) with real-time estimates. Source label `"ldbsv"`.
@@ -132,6 +130,27 @@ A separate installable PWA (`portslade/observe/`, live at https://railcrossing.u
 - Polls the backend's **B1 live endpoint** `GET /crossing/:id/live` (~2.5s) for trains currently in TD area LA. The endpoint feeds the observer the per-train `{ headcode, berth, fromBerth, event, direction, stopping, origin, destination, lastSeen, ageSecs }` plus `serverTime` (for device clock-offset). B1 lives in `backend-v2`: `td-listener` emits the berth, `crossing-state.recordTdBerth`/`getLiveTrains` keep a TTL-pruned `liveTrains` map (config `live.ttlSecs`), `api.js` serves it. Direction is from a headcode→LDB/CIF join (`"unknown"` if no match); `stopping` is `true` only if on the PLD board, else `"unknown"` (never `false`).
 - Captures **two events only** — CLOSE (red lights start) / OPEN (booms fully up) — each attributed to a **single** train: CLOSE → nearest *approaching* train, OPEN → *just-cleared* train. Attribution leans on direction + the **confirmed Portslade approach berths only** (`berths.east/west` in `shared/crossings.json`), never raw berth proximity across all of LA (that mapping is the later berth-chain analysis).
 - Offline-first: timestamp captured synchronously at tap, IndexedDB storage, CSV/JSON export. No server-sync endpoint in v1 (add a token-protected `POST /observations` later only if per-session export becomes a chore).
+
+### Service worker: shell **code** is network-first (2026-07-31) — don't "optimise" it back
+
+`sw.js` serves `.html/.js/.json/.css/.webmanifest` **network-first with a 2 s timeout**, cache as
+fallback; icons stay cache-first. It was cache-first for everything until a capture recorded its
+new columns **blank** while the deployed `predict.js` was correct — the page had executed the
+*previous* copy and only refreshed the cache afterwards. Harmless for styling; not harmless for
+this app, whose output is a calibration dataset: a stale launch records observations against
+superseded logic and the rows look normal in the sheet. Bumping `CACHE` does **not** fix it —
+the new worker installs *during* the stale load.
+
+The timeout is a `Promise.race`, not just a `catch`, because a connected-but-no-route link hangs
+rather than rejecting. A lost race does **not** abandon the request (`waitUntil`), so a
+permanently-slow link still converges instead of serving the same stale copy forever.
+
+**Verify a frontend deploy by reading the RUNNING code, never the file.** `curl` bypasses the
+service worker entirely and will happily confirm a change that the app isn't executing — that is
+how the above was missed. Use `.claude/skills/crossing-audit/scripts/stale-check.js` (prints a
+snippet to paste in the page console), and
+`node .claude/skills/crossing-audit/scripts/sw-test.js` for the worker's own logic, including
+the offline and hanging-link paths that a browser load can't exercise.
 
 ## Non-obvious technical patterns — read before changing logic
 
