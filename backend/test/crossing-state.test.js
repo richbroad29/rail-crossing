@@ -1094,6 +1094,55 @@ console.log('  -- restart: seeded sightings --');
   check('seeding is idempotent', seeded.seedSightings([{ headcode: '1H90', ts: new Date(T).toISOString() }]), 0);
 }
 
+// ---- _classOf: one definition of the class discriminator -------------------------------
+// It used to be inlined in _transit while _closeAnchor called _eastClass — two copies that
+// could drift. These assert they agree, and that the live feed reports the same label the
+// prediction used (the whole point of surfacing it for calibration).
+console.log('  -- _classOf single source of truth --');
+{
+  const st = new CrossingState('t', classCfg);
+  const mk = (o) => ({ direction: o.dir, headcode: o.hc, trainType: o.type || 'passenger',
+                       callsAtStation: o.station, callsAtApproach: o.approach,
+                       source: o.source, bestTime: new Date(BASE + 300000) });
+
+  check('east, calls Portslade + Southwick => stoppingLocal', st._classOf(mk({dir:'east',hc:'1N01',station:true,approach:true})), 'stoppingLocal');
+  check('east, calls Portslade not Southwick => stopping',    st._classOf(mk({dir:'east',hc:'1H01',station:true,approach:false})), 'stopping');
+  check('east, calls neither => fast',                        st._classOf(mk({dir:'east',hc:'1A01',station:false,approach:false})), 'fast');
+  check('east freight => freight',                            st._classOf(mk({dir:'east',hc:'6V01',type:'freight'})), 'freight');
+  check('east ecs => ecs',                                    st._classOf(mk({dir:'east',hc:'5E01',type:'ecs'})), 'ecs');
+  check('west, calls Portslade => stopping',                  st._classOf(mk({dir:'west',hc:'1N02',station:true})), 'stopping');
+  check('west, does not call => fast',                        st._classOf(mk({dir:'west',hc:'1A02',station:false})), 'fast');
+  check('west freight => freight',                            st._classOf(mk({dir:'west',hc:'6V02',type:'freight'})), 'freight');
+  // An unknown Southwick answer must fall to stoppingLocal — the one east anchor with field
+  // calibration behind it — not to a bare 'stopping'.
+  check('east, Southwick unknown => stoppingLocal (calibrated anchor)', st._classOf(mk({dir:'east',hc:'1H03',station:true,approach:null})), 'stoppingLocal');
+
+  // _closeAnchor must resolve via the SAME label, so a class change moves the anchor with it.
+  const anchorFor = (t) => { const a = st._closeAnchor(t); return a ? a.berth + '+' + a.offsetSecs : null; };
+  check('_closeAnchor agrees with _classOf (stoppingLocal -> 0006+100)', anchorFor(mk({dir:'east',hc:'1N01',station:true,approach:true})), '0006+100');
+  check('_closeAnchor agrees with _classOf (stopping -> 0008+40)',       anchorFor(mk({dir:'east',hc:'1H01',station:true,approach:false})), '0008+40');
+  check('_closeAnchor agrees with _classOf (fast -> 0008+20)',           anchorFor(mk({dir:'east',hc:'1A01',station:false,approach:false})), '0008+20');
+  // West has no `classes` block, so per-class anchors stay off — switching the lookup to
+  // _classOf must not have turned them on.
+  check('west still has no per-class anchor (config has no west.classes)', anchorFor(mk({dir:'west',hc:'1N02',station:true})), null);
+
+  // The live feed must report the same label, so an observation is filed under the class the
+  // prediction actually used.
+  const live = new CrossingState('t', classCfg);
+  live.ldbTrains = [mk({dir:'east',hc:'1H01',station:true,approach:false,source:'ldb'})];
+  live.recordTdBerth({ headcode:'1H01', to:'0008', from:'0010', ts: iso(BASE), event:'CA' });
+  const row = live.getLiveTrains(BASE + 1000).find(x => x.headcode === '1H01');
+  checkTruthy('live feed exposes a row for the train', !!row);
+  check('live trainClass matches _classOf', row ? row.trainClass : null, st._classOf(mk({dir:'east',hc:'1H01',station:true,approach:false,source:'ldb'})));
+  check('live callsAtStation passed through', row ? row.callsAtStation : 'missing', true);
+  check('live callsAtApproach passed through', row ? row.callsAtApproach : 'missing', false);
+  // Unknown direction must yield null, never a guessed class.
+  const unk = new CrossingState('t', classCfg);
+  unk.recordTdBerth({ headcode:'9Z99', to:'0008', from:'0010', ts: iso(BASE), event:'CA' });
+  const urow = unk.getLiveTrains(BASE + 1000).find(x => x.headcode === '9Z99');
+  check('unmatched train => trainClass null', urow ? urow.trainClass : 'missing', null);
+}
+
 // ---- Register #13: a berth step on the approach chain refreshes the prediction ---------
 // The projection is computed FROM liveTrains, so a step along the chain has just made a
 // sharper estimate available. Before this, the new position waited for the next LDB poll.

@@ -459,6 +459,18 @@ class CrossingState {
         schedDep: this._lastKnownField(headcode, match, 'schedDep'),
         liveArr: this._lastKnownField(headcode, match, 'liveArr'),
         liveDep: this._lastKnownField(headcode, match, 'liveDep'),
+        // The class the PREDICTION used, plus the two flags that decide it. Surfaced so a
+        // barrier observation is recorded against the predictor's own discriminator instead
+        // of one reconstructed afterwards — an analyst can otherwise only infer "does it stop
+        // at the crossing" from protecting-berth dwell, which needs the train to have already
+        // crossed and so is unavailable at the moment of a close. trainClass is null when we
+        // cannot place the train at all (direction unknown), never a guess.
+        trainClass: match && match.direction ? this._classOf(match) : null,
+        // Tri-state on purpose: true / false / null, where null means unknowable (no schedule
+        // match). Must not collapse to false — "we don't know" and "it doesn't call" select
+        // different close anchors.
+        callsAtStation: match && match.callsAtStation != null ? match.callsAtStation : null,
+        callsAtApproach: match ? this._callsAtApproachStop(match) : null,
         history: (t.history || []).map(h => ({ berth: h.berth, ts: h.ts, event: h.event })),
         lastSeen: t.lastSeen,
         ageSecs: Math.round((now - t.lastSeen) / 1000)
@@ -714,6 +726,21 @@ class CrossingState {
     return this._callsAtApproachStop(t) === false ? 'stopping' : 'stoppingLocal';
   }
 
+  // The train's class, for BOTH directions — the single definition of the discriminator the
+  // prediction actually uses. Eastbound splits four ways because Southwick sits inside the
+  // approach berth (see _eastClass); westbound has no equivalent, so it splits on whether the
+  // train calls at the crossing station.
+  //
+  // This used to be inlined in _transit while _closeAnchor called _eastClass directly — two
+  // copies that could drift, and nothing outside could ask "which class did you use?". It is
+  // now also surfaced on the B1 live feed so a barrier observation is recorded against the
+  // class the predictor picked, rather than one re-derived afterwards by an analyst.
+  _classOf(t) {
+    if (t.direction === 'east') return this._eastClass(t);
+    if (this._isStopping(t)) return 'stopping';
+    return t.trainType === 'freight' ? 'freight' : t.trainType === 'ecs' ? 'ecs' : 'fast';
+  }
+
   // The single approach berth for a direction (td.<dir>.approach.from). Used by the
   // westbound rule and by legacy flat east configs; strikes are always keyed by berth.
   _approachBerth(direction) {
@@ -727,10 +754,7 @@ class CrossingState {
   _transit(t, from, to) {
     const byDir = this.transits[t.direction];
     if (!byDir) return null;
-    const k = t.direction === 'east' ? this._eastClass(t)
-      : (this._isStopping(t) ? 'stopping' : (t.trainType === 'freight' ? 'freight'
-        : t.trainType === 'ecs' ? 'ecs' : 'fast'));
-    const cell = (byDir[k] || {})[`${from}>${to}`];
+    const cell = (byDir[this._classOf(t)] || {})[`${from}>${to}`];
     return cell && typeof cell.secs === 'number' ? cell : null;
   }
 
@@ -772,7 +796,11 @@ class CrossingState {
   _closeAnchor(t) {
     const ct = this.timing && this.timing.closeTrigger && this.timing.closeTrigger[t.direction];
     if (!ct || !ct.classes) return null;
-    const spec = ct.classes[t.direction === 'east' ? this._eastClass(t) : null];
+    // _classOf, not `east ? _eastClass : null`. A no-op today — west has no `classes` block,
+    // so the guard above returns first and the old expression's `null` was never reached. But
+    // it means adding west per-class anchors (register #12) works instead of being silently
+    // ignored, which the hard-coded null would have caused.
+    const spec = ct.classes[this._classOf(t)];
     return spec && spec.berth && typeof spec.offsetSecs === 'number' ? spec : null;
   }
 

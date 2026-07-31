@@ -53,8 +53,9 @@
       "closeBefore": { "east": 1.5, "west": 2.5 },
       "openAfter":   { "east": 0.5, "west": 0.5 },
       "openLagSecs": {
-        "_comment": "Anchored to TD clear-step time, NOT bestTime. Derived from 24 Jun 2026 observer session cross-checked against FOI (auto-raise on FM/AC track-circuit clear). passenger east n=4 (obs 36-43s, 45 adopted with safety margin); passenger west n=6 (obs 15-23s); freight east n=2; freight west n=0 DELIBERATE GUESS.",
-        "east": { "passenger": 45, "freight": 70 },
+        "_comment": "Anchored to TD clear-step time, NOT bestTime. Derived from 24 Jun 2026 observer session cross-checked against FOI (auto-raise on FM/AC track-circuit clear). passenger west n=6 (obs 15-23s), re-measured 31 Jul n=3 (13,15,30 -> mean 19) so 18 CONFIRMED; freight east n=2; freight west n=0 DELIBERATE GUESS.",
+        "_comment_east_passenger": "45 -> 35 on 2026-07-31. 45 was never a measured value: 24 Jun observed 36-43s (n=4) and 45 was adopted as a safety margin. Re-measured from the 31 Jul observer session (barrier-up minus the train's own 0002 clear-step strike): 23,31,32,32,35,43,46 -> n=7, mean 35, median 32. Corroborated independently by the prediction stamp on the same session: all four stamped opens fired EARLY (-3,-13,-14,-22s, mean -13s). Pooled over both sessions n=11 spanning 23-46s, mean ~36, so 35 is insensitive to which session you weight. The margin is deliberately GONE: it was indistinguishable from a miscalibration, and the confidence band is where uncertainty belongs. Accepted trade (Rich, 31 Jul) — about half of eastbound closures will now reopen a few seconds LATER than predicted, where at 45 almost none did. NOT split by stopping/through: this session hints at it (stopping 46,31 vs through 43,32,32,35,23, and a train accelerating from a stand plausibly takes longer to clear) but n=2 stopping is not evidence. Revisit once trainClass has been recorded for a few sessions.",
+        "east": { "passenger": 35, "freight": 70 },
         "west": { "passenger": 18, "freight": 30 }
       },
       "consecutiveWindow": 1.5,
