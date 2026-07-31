@@ -1135,6 +1135,16 @@ console.log('  -- _classOf single source of truth --');
   checkTruthy('live feed exposes a row for the train', !!row);
   check('live trainClass matches _classOf', row ? row.trainClass : null, st._classOf(mk({dir:'east',hc:'1H01',station:true,approach:false,source:'ldb'})));
   check('live callsAtStation passed through', row ? row.callsAtStation : 'missing', true);
+  // An LDB board lists only calling services, so on-board IS the answer — the field must
+  // agree with _isStopping rather than reporting null just because LDB omits the flag.
+  const ldbOnly = new CrossingState('t', classCfg);
+  ldbOnly.ldbTrains = [{ direction:'east', headcode:'1H09', trainType:'passenger', source:'ldbsv',
+                         bestTime:new Date(BASE+300000) }];   // no callsAtStation at all
+  ldbOnly.recordTdBerth({ headcode:'1H09', to:'0008', from:'0010', ts: iso(BASE), event:'CA' });
+  const lrow = ldbOnly.getLiveTrains(BASE+1000).find(x => x.headcode === '1H09');
+  check('LDB-only train: callsAtStation true (on the board)', lrow ? lrow.callsAtStation : 'missing', true);
+  check('LDB-only train: agrees with _isStopping', lrow ? lrow.callsAtStation : null, ldbOnly._isStopping(ldbOnly.ldbTrains[0]));
+  check('LDB-only train: still classified (not null)', !!(lrow && lrow.trainClass), true);
   check('live callsAtApproach passed through', row ? row.callsAtApproach : 'missing', false);
   // Unknown direction must yield null, never a guessed class.
   const unk = new CrossingState('t', classCfg);

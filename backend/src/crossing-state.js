@@ -469,7 +469,14 @@ class CrossingState {
         // Tri-state on purpose: true / false / null, where null means unknowable (no schedule
         // match). Must not collapse to false — "we don't know" and "it doesn't call" select
         // different close anchors.
-        callsAtStation: match && match.callsAtStation != null ? match.callsAtStation : null,
+        //
+        // `onBoard` first, mirroring _isStopping: an LDB board lists only CALLING services, so
+        // being on it IS the answer, and the LDB poller never sets callsAtStation. Reporting
+        // null for LDB trains would leave the field blank for exactly the near-term services
+        // the calibration cares about, while _isStopping was answering true all along — the
+        // field has to agree with what the predictor used.
+        callsAtStation: onBoard ? true
+          : (match && match.callsAtStation != null ? match.callsAtStation : null),
         callsAtApproach: match ? this._callsAtApproachStop(match) : null,
         history: (t.history || []).map(h => ({ berth: h.berth, ts: h.ts, event: h.event })),
         lastSeen: t.lastSeen,
