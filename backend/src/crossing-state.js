@@ -689,13 +689,6 @@ class CrossingState {
     return t.callsAtStation === true;
   }
 
-  // Whether `bestTime` for this train is a real LDB DEPARTURE, as opposed to a CIF
-  // interpolated crossing time. The westbound stopping rule subtracts a departure
-  // lead, so it must only run on trains where bestTime actually means a departure —
-  // feeding it an interpolated crossing time would silently anchor to the wrong event.
-  _hasLiveDeparture(t) {
-    return typeof t.source === 'string' && t.source.startsWith('ldb');
-  }
 
   // Does this train also call at the station inside the approach berth (Southwick)?
   // Read from the CIF schedule, which covers the whole day, then applied to LDB-sourced
@@ -808,7 +801,23 @@ class CrossingState {
     // it means adding west per-class anchors (register #12) works instead of being silently
     // ignored, which the hard-coded null would have caused.
     const spec = ct.classes[this._classOf(t)];
-    return spec && spec.berth && typeof spec.offsetSecs === 'number' ? spec : null;
+    if (!spec || !spec.berth) return null;
+
+    // An explicit offsetSecs wins (east is calibrated per class from barrier observations).
+    if (typeof spec.offsetSecs === 'number') return spec;
+
+    // Otherwise DERIVE it: offset = transit[berth>XING] - crossingLeadSecs. Two reasons to
+    // compute this rather than store the arithmetic's result. The transit table is regenerated
+    // from TD data (scripts/derive-transits.js), so a hand-copied constant would silently drift
+    // away from the measurement it came from. And it collapses one calibrated number
+    // (crossingLeadSecs, the observed barrier lead before the crossing) plus a measured table
+    // into every class, instead of four magic numbers that have to be recomputed by hand
+    // whenever either input moves.
+    if (typeof ct.crossingLeadSecs !== 'number') return null;
+    const cell = this._transit(t, spec.berth, 'XING');
+    if (!cell) return null;                              // no sample for this class+berth
+    return { berth: spec.berth, offsetSecs: Math.round(cell.secs - ct.crossingLeadSecs),
+             derived: true, transitSecs: cell.secs, transitSd: cell.sdSecs };
   }
 
   // The train's fresh, direction-matched strike at `berth` (or null). A strike matches
@@ -833,7 +842,7 @@ class CrossingState {
   //    strikes, the prediction LEADS the crossing by predictedLeadSecs (~180s, measured),
   //    NOT closeBefore.east (90s). Legacy flat east config (freightSecs/stoppingSecs/
   //    otherSecs on a single approach berth) is still honoured for other crossings.
-  //  - WEST stopping passenger → max(strike + stoppingMinAfterStrikeSecs, departure − 45s);
+  //  - WEST stopping passenger → max(strike + minAfterStrikeSecs, departure − 45s);
   //    before the strike, departure − 45s. bestTime IS the LDB departure for westbound.
   //  - WEST freight / non-stopping → strike+otherSecs; before the strike, bestTime − closeBefore.west.
   _computeCloseTime(t, now) {
@@ -868,26 +877,63 @@ class CrossingState {
       return new Date(t.bestTime.getTime() - lead * 1000);
     }
 
-    // west — still a single approach berth (0003); no Southwick-equivalent on this side.
+    // ---- west: berth-anchored per class, same shape as east (register #12) --------------
+    //
+    // This used to be `departure − 45s`. bestTime IS the LDB departure for westbound
+    // (extractTrain: et=etd||eta), which made it meaningful — but Darwin publishes it to the
+    // MINUTE, so the close moved in 60s jumps while the period end moved smoothly off the
+    // second-precision berth projection. Once they disagreed by more than their gap the order
+    // inverted and a closure was predicted to OPEN before it CLOSED (#12), with "Down For"
+    // blank. The jumps were also plainly janky on screen for a single train.
+    //
+    // Measured over n=771 westbound crossings (berth strikes and ldb estimates against the
+    // true crossing, the TD 0005→0007 step), as a predictor of the crossing:
+    //     0005 strike   sd 19.6s        liveDep   sd 48.8s
+    //     0003 strike   sd 21.7s        schedDep  sd 253s
+    // Berths beat the departure estimate 2.5x. 0003 over 0005 despite the marginally worse sd
+    // because it fires early enough to be useful and stays feasible for every class.
+    //
+    // Deliberately NO dwell term, though the west platform sits inside the protecting berth and
+    // it looks like there should be one. Three measurements say otherwise: CIF booked dwell has
+    // only two values (30/60s) against realised 0-180s; refitting on booked gave sd 61s, WORSE
+    // than the old rule; and subtracting LIVE dwell doubled sd (13.5→25.8s) because it is the
+    // difference of two minute-rounded times. A raw 0005→XING sd of 19.6s cannot contain
+    // minutes of dwell variance — there is nothing left to remove.
+    //
+    // Pre-strike (TD cannot place the train at all) keeps a bestTime-based lead, mirroring
+    // east's predictedLeadSecs — see the note at the fall-through below. Dropping straight to
+    // cbFallback() there was a silent regression: it moved an unplaceable west train's close
+    // 105s earlier and re-merged the periods the clear-step merge key exists to separate.
     const c = ct.west || {};
-    const struck = this._strikeOrProjection(t, this._approachBerth('west'), now);
-    if (t.trainType === 'passenger' && stopping && this._hasLiveDeparture(t)) {
-      // bestTime IS the LDB departure for westbound (extractTrain: et=etd||eta), so
-      // dep − lead is meaningful. The _hasLiveDeparture guard keeps a CIF-sourced
-      // westbound caller OUT of this branch: its bestTime is an interpolated CROSSING
-      // time, and subtracting a departure lead from it would anchor to the wrong event.
-      // Such a train falls through to the baseline below — same as before this became
-      // classifiable at all, so no regression, just no longer silently mislabelled.
-      const depMinus = new Date(t.bestTime.getTime() - c.stoppingDepartureLeadSecs * 1000);
+    const anchor = this._closeAnchor(t);            // resolves via _classOf, so west.classes works
+    if (anchor) {
+      const struck = this._strikeOrProjection(t, anchor.berth, now);
       if (struck) {
-        const floor = struck.ts + c.stoppingMinAfterStrikeSecs * 1000;
-        return new Date(Math.max(floor, depMinus.getTime())); // whichever is LATER
+        // Floor a short way after the strike. An offset is positive by construction (it is
+        // transit[berth>XING] − lead, and a berth whose offset went negative was moved to an
+        // earlier anchor in config), but it can be very small — `fast` derives +2s — and a
+        // projection carries error, so this stops a close landing on top of, or before, the
+        // strike that anchored it. It BINDS for fast (2s -> 10s), which is deliberate: at that
+        // margin our own pipeline latency is the larger term anyway.
+        const at = struck.ts + anchor.offsetSecs * 1000;
+        return new Date(Math.max(at, struck.ts + (c.minAfterStrikeSecs || 0) * 1000));
       }
-      return depMinus;                                   // prediction: departure − 45s
     }
-    // west freight / non-stopping / ECS / unknown
-    if (struck && typeof c.otherSecs === 'number') return new Date(struck.ts + c.otherSecs * 1000);
-    return cbFallback();                                 // baseline until the 0003 strike
+
+    // No berth anchor and no position: lead bestTime, exactly as east does pre-strike. WHICH
+    // lead depends on what bestTime MEANS, and it differs by source — this is why the old code
+    // had a _hasLiveDeparture guard, and removing it was wrong:
+    //   LDB westbound  bestTime = etd||eta, i.e. the DEPARTURE estimate -> lead by ~46s
+    //                  (crossing is dep+46s measured, and the close is crossing-92s)
+    //   CIF westbound  bestTime = an interpolated CROSSING time          -> lead by the full 92s
+    // Subtracting a departure lead from an interpolated crossing time would anchor to the wrong
+    // event, which is the trap the original guard was protecting against.
+    const isDeparture = typeof t.source === 'string' && t.source.startsWith('ldb');
+    const lead = isDeparture
+      ? (typeof c.predictedDepartureLeadSecs === 'number' ? c.predictedDepartureLeadSecs : null)
+      : (typeof c.crossingLeadSecs === 'number' ? c.crossingLeadSecs : null);
+    if (lead !== null) return new Date(t.bestTime.getTime() - lead * 1000);
+    return cbFallback();
   }
 
   // Where a train currently is on its direction's approach chain: the index in

@@ -268,7 +268,20 @@ const closeCfg = {
     consecutiveWindow: 1.5,
     closeTrigger: {
       east: { freightSecs: 100, stoppingSecs: 100, otherSecs: 80, predictedLeadSecs: 180, safetyNetSecs: 210 },
-      west: { stoppingDepartureLeadSecs: 45, stoppingMinAfterStrikeSecs: 10, otherSecs: 20, safetyNetSecs: 90 }
+      west: {
+        // Production shape: only the ANCHOR BERTH is per class; the offset is derived at runtime
+        // as transit[berth>XING] - crossingLeadSecs. `westTransits` below supplies the table.
+        crossingLeadSecs: 92,
+        predictedDepartureLeadSecs: 46,
+        classes: {
+          stopping: { berth: '0003' },   // 153 - 92 => +61s
+          freight:  { berth: '0003' },   // 121 - 92 => +29s
+          ecs:      { berth: '0001' },   // 148 - 92 => +56s
+          fast:     { berth: '0001' },   //  94 - 92 =>  +2s
+        },
+        minAfterStrikeSecs: 10,
+        safetyNetSecs: 90
+      }
     },
     mergeOppositeMaxGapSecs: 20
   }
@@ -304,6 +317,19 @@ function mkT(o) {
     etaText: 'x', confidence: 'high', source: o.source || 'ldb'
   };
 }
+// West transits, matching backend/data/transits.json, so the derived close offsets resolve in
+// tests exactly as they do in production. Without these _closeAnchor cannot compute an offset and
+// every west test silently exercises the pre-strike fallback instead of the berth rule.
+closeCfg.transits = {
+  west: {
+    stopping: { '0003>XING': { secs: 153, sdSecs: 25, n: 7172 }, '0001>XING': { secs: 202, sdSecs: 48, n: 7174 },
+                '0005>XING': { secs: 116, sdSecs: 23, n: 7174 } },
+    freight:  { '0003>XING': { secs: 121, sdSecs: 32, n: 37 },   '0001>XING': { secs: 192, sdSecs: 42, n: 37 } },
+    ecs:      { '0003>XING': { secs: 89,  sdSecs: 36, n: 266 },  '0001>XING': { secs: 148, sdSecs: 48, n: 266 } },
+    fast:     { '0003>XING': { secs: 53,  sdSecs: 25, n: 60 },   '0001>XING': { secs: 94,  sdSecs: 29, n: 60 } }
+  }
+};
+
 const iso = (ms) => new Date(ms).toISOString();
 // Strikes are keyed headcode|berth. Default to the direction's single approach berth
 // (0006 east / 0003 west) so the legacy-shaped tests read the same as before.
@@ -355,31 +381,48 @@ console.log('  -- predicted close (strike-anchored / prediction) --');
   check('east (no strike): predictedStart = bestTime − 180s', p.predictedStart, iso(BASE - 180000));
   check('east (no strike): start = bestTime − 210s (safety-net backstop)', p.start, iso(BASE - 210000));
 }
-// C4: West stopping, struck → max(strike+10, dep−45).
+// C4: West stopping, struck → BERTH-ANCHORED (register #12). transit[0003>XING] 153s − 92s lead
+//     = strike + 61s, and it is INDEPENDENT of bestTime — that independence is the whole point,
+//     because bestTime is minute-rounded and its 60s jumps caused the open/close inversion.
 {
   const a = periodFor(closeCfg, mkT({ dir: 'west', headcode: '2W20', source: 'ldb', bestTimeMs: BASE }),
     BASE + 5000, [{ hc: '2W20', ts: BASE, dir: 'west' }]);
-  check('west stopping (struck, strike+10 later): close = strike + 10s', a.predictedStart, iso(BASE + 10000));
+  check('west stopping (struck): close = 0003 strike + 61s (153−92)', a.predictedStart, iso(BASE + 61000));
   const b = periodFor(closeCfg, mkT({ dir: 'west', headcode: '2W21', source: 'ldb', bestTimeMs: BASE + 200000 }),
     BASE + 5000, [{ hc: '2W21', ts: BASE, dir: 'west' }]);
-  check('west stopping (struck, dep−45 later): close = departure − 45s', b.predictedStart, iso(BASE + 155000));
+  check('west stopping (struck): a 200s-later bestTime does NOT move it', b.predictedStart, iso(BASE + 61000));
 }
-// C5: West stopping, no strike → predicted = departure − 45s; confirmed = bestTime − 90s.
+// C5: West stopping, no strike and no position → the pre-strike lead, the westbound analogue of
+//     east predictedLeadSecs. LDB bestTime IS a departure estimate, so lead by 46s.
 {
   const p = periodFor(closeCfg, mkT({ dir: 'west', headcode: '2W22', source: 'ldb', bestTimeMs: BASE }), BASE - 300000);
-  check('west stopping (no strike): predictedStart = departure − 45s', p.predictedStart, iso(BASE - 45000));
+  check('west stopping (no strike): predictedStart = departure − 46s', p.predictedStart, iso(BASE - 46000));
   check('west stopping (no strike): start = bestTime − 90s (safety-net backstop)', p.start, iso(BASE - 90000));
 }
-// C6: West freight / non-stopping → strike+20; no strike → bestTime − closeBefore.west (150s).
+// C6: West freight and non-stopping. Each class has its OWN anchor berth, chosen so the derived
+//     offset stays positive — freight anchors at 0003 (121−92 = +29s) but `fast` cannot, because
+//     92s before its crossing is BEFORE it reaches 0003 (53−92 = −39s), so fast anchors at 0001.
 {
-  const f = periodFor(closeCfg, mkT({ dir: 'west', headcode: '6O80', type: 'freight', bestTimeMs: BASE + 300000 }),
+  const f = periodFor(closeCfg, mkT({ dir: 'west', headcode: '6O80', type: 'freight', source: 'cif', bestTimeMs: BASE + 300000 }),
     BASE + 5000, [{ hc: '6O80', ts: BASE, dir: 'west' }]);
-  check('west freight (struck): strike + 20s', f.predictedStart, iso(BASE + 20000));
-  const fn = periodFor(closeCfg, mkT({ dir: 'west', headcode: '6O81', type: 'freight', bestTimeMs: BASE }), BASE - 300000);
-  check('west freight (no strike): predictedStart = bestTime − closeBefore.west (150s)', fn.predictedStart, iso(BASE - 150000));
+  check('west freight (0003 struck): strike + 29s (121−92)', f.predictedStart, iso(BASE + 29000));
+
+  // No strike, no position: a CIF bestTime is an interpolated CROSSING time, so lead by the full
+  // 92s — NOT the 46s departure lead, which would anchor to the wrong event.
+  const fn = periodFor(closeCfg, mkT({ dir: 'west', headcode: '6O81', type: 'freight', source: 'cif', bestTimeMs: BASE }), BASE - 300000);
+  check('west freight (no strike, CIF): predictedStart = crossing − 92s', fn.predictedStart, iso(BASE - 92000));
+
+  // A fast train's anchor is 0001, so a 0003 strike must NOT trigger it.
   const ns = periodFor(closeCfg, mkT({ dir: 'west', headcode: '2W23', type: 'passenger', source: 'cif', bestTimeMs: BASE + 300000 }),
-    BASE + 5000, [{ hc: '2W23', ts: BASE, dir: 'west' }]);
-  check('west non-stopping cif passenger (struck): strike + 20s (other bucket)', ns.predictedStart, iso(BASE + 20000));
+    BASE + 5000, [{ hc: '2W23', ts: BASE, dir: 'west', berth: '0003' }]);
+  check('west fast: a 0003 strike does NOT anchor it (0001 is its berth)', ns.predictedStart, iso(BASE + 300000 - 92000));
+
+  // ...but a 0001 strike does.
+  const nsA = periodFor(closeCfg, mkT({ dir: 'west', headcode: '2W24', type: 'passenger', source: 'cif', bestTimeMs: BASE + 300000 }),
+    BASE + 5000, [{ hc: '2W24', ts: BASE, dir: 'west', berth: '0001' }]);
+  // The derived offset is +2s (94−92) but minAfterStrikeSecs floors it at +10s — deliberate,
+  // since at a 2s margin our own pipeline latency dominates anyway.
+  check('west fast (0001 struck): floored to strike + 10s', nsA.predictedStart, iso(BASE + 10000));
 }
 // C7: Strike older than the TTL → ignored (baseline used); prune removes it.
 {
@@ -513,11 +556,13 @@ console.log('  -- gated state (confirmed start / predicted countdown) --');
 // dep−45 prediction. Not struck → start (−90) earlier than predicted (−45); struck → equal.
 {
   const ns = periodFor(closeCfg, mkT({ dir: 'west', headcode: '2W25', source: 'ldb', bestTimeMs: BASE }), BASE - 300000);
-  check('west stopping (no strike): start = bestTime − 90s (not the dep−45 prediction)', ns.start, iso(BASE - 90000));
-  check('west stopping (no strike): predictedStart = dep − 45s', ns.predictedStart, iso(BASE - 45000));
+  check('west stopping (no strike): start = bestTime − 90s (not the prediction)', ns.start, iso(BASE - 90000));
+  check('west stopping (no strike): predictedStart = dep − 46s', ns.predictedStart, iso(BASE - 46000));
+  // Struck: berth-anchored at strike+61s. The strike is 120s before bestTime, so the close lands
+  // at BASE−59s, and `start` follows it — the gate equals the prediction once a strike drives it.
   const st = periodFor(closeCfg, mkT({ dir: 'west', headcode: '2W25', source: 'ldb', bestTimeMs: BASE }),
     BASE - 45000, [{ hc: '2W25', ts: BASE - 120000, dir: 'west' }]);
-  check('west stopping (struck): start == predictedStart == dep − 45s', st.start, iso(BASE - 45000));
+  check('west stopping (struck): start == predictedStart == strike + 61s', st.start, iso(BASE - 59000));
 }
 // Live not scheduled: a late bestTime with an on-time scheduledTime closes off bestTime.
 {
@@ -552,7 +597,7 @@ const mergeClearCfg = {
   check('cleared train no longer merges the follower: 2 periods, not 1', periods.length, 2);
   check('period 1 (1S27) ends at its clear step + 45s', periods[0].end, iso(clearTs + 45000));
   check('period 1 holds only the cleared train', periods[0].trains.map(t => t.headcode).join(), '1S27');
-  check('period 2 (2Y62) starts on its own dep − 45s', periods[1].predictedStart, iso(clearTs + 141000));
+  check('period 2 (2Y62) starts on its own dep − 46s', periods[1].predictedStart, iso(clearTs + 140000));
 
   // The same inputs WITHOUT a recorded clear step must still merge — proving the split
   // above comes from the clear step, not from some unrelated change to the gap maths.
@@ -599,15 +644,17 @@ console.log('  -- CIF calling-pattern classification --');
   check('east CIF unknown: falls back to otherSecs(80), the old conservative answer',
     unknown.predictedStart, iso(BASE - 220000));
 
-  // West: a CIF caller must NOT enter the dep−45 branch — its bestTime is an
-  // interpolated crossing time, not a departure. Expect the closeBefore baseline (2.5 min).
+  // West: a CIF caller must NOT take the DEPARTURE lead — its bestTime is an interpolated
+  // CROSSING time, so it takes the full crossing lead (92s). Previously this fell to the
+  // arbitrary closeBefore baseline (150s); 92s is the measured figure, so this is the same
+  // guard reaching a better answer.
   const w = periodFor(closeCfg, cif({ dir: 'west', headcode: '1C04', bestTimeMs: BASE, callsAtStation: true }), BASE - 300000);
-  check('west CIF caller: stays on the closeBefore baseline, NOT dep − 45s',
-    w.predictedStart, iso(BASE - 150000));
+  check('west CIF caller: crossing − 92s, NOT the 46s departure lead',
+    w.predictedStart, iso(BASE - 92000));
 
-  // ...while an LDB westbound stopper is unaffected.
+  // ...while an LDB westbound stopper takes the departure lead, because its bestTime IS a departure.
   const wl = periodFor(closeCfg, mkT({ dir: 'west', headcode: '2W30', bestTimeMs: BASE, source: 'ldb' }), BASE - 300000);
-  check('west LDB stopper: still dep − 45s', wl.predictedStart, iso(BASE - 45000));
+  check('west LDB stopper: departure − 46s', wl.predictedStart, iso(BASE - 46000));
 }
 
 // ---- CLOSING_SOON window matches the frontend ----------------------------
@@ -665,7 +712,14 @@ const classCfg = {
         safetyNetSecs: 145,
         confirmedMayFollowPredicted: true   // as production: "Soon" is live eastbound
       },
-      west: { stoppingDepartureLeadSecs: 45, stoppingMinAfterStrikeSecs: 10, otherSecs: 20, safetyNetSecs: 90 }
+      west: {
+        crossingLeadSecs: 92,
+        predictedDepartureLeadSecs: 46,
+        classes: { stopping: { berth: '0003' }, freight: { berth: '0003' },
+                   ecs: { berth: '0001' }, fast: { berth: '0001' } },
+        minAfterStrikeSecs: 10,
+        safetyNetSecs: 90
+      }
     },
     mergeOppositeMaxGapSecs: 20
   }
@@ -914,13 +968,14 @@ console.log('  -- closeConfirmed + state + west invariant --');
   const pw = stW._computeClosures([nonStop], new Date(BASE - 400000))[0];
   check('west non-stopping: gated close clamped to the prediction, not 60s later',
     pw.start, pw.predictedStart);
-  check('...which is bestTime − closeBefore.west (150s)', pw.predictedStart, iso(BASE - 150000));
+  check('...which is bestTime − crossingLeadSecs (92s), the measured lead',
+    pw.predictedStart, iso(BASE - 92000));
 
   // ...and a west stopper is untouched: its backstop is already earlier.
   const stopW = mkT({ dir: 'west', headcode: '2W30', bestTimeMs: BASE, source: 'ldb' });
   const ps = new CrossingState('t', wCfg)._computeClosures([stopW], new Date(BASE - 400000))[0];
   check('west stopper: still gated at bestTime − 90s (no regression)', ps.start, iso(BASE - 90000));
-  check('west stopper: prediction still departure − 45s', ps.predictedStart, iso(BASE - 45000));
+  check('west stopper: prediction is departure − 46s', ps.predictedStart, iso(BASE - 46000));
 }
 
 // ---- Berth projection: sharpening prediction ------------------------------
@@ -939,6 +994,7 @@ projCfg.transits = {
     stoppingLocal: { '0008>0006': { secs: 71, sdSecs: 14, n: 4553 } }
   }
 };
+classCfg.transits = Object.assign({}, classCfg.transits, { west: closeCfg.transits.west });
 const NOW2 = Date.now();
 const eastT = (o) => ({ ...mkT({ dir: 'east', headcode: o.hc, bestTimeMs: o.bestMs }),
                         callsAtApproach: o.fsg === undefined ? false : o.fsg });
@@ -1122,9 +1178,12 @@ console.log('  -- _classOf single source of truth --');
   check('_closeAnchor agrees with _classOf (stoppingLocal -> 0006+100)', anchorFor(mk({dir:'east',hc:'1N01',station:true,approach:true})), '0006+100');
   check('_closeAnchor agrees with _classOf (stopping -> 0008+40)',       anchorFor(mk({dir:'east',hc:'1H01',station:true,approach:false})), '0008+40');
   check('_closeAnchor agrees with _classOf (fast -> 0008+20)',           anchorFor(mk({dir:'east',hc:'1A01',station:false,approach:false})), '0008+20');
-  // West has no `classes` block, so per-class anchors stay off — switching the lookup to
-  // _classOf must not have turned them on.
-  check('west still has no per-class anchor (config has no west.classes)', anchorFor(mk({dir:'west',hc:'1N02',station:true})), null);
+  // West NOW has a `classes` block (register #12), and its offsets are DERIVED from the transit
+  // table rather than stored — so this asserts the derivation, not a stored constant. It was
+  // `null` before west went per-class, and switching _closeAnchor to _classOf is what let the
+  // block take effect.
+  check('west stopping resolves a DERIVED anchor (153−92)', anchorFor(mk({dir:'west',hc:'1N02',station:true})), '0003+61');
+  check('west fast anchors further out at 0001 (94−92)', anchorFor(mk({dir:'west',hc:'1A02',station:false,source:'cif'})), '0001+2');
 
   // The live feed must report the same label, so an observation is filed under the class the
   // prediction actually used.
@@ -1151,6 +1210,70 @@ console.log('  -- _classOf single source of truth --');
   unk.recordTdBerth({ headcode:'9Z99', to:'0008', from:'0010', ts: iso(BASE), event:'CA' });
   const urow = unk.getLiveTrains(BASE + 1000).find(x => x.headcode === '9Z99');
   check('unmatched train => trainClass null', urow ? urow.trainClass : 'missing', null);
+}
+
+// ---- Register #12: the westbound close cannot invert, and cannot jump ------------------
+// The bug: the close came from Darwin's MINUTE-precision departure estimate, so it moved in 60s
+// steps while the period end moved smoothly off the second-precision berth projection. Past a
+// 63s gap the order inverted and a closure was predicted to OPEN before it CLOSED.
+console.log('  -- #12 west close: berth-anchored, cannot invert or jump --');
+{
+  // Deliberately the SHIPPED config, not a fixture. #12 is a regression test about a production
+  // bug, so the thing worth asserting is that the deployed configuration cannot reproduce it.
+  // (A hand-made fixture missing openLagSecs cannot anchor the period end to the clear step and
+  // invents inversions that production does not have — which is how this test first "failed".)
+  const CFG = JSON.parse(require('fs').readFileSync(
+    require('path').join(__dirname, '..', 'config', 'crossings.json'), 'utf8')).portslade;
+  // crossingId 'portslade' matters: the shipped config has no inline `transits`, so the class
+  // transit table is loaded by id (config.transits || TRANSITS[crossingId]). With a dummy id the
+  // offsets cannot be derived and every class silently falls back to the pre-strike lead.
+  const T = BASE;
+  const build = (depOffsetSecs) => {
+    const st = new CrossingState('portslade', CFG);
+    const t = mkT({ dir: 'west', headcode: '1N44', source: 'ldb', bestTimeMs: T + depOffsetSecs * 1000 });
+    setStrike(st, '1N44', T - 60000, 'west', '0003');
+    st.recordTdBerth({ headcode: '1N44', to: '0005', from: '0003', ts: new Date(T - 5000).toISOString(), event: 'CA' });
+    st.clearStepSeen.set('1N44', { ts: T + 60000, direction: 'west' });
+    return st._computeClosures([t], new Date(T))[0];
+  };
+  // Sweep the departure estimate across +/-10 min: nothing about the close may move, and the
+  // period may never invert. This is the register's own reproduction case.
+  let inverted = 0; const distinct = new Set();
+  for (let d = -600; d <= 600; d += 30) {
+    const p = build(d);
+    if (!p) continue;
+    distinct.add(p.predictedStart);
+    if (Date.parse(p.end) <= Date.parse(p.predictedStart)) inverted++;
+  }
+  check('#12: no inversion across a +/-10 min departure sweep', inverted, 0);
+  check('#12: close is INDEPENDENT of the departure estimate', distinct.size, 1);
+  check('#12: and it is the berth anchor (strike−60s + 61s = T+1s)', [...distinct][0], iso(T + 1000));
+
+  // No-jank: repeated recomputes with a moving clock and a revised bestTime must not move it.
+  const st2 = new CrossingState('portslade', CFG);
+  const t2 = mkT({ dir: 'west', headcode: '2W44', source: 'ldb', bestTimeMs: T + 200000 });
+  setStrike(st2, '2W44', T - 60000, 'west', '0003');
+  const seen = new Set();
+  for (const [nowOff, bestOff] of [[0, 200], [15, 260], [30, 140], [45, 320]]) {
+    t2.bestTime = new Date(T + bestOff * 1000);
+    const p = st2._computeClosures([t2], new Date(T + nowOff * 1000))[0];
+    if (p) seen.add(p.predictedStart);
+  }
+  check('no-jank: close frozen across 4 recomputes with a revised bestTime', seen.size, 1);
+
+  // Feasibility: for every class the close must never precede the strike anchoring it.
+  const classes = [['stopping', 'passenger', true, 'ldb', '0003'], ['freight', 'freight', null, 'cif', '0003'],
+                   ['ecs', 'ecs', null, 'cif', '0001'], ['fast', 'passenger', false, 'cif', '0001']];
+  const early = [];
+  for (const [name, type, station, src, berth] of classes) {
+    const st3 = new CrossingState('portslade', CFG);
+    const t3 = mkT({ dir: 'west', headcode: 'Z' + name.slice(0, 3), type, source: src, bestTimeMs: T + 300000 });
+    t3.callsAtStation = station;
+    setStrike(st3, t3.headcode, T, 'west', berth);
+    const p = st3._computeClosures([t3], new Date(T + 5000))[0];
+    if (p && Date.parse(p.predictedStart) < T) early.push(name);
+  }
+  check('feasibility: no class closes before the strike anchoring it', early.join(',') || 'none', 'none');
 }
 
 // ---- Register #13: a berth step on the approach chain refreshes the prediction ---------

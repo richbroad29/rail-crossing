@@ -77,7 +77,22 @@
           "_comment_confirmedMayFollowPredicted": "Opt-in: allow the CLOSED gate to sit LATER than the predicted close. True only here, because safetyNetSecs(145) < predictedLeadSecs(180) is deliberate eastbound — it is what makes the frontend 'Soon' state live instead of dormant. Everywhere else the backstop is clamped to the prediction, so a pair of unrelated config values can't silently produce a window where the countdown has passed zero while the app still says CLEAR.",
           "confirmedMayFollowPredicted": true
         },
-        "west": { "stoppingDepartureLeadSecs": 45, "stoppingMinAfterStrikeSecs": 10, "otherSecs": 20, "safetyNetSecs": 90 }
+        "west": {
+          "_comment": "BERTH-ANCHORED since 2026-08-01 (was `departure - 45s`). offsetSecs = transit[berth>XING] - 92s, where 92s is the observed close lead (crossing minus barrier-down) from n=11 westbound barrier observations (8 on 24 Jun, 3 on 31 Jul). The ANCHOR is well grounded, the OFFSET is not: over n=771 westbound crossings the berth strikes predict the crossing 2.5x better than Darwin's departure estimate (sd: 0005 19.6s, 0003 21.7s, liveDep 48.8s, schedDep 253s). 0003 chosen over 0005 despite the marginally better sd because it fires earlier and stays feasible. Deliberately NO dwell term — three measurements killed it: CIF booked dwell has only two values (30/60s) against realised 0-180s; refitting on booked gave sd 61s, WORSE than the old rule's 43s; and subtracting live dwell DOUBLED sd (13.5 -> 25.8s) because it is the difference of two minute-rounded times. Raw 0005>XING sd of 19.6s cannot contain minutes of dwell variance, so there is nothing to remove.",
+          "_comment_lead": "crossingLeadSecs is the ONE calibrated number here: the observed seconds between barrier-down and the train reaching the crossing, from n=11 westbound barrier observations. Each class's offset is DERIVED at runtime as transit[berth>XING] - crossingLeadSecs, so it follows the transit table when that is regenerated instead of drifting away from it. Only the anchor BERTH is per class, chosen so the derived offset stays positive: a rule cannot fire before the strike it is anchored to.",
+          "crossingLeadSecs": 92,
+          "_comment_prestrike": "predictedDepartureLeadSecs is the PRE-STRIKE prediction, used only while TD cannot place the train at all — the westbound analogue of east predictedLeadSecs. 46s because for an LDB westbound bestTime IS the departure estimate, the crossing follows it by a measured 46s (sd 16s, n=8), and the close leads the crossing by 92s. A CIF westbound falls to crossingLeadSecs instead, because its bestTime is an interpolated CROSSING time, not a departure. Dropping this and letting closeBefore take over moved an unplaceable train's close 105s early and re-merged periods the clear-step merge key separates.",
+          "predictedDepartureLeadSecs": 46,
+          "classes": {
+            "stopping": { "berth": "0003", "_derived": "153-92 = +61s. anchor n=771 (crossing-0003 = 156s, sd 22s); lead n=11. 95.2% of westbound traffic" },
+            "freight":  { "berth": "0003", "_derived": "121-92 = +29s. transit n=37; one barrier observation gives 0003+39s, within 10s. 0.5%" },
+            "ecs":      { "berth": "0001", "_derived": "148-92 = +56s. transit n=266; barrier lead n=0 GUESS. 0003 would be -3s, infeasible. 3.5%" },
+            "fast":     { "berth": "0001", "_derived": "94-92 = +2s. transit n=60; barrier lead n=0 GUESS, and FRAGILE — fires ~instantly on the strike, so pipeline latency eats the margin. 0003 would be -39s. 0.8%" }
+          },
+          "_comment_unknown": "A train whose class cannot be resolved falls to `stopping` (see _classOf/_eastClass fallbacks), which is the right default: 95% of westbound traffic is stopping.",
+          "minAfterStrikeSecs": 10,
+          "safetyNetSecs": 90
+        }
       },
       "mergeOppositeMaxGapSecs": 20
     },
