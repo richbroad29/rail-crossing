@@ -28,9 +28,16 @@
  *      HANGING rather than rejecting. Hence a race against a timer, not just a catch.
  *   3. A timeout still warms the cache — the request is not abandoned when the race is lost
  *      (see waitUntil below), so the next launch is fresh even if every launch times out.
+ *
+ * AND the fetch must bypass the browser's HTTP cache — see revalidate() below. Network-first at
+ * the service-worker layer alone did NOT fix the bug: GitHub Pages serves the shell with
+ * `cache-control: max-age=600`, so a plain fetch() inside the worker was answered by the HTTP
+ * cache from up to ten minutes ago without ever reaching the network. Two cache layers, and
+ * defeating only the outer one changes nothing. Caught by an end-to-end check after 13 unit
+ * tests passed — a stubbed fetch cannot see the layer underneath it.
  */
 
-var CACHE = 'observer-v8';
+var CACHE = 'observer-v9';
 var SHELL = [
   './', './index.html', './observe.css', './observe.js', './manifest.webmanifest',
   // The shared prediction core and its config. predict.js is a hard dependency — the app will
@@ -44,6 +51,15 @@ var SHELL = [
 // link is usable at all, and gives up before the delay is noticeable at a crossing.
 var NET_TIMEOUT_MS = 2000;
 
+// Fetch that skips the browser's HTTP cache, so "network-first" really means the network.
+// 'reload' rather than 'no-store' so the response still refreshes the HTTP cache for anything
+// else that asks. Built from the URL rather than the Request because a navigation Request cannot
+// be reconstructed with a different cache mode; for a same-origin GET of a shell file the other
+// Request properties carry no meaning we need.
+function revalidate(req) {
+  return fetch(req.url, { cache: 'reload', credentials: 'same-origin' });
+}
+
 // Does staleness in this file change what the app DOES? Extension-based rather than a list of
 // paths, so a new module is covered by default — the safe direction to be wrong in.
 function carriesLogic(pathname) {
@@ -53,7 +69,14 @@ function carriesLogic(pathname) {
 self.addEventListener('install', function (e) {
   e.waitUntil(
     caches.open(CACHE)
-      .then(function (c) { return c.addAll(SHELL); })
+      // addAll() would go through the HTTP cache too, so an install could populate a brand-new
+      // cache with stale copies. Fetch each explicitly with cache:'reload' instead.
+      .then(function (c) {
+        return Promise.all(SHELL.map(function (u) {
+          return fetch(u, { cache: 'reload', credentials: 'same-origin' })
+            .then(function (r) { if (r && r.status === 200) return c.put(u, r); });
+        }));
+      })
       .then(function () { return self.skipWaiting(); })
   );
 });
@@ -81,7 +104,7 @@ self.addEventListener('fetch', function (e) {
   // Code + config: network-first, bounded.
   e.respondWith(
     caches.match(req).then(function (cached) {
-      var net = fetch(req).then(function (resp) {
+      var net = revalidate(req).then(function (resp) {
         if (resp && resp.status === 200) {
           var copy = resp.clone();
           caches.open(CACHE).then(function (c) { c.put(req, copy); });
