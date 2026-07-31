@@ -380,8 +380,8 @@
   function enrich(lt, join) {
     // NOTE: this object is what a barrier observation RECORDS — the observer snapshots it at the
     // moment of a capture and feedbackPayload reads fields straight off it. So adding a field
-    // here is half a change: it also needs a column in shared/apps-script-feedback.gs, or it is
-    // collected and silently discarded at the sheet.
+    // here is only half a change: it also needs a column in shared/apps-script-feedback.gs, or
+    // it gets collected and then silently discarded at the sheet.
     var tm = (join && join(lt.headcode)) || { sched: null, live: null };
     var prox = proximity(lt.berth, lt.direction);
     var strikes = (lt.history || []).map(function (h) { return { berth: h.berth || h.to || '', ts: h.ts || '', event: h.event || '' }; });
