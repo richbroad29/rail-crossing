@@ -12,6 +12,7 @@
 <link rel="apple-touch-icon" href="../../shared/icon-180.png">
 <link rel="icon" type="image/svg+xml" href="../../shared/icon.svg">
 <title>Crossing Observer</title>
+<link rel="stylesheet" href="../../shared/closure-card.css">
 <link rel="stylesheet" href="observe.css">
 </head>
 <body>
@@ -41,7 +42,11 @@
       <div class="pred-card"><div class="pred-label">Next Open</div><div class="pred-val" id="predOpen">--</div><div class="pred-sub" id="predOpenAt"></div></div>
       <div class="pred-card"><div class="pred-label">Down For</div><div class="pred-val" id="predDown">--</div><div class="pred-sub" id="predDownRange"></div></div>
     </div>
-    <div class="info-text">Same endpoint and same code path as railcrossing.uk, so these figures are what a user is looking at right now — a mismatch is a real bug, not a difference between the two apps. Every capture below records this state and the gap between it and what you actually saw.</div>
+    <div class="pred-warn hidden" id="predWarn"></div>
+    <!-- The next two closure periods, rendered by shared/closure-card.js — the SAME builder
+         the public app uses for its closure list, so the trains named here are exactly the
+         trains a user is being shown. Replaced the explainer that used to sit here. -->
+    <div class="pred-closures" id="predClosures"></div>
   </div>
 
   <!-- Capture: single alternating button (timestamp at tap) + skip. The button
@@ -90,6 +95,7 @@
     <div class="section-hdr"><span>Approach to the crossing</span></div>
     <div id="approachView"><div class="empty">Waiting for feed…</div></div>
     <div class="info-text">Both directions meet at <b>║ Boundary Rd ║</b>: eastbound runs <b>down</b> ▼, westbound runs <b>up</b> ▲. Spaced by typical journey time (derived from TD timestamps — not a to-scale map). Blue dots = confirmed approach berths; a train nearing the bar is the likely CLOSE cause. Each berth shows its typical time relative to a train reaching the crossing (the <b>train</b> passing — not the barrier): <b>median</b> in bold, lower–upper quartile range beside it (28 days of movements). Approach berths = time <b>until</b> the crossing; cleared berths past the bar = time <b>since</b>, marked <b>+</b>.</div>
+    <div class="info-text" id="trigInfo">Coloured bands are the <b>trigger points</b> — where a train has to reach for the prediction to fire. Read <b>0006 + 100s</b> as “100 seconds after this train strikes berth 0006”. <span class="trig-key trig-key-close"></span> CLOSE, <span class="trig-key trig-key-open"></span> OPEN. Each one is drawn at the position its own offset reaches using that <b>service type's</b> measured transits, which is why classes sharing an anchor berth sit in different places — a Brighton stopper's 0006 is 246s from the crossing because it calls at Southwick inside that berth, a fast's is 96s. Positions come from the backend (<code>/triggers</code>), computed from the same config and transit table the prediction uses, so they cannot drift from the rule they describe. OPEN triggers are placed on the pooled since-crossing medians (there is no per-class data past the bar).</div>
   </div>
 
   <!-- Other trains elsewhere in signalling area LA -->
@@ -130,6 +136,7 @@
 <div class="toast hidden" id="toast"></div>
 
 <script src="../../shared/predict.js"></script>
+<script src="../../shared/closure-card.js"></script>
 <script src="observe.js"></script>
 </body>
 </html>

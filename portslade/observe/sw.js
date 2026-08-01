@@ -37,12 +37,15 @@
  * tests passed — a stubbed fetch cannot see the layer underneath it.
  */
 
-var CACHE = 'observer-v9';
+var CACHE = 'observer-v10';
 var SHELL = [
   './', './index.html', './observe.css', './observe.js', './manifest.webmanifest',
   // The shared prediction core and its config. predict.js is a hard dependency — the app will
   // not start without it — so it belongs in the offline shell, not on the network.
   '../../shared/predict.js', '../../shared/crossings.json',
+  // The closure card, shared with the public app. Also a hard dependency: the prediction
+  // panel calls CLOSURE_CARD.listHtml on every tick.
+  '../../shared/closure-card.js', '../../shared/closure-card.css',
   '../../shared/icon-180.png', '../../shared/icon.svg'
 ];
 

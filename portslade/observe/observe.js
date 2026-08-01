@@ -37,7 +37,7 @@
   var API_BASE = 'https://api.railcrossing.uk';
   var CROSSING_ID = 'portslade';
   var POLL_MS = 2500;
-  var PRED_POLL_MS = 30000;   // matches the public app's refresh cadence
+  var PRED_POLL_MS = 10000;   // matches the public app's refresh cadence — keep the two equal
 
   // Berth chain + index, from the shared core. See shared/predict.js for the derivation.
   var CHAIN = PREDICT.CHAIN, CHAININ = PREDICT.CHAININ;
@@ -236,8 +236,20 @@
   }
 
   // ---- prediction poll (the same endpoint and the same core as the public app) ----
+  // Static per deploy — it describes config and the measured transit table, not live trains
+  // — so fetch it once. A 404 means the backend predates the endpoint: the map simply draws
+  // without triggers rather than the panel failing, so the frontend can deploy either side
+  // of the backend.
+  function fetchTriggers() {
+    fetch(API_BASE + '/crossing/' + CROSSING_ID + '/triggers', { cache: 'no-store' })
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function (data) { triggers = data; renderStrip(); })
+      .catch(function () { triggers = null; });
+  }
   function pollPrediction() {
-    fetch(API_BASE + '/crossing/' + CROSSING_ID, { cache: 'no-store' })
+    // limit=3: this panel shows two closures and the derivation needs the one after, so it
+    // can say what is coming next while the barrier is down. No point pulling the day.
+    fetch(API_BASE + '/crossing/' + CROSSING_ID + '?limit=3', { cache: 'no-store' })
       .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
       .then(function (data) {
         predPeriods = PREDICT.buildClosures(data.upcomingClosures, CFG);
@@ -256,23 +268,47 @@
   // correction is applied where it is physically necessary instead: the capture timestamp
   // and the observed-minus-predicted delta (see predStamp).
   function renderPrediction() {
-    pred = predPeriods.length ? PREDICT.derive(predPeriods, new Date()) : null;
-    var age = predAt ? Math.round((Date.now() - predAt) / 1000) : null;
+    var ageMs = predAt ? (Date.now() - predAt) : Infinity;
+    pred = predPeriods.length ? PREDICT.derive(predPeriods, new Date(), ageMs) : null;
+    var age = predAt ? Math.round(ageMs / 1000) : null;
     $('predAge').textContent = !predOk ? 'offline' : (age != null ? age + 's ago' : '—');
     $('predAge').className = 'pred-age' + (!predOk || (age != null && age > 90) ? ' bad' : '');
     var st = pred ? pred.status : null;
     $('predState').textContent = PREDICT.stateLabel(st) || 'no prediction';
     $('predState').className = 'pred-state' + (st ? ' is-' + st.toLowerCase() : '');
     var t = Date.now();
-    setPredCard('predClose', 'predCloseAt', pred && pred.nextCloseTime, t);
-    setPredCard('predOpen', 'predOpenAt', pred && pred.nextOpenTime, t);
+    setPredCard('predClose', 'predCloseAt', pred && pred.nextCloseTime, t,
+      pred && pred.closeHeld, 'train held short');
+    setPredCard('predOpen', 'predOpenAt', pred && pred.nextOpenTime, t,
+      pred && pred.openHeld, 'until train clears');
     var dfm = pred && pred.downForMs;
     $('predDown').textContent = (dfm != null && dfm > 0) ? PREDICT.fmtDownFor(dfm) : '--';
     $('predDownRange').textContent = (dfm != null && dfm > 0) ? pred.downForRange : '';
+    // Invariants the backend guarantees. Surfaced rather than silently repaired — this app
+    // exists to catch the two views disagreeing, so a clamp here would hide the bug it is
+    // deployed to find. Should never appear; if it does, that IS the finding.
+    var warn = $('predWarn'), ws = (pred && pred.warnings) || [];
+    warn.classList.toggle('hidden', !ws.length);
+    warn.textContent = ws.length ? ('⚠ inconsistent: ' + ws.join('; ')) : '';
+    renderPredClosures(t);
   }
-  function setPredCard(valId, subId, when, nowMs) {
-    $(valId).textContent = when ? PREDICT.fmtSoon(when.getTime() - nowMs) : '--';
-    $(subId).textContent = when ? PREDICT.fmtShort(when) : '';
+  // `held` values are lower bounds recomputed against now, so they don't tick — rendering
+  // one as a bare countdown would read as a frozen clock. Prefixed and labelled instead.
+  function setPredCard(valId, subId, when, nowMs, held, heldNote) {
+    $(valId).textContent = when ? PREDICT.fmtEta(when.getTime() - nowMs, held) : '--';
+    $(valId).classList.toggle('is-held', !!(when && held));
+    $(subId).textContent = when ? (held ? heldNote : PREDICT.fmtShort(when)) : '';
+  }
+  // The next two closure periods, with their trains — the detail that replaced the
+  // explainer. Same builder as the public app's closure list (shared/closure-card.js), so
+  // what is named here is exactly what a user is being shown for the same closure.
+  function renderPredClosures(nowMs) {
+    var box = $('predClosures');
+    if (!predPeriods.length) {
+      box.innerHTML = '<div class="empty">' + (predOk ? 'No upcoming closures' : 'No prediction — feed offline') + '</div>';
+      return;
+    }
+    box.innerHTML = CLOSURE_CARD.listHtml(predPeriods, new Date(nowMs), 2);
   }
   // The prediction as it stood at the instant of a capture, plus the number this whole
   // exercise exists to produce: observed minus predicted, in seconds. Positive = the
@@ -652,14 +688,135 @@
     return el('div', 'bnode' + (n.role ? ' role-' + n.role : ''),
       '<span class="bdot"></span><span class="btext"><span class="blabel">' + n.b + (n.role ? ' · ' + n.role : '') + '</span>' + ttc + '</span><span class="bpills">' + pills + '</span>');
   }
+
+  // ---- trigger markers -------------------------------------------------------------
+  // Where the prediction actually fires, drawn in its geographic place on the chain.
+  //
+  // CLOSE placements come from the backend (GET /crossing/:id/triggers): it walks each
+  // class's offset along that class's own measured transits and reports the leg and the
+  // fraction. Doing it there rather than here is the point — a copy of the transit table
+  // in this app would drift from the predictor the first time either was recalibrated,
+  // and this map's whole value is being trustworthy about what the predictor does.
+  //
+  // OPEN placements are computed here, because the transit table only measures the
+  // approach; past the bar all we have is PREDICT.CHAIN's pooled since-crossing medians
+  // (tac). The backend supplies the lag, this places it. Noted in the on-screen key.
+  var triggers = null;                     // { close:[], open:[] } from the backend
+
+  // Short on purpose. These render inside a berth-column gap on a phone, so the long forms
+  // ("stopping (calls Southwick)") wrapped to three lines and shoved the layout sideways.
+  // The explainer under the map carries the full definitions.
+  function classLabel(cls) {
+    return cls === 'stoppingLocal' ? 'stops Southwick'
+      : cls === 'stopping' ? 'stopping'
+      : cls === 'fast' ? 'fast'
+      : cls === 'ecs' ? 'ECS'
+      : cls === 'freight' ? 'freight'
+      : cls === 'passenger' ? 'passenger' : cls;
+  }
+  // An OPEN trigger is `lagSecs` after the clear step, and the clear step IS the crossing
+  // on the tac axis — so walk the cleared berths until their since-crossing median passes
+  // the lag, and interpolate between the two either side.
+  function placeOpen(direction, lagSecs) {
+    var post = [], seen = false;
+    CHAIN[direction].forEach(function (n) {
+      if (n.x) { seen = true; return; }
+      if (seen) post.push({ b: n.b, tac: (n.tac && n.tac.med != null) ? n.tac.med : 0 });
+    });
+    for (var i = 0; i < post.length - 1; i++) {
+      var lo = post[i], hi = post[i + 1];
+      if (lagSecs >= lo.tac && lagSecs <= hi.tac) {
+        var span = hi.tac - lo.tac;
+        return { from: lo.b, to: hi.b, fraction: span > 0 ? (lagSecs - lo.tac) / span : 0 };
+      }
+    }
+    return null;                            // beyond the drawn cleared chain
+  }
+  // markers[direction]['FROM>TO'] = [{ kind, fraction, label }] — the lookup renderStrip
+  // consults for each gap it draws.
+  function buildMarkers() {
+    var m = { east: {}, west: {} };
+    if (!triggers) return m;
+    var push = function (dir, from, to, kind, fraction, label) {
+      if (!m[dir]) return;
+      var key = from + '>' + to;
+      (m[dir][key] = m[dir][key] || []).push({ kind: kind, fraction: fraction, label: label });
+    };
+    (triggers.close || []).forEach(function (c) {
+      if (!c.place || c.place.beyondCrossing) return;
+      push(c.direction, c.place.from, c.place.to, 'close', c.place.fraction,
+        '<b>' + c.berth + '+' + c.offsetSecs + 's</b> <span class="trig-cls">' + classLabel(c.trainClass) + '</span>');
+    });
+    (triggers.open || []).forEach(function (o) {
+      var p = placeOpen(o.direction, o.lagSecs);
+      if (!p) return;
+      push(o.direction, p.from, p.to, 'open', p.fraction,
+        '<b>' + (o.clearBerth || 'clear') + '+' + o.lagSecs + 's</b> <span class="trig-cls">' + classLabel(o.trainClass) + '</span>');
+    });
+    // Cluster within a leg: east 0006→0004 carries three triggers at 23/28/65%, and the
+    // first two are ~3px apart in a 57px gap. Merge anything closer than 12% of the leg
+    // into one band rather than overprinting two labels.
+    Object.keys(m).forEach(function (dir) {
+      Object.keys(m[dir]).forEach(function (key) {
+        var list = m[dir][key].sort(function (a, b) { return a.fraction - b.fraction; });
+        var out = [];
+        list.forEach(function (t) {
+          var last = out[out.length - 1];
+          if (last && Math.abs(t.fraction - last.fraction) < 0.12 && last.kind === t.kind) {
+            last.labels.push(t.label);
+            last.fraction = (last.fraction * (last.labels.length - 1) + t.fraction) / last.labels.length;
+          } else {
+            out.push({ kind: t.kind, fraction: t.fraction, labels: [t.label] });
+          }
+        });
+        m[dir][key] = out;
+      });
+    });
+    return m;
+  }
+  // The gap element between two nodes, carrying any triggers that fall inside it.
+  // `flow` decides which end `fraction` is measured from: 'down' = the train travels
+  // top→bottom so 0 is the top; 'up' = it travels bottom→top so 0 is the bottom.
+  function gapEl(d, from, to, gapSecs, flow, markers) {
+    var list = (markers[d] && markers[d][from + '>' + to]) || [];
+    var h = gapPx(gapSecs);
+    // Give a gap room for its labels rather than letting them overprint the berth rows.
+    // A clustered band carries one line per class, and the labels wrap, so budget by the
+    // number of labels rather than the number of bands.
+    if (list.length) {
+      var lines = list.reduce(function (n, t) { return n + t.labels.length; }, 0);
+      h = Math.max(h, lines * 13 + list.length * 6 + 8);
+    }
+    var sp = el('div', 'bgap' + (list.length ? ' has-trig' : ''));
+    sp.style.height = h + 'px';
+    list.forEach(function (t) {
+      var f = flow === 'down' ? t.fraction : (1 - t.fraction);
+      var mk = el('div', 'trig trig-' + t.kind,
+        '<span class="trig-tick"></span><span class="trig-label">' +
+        (t.kind === 'close' ? 'CLOSE ' : 'OPEN ') + t.labels.join('<br>') + '</span>');
+      mk.style.top = Math.round(f * h) + 'px';
+      sp.appendChild(mk);
+    });
+    return sp;
+  }
   // flow 'down' = train travels top→bottom (dwell in the upper node spaces to the
   // next); 'up' = travels bottom→top (dwell in the lower node spaces to the next).
-  function colBand(d, nodes, flow) {
+  // `xingEnd` adds the final leg between the nearest berth and the road itself — where
+  // the westbound stopper's trigger lives (0005→XING at 22%), and which is not between
+  // two berths so it has no natural gap of its own.
+  function colBand(d, nodes, flow, markers, xingEnd) {
     var col = el('div', 'xcol');
+    if (xingEnd && flow === 'up') col.appendChild(gapEl(d, nodes[0].b, 'XING', 40, flow, markers));
     nodes.forEach(function (n, i) {
       col.appendChild(nodeEl(d, n));
-      if (i < nodes.length - 1) { var g = flow === 'down' ? n.gap : nodes[i + 1].gap; var sp = el('div', 'bgap'); sp.style.height = gapPx(g) + 'px'; col.appendChild(sp); }
+      if (i < nodes.length - 1) {
+        var g = flow === 'down' ? n.gap : nodes[i + 1].gap;
+        var a = flow === 'down' ? n.b : nodes[i + 1].b;
+        var b = flow === 'down' ? nodes[i + 1].b : n.b;
+        col.appendChild(gapEl(d, a, b, g, flow, markers));
+      }
     });
+    if (xingEnd && flow === 'down') col.appendChild(gapEl(d, nodes[nodes.length - 1].b, 'XING', 40, flow, markers));
     return col;
   }
   // Both directions share one horizontal BOUNDARY ROAD bar. Eastbound runs
@@ -668,18 +825,21 @@
   function renderStrip() {
     var box = $('approachView'); box.innerHTML = '';
     var e = splitChain('east'), w = splitChain('west');
+    var mk = buildMarkers();
     var head = el('div', 'xhead');
     head.appendChild(el('div', 'xhcell', 'Eastbound ▼'));
     head.appendChild(el('div', 'xhcell', 'Westbound ▲'));
     box.appendChild(head);
     var top = el('div', 'xband xtop');
-    top.appendChild(colBand('east', e.pre, 'down'));               // east approach (above, descending)
-    top.appendChild(colBand('west', w.post.slice().reverse(), 'up')); // west cleared (above)
+    // xingEnd on the two APPROACH columns only: a close trigger can sit in the last leg
+    // before the road (west stopping does), and there is no berth-to-berth gap there.
+    top.appendChild(colBand('east', e.pre, 'down', mk, true));            // east approach (above, descending)
+    top.appendChild(colBand('west', w.post.slice().reverse(), 'up', mk)); // west cleared (above)
     box.appendChild(top);
     box.appendChild(el('div', 'xbar', '║  BOUNDARY ROAD CROSSING  ║'));
     var bot = el('div', 'xband xbot');
-    bot.appendChild(colBand('east', e.post, 'down'));              // east cleared (below)
-    bot.appendChild(colBand('west', w.pre.slice().reverse(), 'up'));  // west approach (below, ascending)
+    bot.appendChild(colBand('east', e.post, 'down', mk));                 // east cleared (below)
+    bot.appendChild(colBand('west', w.pre.slice().reverse(), 'up', mk, true)); // west approach (below, ascending)
     box.appendChild(bot);
     if (!liveTrains.some(isApproaching)) box.appendChild(el('div', 'info-text', 'No trains on the Portslade chain right now — they appear on a berth as they enter area LA.'));
   }
@@ -725,6 +885,7 @@
       .then(function (all) { CFG = all[CROSSING_ID] || null; })
       .catch(function () { })
       .then(function () { pollPrediction(); setInterval(pollPrediction, PRED_POLL_MS); });
+    fetchTriggers();
     renderPrediction(); setInterval(renderPrediction, 1000);
     poll(); setInterval(poll, POLL_MS);
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function () { });
