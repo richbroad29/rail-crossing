@@ -119,13 +119,23 @@ backend-v2 Node service
 ```
 
 **Endpoints:** `GET /crossing/:id` (state + closures; `?limit=` defaults to **6**, not the whole
-day — the apps display 3 and 2, and the old 200-period response was 18.4 KB of which 89% was
-never looked at. `closureCount` reports how many exist so Show More still works). `…/closures`,
-`…/live` (B1 positions), `…/triggers` (every close/open trigger with its position on the approach
-chain, for the observer's map — static per deploy). Both apps poll `/crossing/:id` every **10 s**:
-a berth strike can move a predicted close by over a minute and the backend recomputes within a
-tick, so the poll interval WAS the staleness. At `limit=6` that is ~1.8 MB/h per open tab, less
-than the old 30 s poll at 200.
+day — the apps display 3 and 2. `closureCount` reports how many exist so Show More still works).
+`…/closures`, `…/live` (B1 positions), `…/triggers` (every close/open trigger with its position on
+the approach chain, for the observer's map — static per deploy).
+
+Both apps poll `/crossing/:id` every **10 s**, down from 30 s: a berth strike can move a predicted
+close by over a minute and the backend recomputes within a tick of it, so the poll interval WAS
+the staleness.
+
+**Correction, measured live 2026-08-01.** This section first claimed the `limit` cap made the
+faster poll cheaper than the old one. It does not, in general — that was extrapolated from a
+3-closure sample and is wrong. A closure costs **840–1,520 bytes** depending on how many trains
+merge into it, so the cap's value depends entirely on list length: 22 closures → 18.4 KB trimmed
+to ~5 KB (10 s costs **0.8×** the old 30 s poll), 7 closures → 10.7 KB trimmed to 9.1 KB
+(**2.6×**). Worst case is ~3.3 MB/h for a tab left open; a user at the crossing for two minutes
+spends ~100 KB. If that ever needs fixing, the train objects are the place — they carry `uid`,
+`etaText`, `confidence`, `recentRunSeen` and `recentRunApplicable`, none of which either
+front-end reads.
 
 The frontend polls `GET /crossing/portslade` and renders the backend's **pre-computed** closure periods verbatim (`buildClosuresFromVps()` in `shared/crossing.js` — maps `start`/`end` to Dates and attaches only the client-side confidence window). This is deliberate: the backend owns the authoritative timing, including the TD **clear-step-anchored OPEN** and **hold-until-cleared** behaviour, which the client can't reproduce (it has only each train's `bestTime`, not the berth-step feed). There is no client-side fallback — the frontend always renders the backend's periods (`buildClosuresFromVps([])` is a no-op when the backend sends none). **Consequence:** `closeBefore`/`openAfter`/`openLagSecs` are tuned **backend-side** now (`backend/config/crossings.json` on `backend-v2` + a deploy); the `shared/crossings.json` copies feed only the client-side confidence-window / debug-panel display. Renders a state (`OPEN`, `CLOSING_SOON`, `CLOSED`).
 
