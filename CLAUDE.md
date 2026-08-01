@@ -19,6 +19,8 @@ Goals, in order of priority:
 index.html                       Landing page
 portslade/index.html             The actual app (Boundary Road)
 shared/predict.js                PREDICTION CORE — shared by BOTH apps (see below)
+shared/closure-card.js           Closure card markup — shared by BOTH apps (see below)
+shared/closure-card.css          Styles for the above; loaded by both apps
 shared/crossing.js               Public app: presentation over the core
 shared/crossings.json            Per-crossing config (timing params, IDs, feedback URL)
 shared/crossing.css              Styles
@@ -43,6 +45,30 @@ formatter over the shared position maths — "Approaching (~3 min)" for a passer
 **Do not add a second implementation of any of it.** The observer previously carried its own
 copy of the berth chain and no prediction at all, which is exactly how the two apps came to
 be able to disagree about the same crossing at the same moment.
+
+### `shared/closure-card.js` — the one exception to "presentation lives in each app"
+
+The closure card (the time/pill header plus a row per train) is rendered by **both** apps from
+this one string builder. It is the exception because the observer's whole claim is *this is what
+the public app is showing* — a second copy of the markup would let the two describe the same
+closure differently, which is the failure `predict.js` exists to prevent. `renderClosures()` in
+`crossing.js` now owns only which periods to show and the Show More control. The styles live in
+`shared/closure-card.css` (split out of `crossing.css`, which redefines `body`/`.wrap`/`.section`
+and would restyle the observer wholesale if loaded there).
+
+### Held countdowns — `closePending` / `holdingOpen` (register #14)
+
+A countdown to a physical trigger that has **not fired** is a lower bound, not a prediction. When
+a projected berth strike expires (the train is stopped, not slow), the backend serves the class's
+own lag from its own trigger — close `now + offsetSecs`, open `now + openLagSecs` — and flags it.
+The client renders "held" / "≥ 1m 40s" rather than counting down, and **never** "Soon": "Soon" now
+means only what it was designed to mean, that the trigger HAS fired and the state is catching up.
+
+`holdingOpen` additionally means **the period is still current past its `end`** — the closure ends
+when the train performs its clear step, not when a clock runs out. Three places must honour that
+or the app reports the crossing clear with a train on it: `_deriveState`, the `getApiState`
+filter, and `PREDICT.derive`. The client stops trusting the flag once the payload is >90 s old,
+so a device that has lost the backend can't sit on BARRIERS DOWN.
 
 The **frontend has no build step** — edit files, push to `main`, GitHub Pages deploys within ~1 minute.
 
@@ -92,7 +118,16 @@ backend-v2 Node service
   └─ TD STOMP feed          (live sightings join predictions for Q-freight lock; tdBerth tier-narrowing pending)
 ```
 
-The frontend polls `GET /crossing/portslade` and renders the backend's **pre-computed** closure periods verbatim (`buildClosuresFromVps()` in `shared/crossing.js` — maps `start`/`end` to Dates and attaches only the client-side confidence window). This is deliberate: the backend owns the authoritative timing, including the TD **clear-step-anchored OPEN** and **hold-until-cleared** behaviour, which the client can't reproduce (it has only each train's `bestTime`, not the berth-step feed). There is no client-side fallback — the frontend always renders the backend's periods (`buildClosuresFromVps([])` is a no-op when the backend sends none). **Consequence:** `closeBefore`/`openAfter`/`openLagSecs`/`consecutiveWindow` are tuned **backend-side** now (`backend/config/crossings.json` on `backend-v2` + a deploy); the `shared/crossings.json` copies feed only the client-side confidence-window / debug-panel display. Renders a state (`OPEN`, `CLOSING_SOON`, `CLOSED`).
+**Endpoints:** `GET /crossing/:id` (state + closures; `?limit=` defaults to **6**, not the whole
+day — the apps display 3 and 2, and the old 200-period response was 18.4 KB of which 89% was
+never looked at. `closureCount` reports how many exist so Show More still works). `…/closures`,
+`…/live` (B1 positions), `…/triggers` (every close/open trigger with its position on the approach
+chain, for the observer's map — static per deploy). Both apps poll `/crossing/:id` every **10 s**:
+a berth strike can move a predicted close by over a minute and the backend recomputes within a
+tick, so the poll interval WAS the staleness. At `limit=6` that is ~1.8 MB/h per open tab, less
+than the old 30 s poll at 200.
+
+The frontend polls `GET /crossing/portslade` and renders the backend's **pre-computed** closure periods verbatim (`buildClosuresFromVps()` in `shared/crossing.js` — maps `start`/`end` to Dates and attaches only the client-side confidence window). This is deliberate: the backend owns the authoritative timing, including the TD **clear-step-anchored OPEN** and **hold-until-cleared** behaviour, which the client can't reproduce (it has only each train's `bestTime`, not the berth-step feed). There is no client-side fallback — the frontend always renders the backend's periods (`buildClosuresFromVps([])` is a no-op when the backend sends none). **Consequence:** `closeBefore`/`openAfter`/`openLagSecs` are tuned **backend-side** now (`backend/config/crossings.json` on `backend-v2` + a deploy); the `shared/crossings.json` copies feed only the client-side confidence-window / debug-panel display. Renders a state (`OPEN`, `CLOSING_SOON`, `CLOSED`).
 
 **TLS** is auto-provisioned by Caddy via Let's Encrypt (HTTP-01 challenge). The DuckDNS subdomain (`railcrossing.duckdns.org`) is kept alive by a cron on the VPS that hits the DuckDNS update endpoint every 5 minutes. The DuckDNS token lives in that crontab.
 
@@ -256,7 +291,7 @@ starting a watch; the ordering of its first phase matters (start recording befor
 
 ## Common tasks — quick reference
 
-- **Tweak timing parameters**: edit `backend/config/crossings.json` on `backend-v2` (`closeBefore` / `openAfter` / `openLagSecs` / `consecutiveWindow`) and deploy — the frontend renders the backend's closures. (`shared/crossings.json` feeds only the client-side confidence-window / debug-panel display.)
+- **Tweak timing parameters**: edit `backend/config/crossings.json` on `backend-v2` (`closeBefore` / `openAfter` / `openLagSecs` / `closeTrigger`) and deploy — the frontend renders the backend's closures. (`shared/crossings.json` feeds only the client-side confidence-window / debug-panel display.)
 - **Change closure logic**: backend `_computeClosures()` / `_anchorEndToClearStep()` in `backend/src/crossing-state.js` (authoritative); frontend just maps them via `buildClosuresFromVps()` in `shared/crossing.js`.
 - **Change direction detection**: it's backend-side now — `analyseRoute()` in `backend/src/schedule-parser.js` (CIF) and the LDB poller. The frontend just reads `t.direction`.
 - **Change rendering / status**: `renderClosures()`, `updateStatus()` in `shared/crossing.js` — but the values themselves come from `PREDICT.derive` in `shared/predict.js`, and the observer renders the same ones. Change the numbers in the core, the presentation in the app.
@@ -274,5 +309,10 @@ starting a watch; the ordering of its first phase matters (start recording befor
 ## Active work / pending items
 
 - **Confidence-tier narrowing via TD berth state** — TD sightings now flow into predictions (`tdSeen`/`tdSeenAt` on each CIF train) and drive the late-minute lock for Q-freight, but the per-berth `tdBerth` field (approach/protecting/clear) is still not populated. Setting it would unlock the ±90s → ±60s → ±30s → "imminent" confidence-window narrowing. This **position-based triggering** is intended to replace the `areaEntryLeadSecs` projection wholesale, which is why those lead values are not worth tuning.
-- Ongoing calibration of `closeBefore` / `openAfter` / `consecutiveWindow` from feedback data
+- Ongoing calibration of `closeBefore` / `openAfter` / `closeTrigger` offsets from feedback data
+- `consecutiveWindow` was REMOVED from the Portslade config on 2026-08-01: it is the legacy
+  grouping window and has been dead since `mergeOppositeMaxGapSecs` shipped, but it sat in both
+  config files and in this list looking tunable. The legacy path defaults it, so a crossing that
+  omits it still works. The live merge window is `mergeOppositeMaxGapSecs` — see register #16,
+  it is the one number in that config with no provenance.
 - Potential expansion to more crossings once Portslade architecture is validated

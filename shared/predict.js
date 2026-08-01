@@ -48,10 +48,23 @@
     if (!rough) return 'in ' + fmtCountdown(ms);
     return ms < 60000 ? 'in under a minute' : 'in ' + fmtCountdownRough(ms);
   }
-  // A countdown that has reached/passed zero but whose state hasn't advanced yet
-  // (waiting on the berth strike, or a train running later than its live estimate)
-  // reads "Soon" rather than "0s" / "NOW" or a negative value.
+  // A countdown that has reached/passed zero but whose state hasn't advanced yet reads
+  // "Soon" rather than "0s" / "NOW" or a negative value.
+  //
+  // After register #14 this is a much narrower case than it was. It used to be reached by
+  // any train whose projected trigger had quietly expired — a train STOPPED short of the
+  // crossing would show "Soon", i.e. "the barrier is about to drop", when the truth was the
+  // opposite: nothing was going to happen for at least a hundred seconds. The backend now
+  // holds such a countdown at a lower bound and flags it (see fmtHeld), so "Soon" is left
+  // meaning only what it was designed to mean: the trigger HAS fired and we are inside the
+  // gap before the state catches up.
   function fmtSoon(ms) { return ms <= 0 ? 'Soon' : fmtCountdown(ms); }
+  // A countdown whose trigger has NOT fired. The value is a lower bound recomputed against
+  // now, so it does not tick down — rendering it as a bare countdown would read as a hung
+  // clock. Prefixed instead, and the caller pairs it with a "held" note.
+  function fmtHeld(ms) { return ms <= 0 ? 'held' : '≥ ' + fmtCountdown(ms); }
+  // The countdown for a close/open card: held bound or live countdown, whichever applies.
+  function fmtEta(ms, held) { return held ? fmtHeld(ms) : fmtSoon(ms); }
   // A duration (not a countdown) — reads as a length of time, to the nearest 10 s:
   // "~50s", "~2m 40s", "~3m". Ten seconds is about the resolution the underlying
   // prediction can honestly support, so don't tighten it without better calibration.
@@ -121,7 +134,16 @@
       var p = { start: new Date(c.start), predictedStart: new Date(c.predictedStart || c.start), end: new Date(c.end), trains: mapped,
                 // Backend flag: this close is anchored to a physical berth strike, not a
                 // timetable estimate. Absent on older payloads, so default false.
-                closeConfirmed: !!c.closeConfirmed };
+                closeConfirmed: !!c.closeConfirmed,
+                // Register #14. The corresponding time is a HELD LOWER BOUND, not a
+                // prediction: the physical trigger has not fired and the projection of it
+                // has expired, so the backend is saying "no sooner than this", recomputed
+                // against now. closePending -> render the close as held, don't count it
+                // down. holdingOpen -> ALSO keep treating the period as current past its
+                // end (see derive), because the closure ends when the train performs its
+                // clear step, not when the clock runs out. Both absent on older payloads.
+                closePending: !!c.closePending,
+                holdingOpen: !!c.holdingOpen };
       p.window = getWindowTier(p, cfg);
       periods.push(p);
     }
@@ -203,25 +225,58 @@
   // about how to phrase it and no DOM. Returns
   //   { status, current, upcoming, nextCloseTime, nextOpenTime, downForMs, downForRange }
   // status is the backend's vocabulary: OPEN | CLOSING_SOON | CLOSED.
-  function derive(periods, now) {
+  // How stale the backend payload may be while we still honour holdingOpen. A held period
+  // has no meaningful end — it lasts until the train clears — so a device that has lost the
+  // backend would otherwise sit on BARRIERS DOWN indefinitely. Past this we fall back to the
+  // clock. 90s matches the threshold the observer already marks its own feed bad at.
+  var HOLD_TRUST_MS = 90000;
+
+  function derive(periods, now, payloadAgeMs) {
     var t = (now || new Date()).getTime();
+    var trustHold = !(payloadAgeMs > HOLD_TRUST_MS);
     var current = null, upcoming = null;
     periods = periods || [];
     for (var i = 0; i < periods.length; i++) {
       var p = periods[i];
       // Find BOTH the current closure and the next upcoming one (don't stop at the
       // current) — so while CLOSED we can still show the countdown to the next close.
-      if (!current && t >= p.start.getTime() && t <= p.end.getTime()) { current = p; }
+      //
+      // The end test is `holdingOpen ? still down : clock` (register #14). A period whose
+      // end is a held bound has NOT finished when that bound passes: the train has not
+      // performed its clear step, so the barrier is physically still down. Testing the
+      // clock alone is what reported the crossing CLEAR with a train on it — the failure
+      // the backend's flat 60s end floor existed to paper over.
+      var stillDown = (p.holdingOpen && trustHold) || t <= p.end.getTime();
+      if (!current && t >= p.start.getTime() && stillDown) { current = p; }
       else if (!upcoming && p.start.getTime() > t) { upcoming = p; }
     }
     var out = { status: 'OPEN', current: current, upcoming: upcoming,
-                nextCloseTime: null, nextOpenTime: null, downForMs: null, downForRange: null };
+                nextCloseTime: null, nextOpenTime: null, downForMs: null, downForRange: null,
+                // Is the corresponding countdown a held lower bound rather than a live
+                // prediction? Presentation reads these; the numbers are unchanged.
+                closeHeld: false, openHeld: false,
+                // Invariants the backend is supposed to guarantee. Populated rather than
+                // silently repaired: the observer exists to surface a disagreement between
+                // the two apps and the backend, and quietly clamping here would hide
+                // exactly the class of bug it is deployed to catch. The public app ignores
+                // them.
+                warnings: [] };
     if (current) {
       out.status = 'CLOSED';
       out.nextOpenTime = current.end;
+      out.openHeld = !!current.holdingOpen;
       // Even while down, surface the countdown to the NEXT closure if another is coming
       // (back-to-back closures are a useful heads-up). Targets the predicted close.
-      if (upcoming) out.nextCloseTime = upcoming.predictedStart || upcoming.start;
+      if (upcoming) {
+        out.nextCloseTime = upcoming.predictedStart || upcoming.start;
+        out.closeHeld = !!upcoming.closePending;
+        // Register #15: the barrier cannot drop before it has risen. The backend now
+        // coalesces periods whose anchored ends overlap, so this should be unreachable —
+        // which is the reason to report it rather than assume it.
+        if (out.nextCloseTime.getTime() < current.end.getTime()) {
+          out.warnings.push('next close precedes current open');
+        }
+      }
       // "Down For" describes the closure we're IN — it pairs with Next Open.
       setDownFor(out, current);
     } else if (upcoming) {
@@ -230,8 +285,11 @@
       var closeTarget = upcoming.predictedStart || upcoming.start;
       out.nextCloseTime = closeTarget;
       out.nextOpenTime = upcoming.end;
+      out.closeHeld = !!upcoming.closePending;
       setDownFor(out, upcoming);
-      if (closeTarget.getTime() - t <= CLOSING_SOON_MS) out.status = 'CLOSING_SOON';
+      // A held close is not "closing soon" — the trigger has not fired and the value is a
+      // floor, so promoting it to the amber state would claim an imminence we do not have.
+      if (!out.closeHeld && closeTarget.getTime() - t <= CLOSING_SOON_MS) out.status = 'CLOSING_SOON';
     }
     return out;
   }
@@ -475,6 +533,7 @@
     CHAIN: CHAIN, CHAININ: CHAININ,
     fmtTime: fmtTime, fmtShort: fmtShort, fmtCountdown: fmtCountdown, fmtUncertainty: fmtUncertainty,
     fmtCountdownRough: fmtCountdownRough, fmtWhen: fmtWhen, fmtSoon: fmtSoon,
+    fmtHeld: fmtHeld, fmtEta: fmtEta,
     fmtDuration: fmtDuration, fmtDownFor: fmtDownFor,
     buildClosures: buildClosures, getWindowTier: getWindowTier, parseTrains: parseTrains,
     derive: derive, stateLabel: stateLabel,

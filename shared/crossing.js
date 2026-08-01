@@ -16,6 +16,12 @@ var trainHistory = [];
 var crossingId = '';
 var lastPassedTrain = null;
 var closuresVisible = 3;
+// How many closures the backend holds (it now sends only as many as we asked for), and how
+// old the last payload is — the latter bounds how long we'll honour a holdingOpen period,
+// so a device that has lost the backend can't sit on BARRIERS DOWN forever.
+var closureTotal = 0;
+var lastPayloadAt = 0;
+var payloadAgeMs = Infinity;
 
 var isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
 var isAndroid = /Android/.test(navigator.userAgent);
@@ -56,11 +62,19 @@ async function fetchNationalRail() {
   lastError = '';
   vpsClosures = [];
   try {
-    var url = API_BASE + '/crossing/' + crossingId;
+    // Ask only for as many closures as we can currently display. The default response used
+    // to carry the whole day — 22 periods, 18.4 KB measured, of which the page shows three
+    // — and that payload was the reason the poll had to be slow. `?limit=` is what makes a
+    // 10s refresh cheaper than the old 30s one; Show More raises it (see showMoreClosures).
+    var url = API_BASE + '/crossing/' + crossingId + '?limit=' + Math.max(6, closuresVisible + 1);
     var response = await fetch(url);
     if (!response.ok) throw new Error('HTTP ' + response.status);
     var data = await response.json();
     vpsClosures = data.upcomingClosures || [];
+    // How many the backend HAS, which is no longer the same as how many it sent.
+    closureTotal = typeof data.closureCount === 'number' ? data.closureCount : vpsClosures.length;
+    payloadAgeMs = 0;
+    lastPayloadAt = Date.now();
     return parseVpsResponse(data);
   } catch(e) {
     console.error('VPS API error:', e);
@@ -142,104 +156,30 @@ async function refreshData() {
   }
 }
 
+// The card markup itself lives in shared/closure-card.js, because the observer renders the
+// SAME view and a second copy would let the two apps disagree about one closure — see the
+// note at the top of that file. This function now owns only what is specific to the public
+// app: which periods are relevant, and the Show More control.
 function renderClosures() {
   var now = new Date();
-  var relevant = [];
-  for (var i = 0; i < closurePeriods.length; i++) {
-    var p = closurePeriods[i];
-    if (p.end.getTime() > now.getTime() - 60000) relevant.push(p);
-  }
+  var relevant = CLOSURE_CARD.relevant(closurePeriods, now);
   if (!relevant.length) {
     $('closureList').innerHTML = '<div class="empty">No upcoming closures</div>';
     $('showMoreBtn').classList.add('hidden');
     return;
   }
-  var showing = Math.min(closuresVisible, relevant.length);
-  var html = '';
-  for (var i = 0; i < showing; i++) {
-    var p = relevant[i];
-    var isCurrent = now >= p.start && now <= p.end;
-    // Measure from the PREDICTED close, not the confirmed `start`. Everything the user
-    // sees (header countdown, the time on this row, the Down For card) targets the
-    // predicted close, and `start` sits earlier by the safety-net margin — measuring
-    // from it would overstate the closure and disagree with the Down For card.
-    // Formatted with fmtDuration so this pill and the "Down For" card round the same
-    // way — they were showing "~5 min" and "~4m 50s" side by side for one closure.
-    var duration = fmtDuration(p.end - (p.predictedStart || p.start)).replace('~', '');
-    html += '<div class="closure-card' + (isCurrent ? ' closure-active' : '') + '">';
-    html += '<div class="closure-hdr">';
-    if (isCurrent) {
-      html += '<span class="closure-time" style="color:#FCA5A5">NOW \u2014 ' + fmtShort(p.end) + '</span>';
-      html += '<span class="closure-pill closure-pill-active">Closed ' + duration + ' \u00B7 opens in ' + fmtCountdown(p.end.getTime() - now.getTime()) + '</span>';
-    } else {
-      var w = p.window || { imminent: false, halfWidthSecs: 120 };
-      // Show the PREDICTED close time/countdown (matches the header countdown);
-      // isCurrent above still gates on the confirmed start.
-      var pStart = p.predictedStart || p.start;
-      var secsUntil = pStart.getTime() - now.getTime();
-      if (w.imminent) {
-        html += '<div class="closure-time-group"><span class="closure-time closure-imminent">Any moment now</span></div>';
-        html += '<span class="closure-pill">Closed ' + duration + ' \u00B7 any moment now</span>';
-      } else {
-        var band = w.halfWidthSecs > 0
-          ? '<span class="closure-uncertainty">\u00B1' + fmtUncertainty(w.halfWidthSecs) + '</span>'
-          : '';
-        html += '<div class="closure-time-group"><span class="closure-time">' + fmtShort(pStart) + '</span>' + band + '</div>';
-        html += '<span class="closure-pill">Closed ' + duration + ' \u00B7 ' + fmtWhen(secsUntil, w.halfWidthSecs >= 60) + '</span>';
-      }
-    }
-    html += '</div>';
-    var hasUncertain = false;
-    for (var j = 0; j < p.trains.length; j++) {
-      if (p.trains[j].isUncertain) hasUncertain = true;
-    }
-    if (hasUncertain) {
-      html += '<div style="font-size:9px;color:#F59E0B;margin-bottom:4px">\u26A0 Timing uncertain \u2014 train delayed with no estimate</div>';
-    }
-    for (var j = 0; j < p.trains.length; j++) {
-      var t = p.trains[j];
-      var dirColor = t.direction === 'east' ? '#38BDF8' : '#FB923C';
-      var arrow = t.direction === 'east' ? '\u2192' : '\u2190';
-      var statusHtml;
-      if (t.isUncertain) {
-        statusHtml = '<span class="train-status train-status-delayed">Delayed</span>';
-      } else if (t.isDelayed && t.delayMins > 0) {
-        statusHtml = '<span class="train-status train-status-delayed">+' + t.delayMins + 'm</span>';
-      } else {
-        statusHtml = '<span class="train-status train-status-ontime">On time</span>';
-      }
-      html += '<div class="closure-train">';
-      html += '<span style="color:' + dirColor + ';font-weight:700;flex-shrink:0">' + arrow + '</span>';
-      var typeLabel = '';
-      if (t.trainType === 'freight') {
-        // Confidence ladder: TD sighting today (live confirmation) beats recent
-        // history; recent history beats schedule-only. A Q-flagged freight with
-        // a low historical run rate is the typical false-positive culprit.
-        if (t.tdSeen) {
-          typeLabel = ' (freight \u2014 confirmed)';
-        } else if (t.runsAsRequired && t.recentRunRate !== null && t.recentRunRate < 0.3) {
-          typeLabel = ' (freight \u2014 usually doesn\u2019t run)';
-        } else if (t.runsAsRequired) {
-          typeLabel = ' (freight \u2014 may not run)';
-        } else {
-          typeLabel = ' (freight)';
-        }
-      }
-      html += '<span class="closure-train-route">' + t.origin + ' \u2192 ' + t.destination + typeLabel + '</span>';
-      html += '<span class="closure-train-time">' + fmtShort(t.bestTime) + '</span>';
-      html += statusHtml;
-      html += '</div>';
-    }
-    html += '</div>';
-  }
-  $('closureList').innerHTML = html;
-  if (relevant.length > closuresVisible) {
+  $('closureList').innerHTML = CLOSURE_CARD.listHtml(closurePeriods, now, closuresVisible);
+  // "Are there more?" is now the BACKEND's count, not the length of what it sent — the
+  // response is capped at what we asked for, so `relevant.length` can no longer answer it
+  // and Show More would have hidden itself the moment the cap bound.
+  var haveMore = Math.max(closureTotal, relevant.length);
+  if (haveMore > closuresVisible) {
     $('showMoreBtn').textContent = 'Show More';
     $('showMoreBtn').classList.remove('hidden');
     $('showMoreBtn').disabled = false;
     $('showMoreBtn').style.opacity = '';
     $('showMoreBtn').style.cursor = '';
-  } else if (closuresVisible > 3 && closuresVisible >= relevant.length && relevant.length > 0) {
+  } else if (closuresVisible > 3 && closuresVisible >= haveMore && relevant.length > 0) {
     $('showMoreBtn').textContent = 'Return later for further closures';
     $('showMoreBtn').classList.remove('hidden');
     $('showMoreBtn').disabled = true;
@@ -252,30 +192,46 @@ function renderClosures() {
 
 function showMoreClosures() {
   closuresVisible += 5;
+  // The backend now sends only what we asked for, so "show more" needs more fetching, not
+  // just more rendering. Refresh immediately rather than waiting for the next tick.
   renderClosures();
+  refreshData();
 }
 
 function updateStatus() {
   var now = new Date();
   var t = now.getTime();
+  payloadAgeMs = lastPayloadAt ? (t - lastPayloadAt) : Infinity;
   // THE prediction — the same call the observer app makes, so the two can never show a
   // different state for the same moment. Everything below this line is presentation.
-  var pr = PREDICT.derive(closurePeriods, now);
+  var pr = PREDICT.derive(closurePeriods, now, payloadAgeMs);
   var status = pr.status, msg = 'No upcoming closures found';
   var currentClosure = pr.current, upcoming = pr.upcoming;
   nextCloseTime = pr.nextCloseTime; nextOpenTime = pr.nextOpenTime;
   downForMs = pr.downForMs; downForRange = pr.downForRange;
   if (currentClosure) {
     var openMs = currentClosure.end.getTime() - t;
-    msg = 'Barriers likely DOWN. ' + (openMs <= 0 ? 'Reopens soon' : 'Reopens in ~' + fmtCountdown(openMs));
-    $('statusTime').textContent = 'Opens ~' + fmtShort(currentClosure.end);
+    // A held open has no time to reopen at — the train hasn't cleared the crossing, so we
+    // genuinely don't know. Say that rather than counting down to a bound (register #14).
+    if (pr.openHeld) {
+      msg = 'Barriers likely DOWN. Waiting for the train to clear';
+      $('statusTime').textContent = 'Opens once the train is clear';
+    } else {
+      msg = 'Barriers likely DOWN. ' + (openMs <= 0 ? 'Reopens soon' : 'Reopens in ~' + fmtCountdown(openMs));
+      $('statusTime').textContent = 'Opens ~' + fmtShort(currentClosure.end);
+    }
     $('statusTime').classList.remove('hidden');
     $('statusCard').classList.add('pulse');
   } else {
     $('statusCard').classList.remove('pulse');
     if (upcoming) {
       var ms = nextCloseTime.getTime() - t;
-      if (status === 'CLOSING_SOON') { msg = ms <= 0 ? 'Closing soon' : 'Closing in ~' + fmtCountdown(ms); }
+      // Held: a train is stopped short of the point that triggers the barrier, so the
+      // countdown is a floor, not a prediction. Deliberately worded WITHOUT the berth —
+      // "0006" means nothing to someone at the roadside. The observer, which is a field
+      // tool, does name it.
+      if (pr.closeHeld) { msg = 'Train held on approach. No closure for at least ' + fmtCountdown(Math.max(0, ms)); }
+      else if (status === 'CLOSING_SOON') { msg = ms <= 0 ? 'Closing soon' : 'Closing in ~' + fmtCountdown(ms); }
       else { msg = 'Next closure in ~' + fmtCountdown(ms); }
     } else { msg = 'No more closures expected today'; }
     $('statusTime').classList.add('hidden');
@@ -301,9 +257,11 @@ function updateStatus() {
     stripes.forEach(function(s) { s.setAttribute('fill', '#15803d'); });
     la.setAttribute('opacity', '0'); la.className = ''; lb.setAttribute('opacity', '0'); lb.className = '';
   }
-  if (nextCloseTime) { $('nextCloseCountdown').textContent = fmtSoon(nextCloseTime.getTime() - t); $('nextCloseCountdown').style.color = '#F59E0B'; $('nextCloseTime').textContent = fmtShort(nextCloseTime); }
+  // fmtEta renders a held value as "≥ 1m 40s" and a live one as the plain countdown; the
+  // sub-line drops the clock time when held, because a bound has no clock time to show.
+  if (nextCloseTime) { $('nextCloseCountdown').textContent = PREDICT.fmtEta(nextCloseTime.getTime() - t, pr.closeHeld); $('nextCloseCountdown').style.color = pr.closeHeld ? '#94A3B8' : '#F59E0B'; $('nextCloseTime').textContent = pr.closeHeld ? 'train held' : fmtShort(nextCloseTime); }
   else { $('nextCloseCountdown').textContent = '--'; $('nextCloseCountdown').style.color = '#475569'; $('nextCloseTime').textContent = ''; }
-  if (nextOpenTime) { $('nextOpenCountdown').textContent = fmtSoon(nextOpenTime.getTime() - t); $('nextOpenCountdown').style.color = '#16A34A'; $('nextOpenTime').textContent = fmtShort(nextOpenTime); }
+  if (nextOpenTime) { $('nextOpenCountdown').textContent = PREDICT.fmtEta(nextOpenTime.getTime() - t, pr.openHeld); $('nextOpenCountdown').style.color = pr.openHeld ? '#94A3B8' : '#16A34A'; $('nextOpenTime').textContent = pr.openHeld ? 'until train clears' : fmtShort(nextOpenTime); }
   else { $('nextOpenCountdown').textContent = '--'; $('nextOpenCountdown').style.color = '#475569'; $('nextOpenTime').textContent = ''; }
   if (downForMs !== null && downForMs > 0) { $('closureLength').textContent = fmtDownFor(downForMs); $('closureLength').style.color = '#94A3B8'; $('closureLengthSub').textContent = downForRange; }
   else { $('closureLength').textContent = '--'; $('closureLength').style.color = '#475569'; $('closureLengthSub').textContent = ''; }
@@ -658,5 +616,10 @@ async function initCrossing(id) {
   setRefreshState('idle');
   refreshData();
   setInterval(updateStatus, 1000);
-  setInterval(refreshData, 30000);
+  // 10s, not 30s. A berth strike can move a predicted close by over a minute (one measured
+  // at −74s the instant the train struck its first chain berth), and the backend recomputes
+  // within a tick of the strike — so the poll interval WAS the staleness. It got cheaper at
+  // the same time: ?limit= dropped the response from ~18.4 KB to ~5 KB, so 10s costs about
+  // 1.8 MB/h per open tab against 2.2 MB/h for the old 30s poll. Faster and cheaper.
+  setInterval(refreshData, 10000);
 }
