@@ -76,9 +76,21 @@ console.log('\nB1 — live-position map\n');
   check('9Z99 direction "unknown" (no match)', byHc['9Z99'] && byHc['9Z99'].direction, 'unknown');
   check('9Z99 stopping "unknown"', byHc['9Z99'] && byHc['9Z99'].stopping, 'unknown');
 
-  // Stale entry pruned (and removed from the underlying map).
+  // Stale for DISPLAY — filtered out of the response.
   check('5S00 pruned past TTL', '5S00' in byHc, false);
-  check('liveTrains map pruned to 3', s.liveTrains.size, 3);
+  // ...but STILL IN THE MAP. This assertion used to be `s.liveTrains.size === 3`, i.e. it
+  // asserted that serving the endpoint deleted it. That was register #14: getLiveTrains is
+  // a read, the CLOSED gate (_upstreamOfAnchor) reads the same map on a much longer horizon,
+  // and the observer polls /live every 2.5s — so serving the observer destroyed the position
+  // evidence the gate needed, and the app fired CLOSED with no trigger. Whether it did so
+  // depended on whether anyone had the observer open.
+  check('the read does NOT mutate the map', s.liveTrains.size, 4);
+  checkTruthy('5S00 still remembered for the CLOSED gate', s.liveTrains.has('5S00'));
+  // Pruning happens on the WRITE path instead, at the longest horizon any reader uses
+  // (max of the display TTL and the 20-min strike TTL).
+  s.recordTdBerth({ headcode: '1A11', ts: BASE + 25 * 60000, event: 'CA', from: '0006', to: '0004' });
+  check('a later write prunes past the 20-min horizon', s.liveTrains.has('5S00'), false);
+  checkTruthy('...and keeps the entry that wrote it', s.liveTrains.has('1A11'));
 }
 
 // Latest berth wins on a subsequent step.

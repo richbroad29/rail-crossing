@@ -70,22 +70,40 @@ const CLOSE_STRIKE_TTL_MS = 20 * 60 * 1000;
 // Max berth-strike steps retained per train in the B1 live map (feeds the feedback
 // picker's calibration capture). Bounded so a long-dwelling headcode can't grow it.
 const BERTH_HISTORY_MAX = 30;
-// While a TD-sighted train has NOT yet performed its clear step, the closure must
-// never end (the train hasn't physically cleared). Its end is floored this far into
-// the future so the barrier stays closed/pending until the real clear step lands.
-// Bounded in practice by the merged-list drop grace, so a sighted no-show can't hold
-// the barrier indefinitely.
-const OPEN_HOLD_FLOOR_MS = 60 * 1000;
 // --- Last-known train cache (see this.knownTrains) ---
 // How long a train's record stays available after its source last reported it. Long
 // enough to cover a feedback tap well after the train has gone, bounded so a headcode
 // reused later in the day can't resolve to this morning's working.
 const KNOWN_TRAIN_TTL_MS = 45 * 60 * 1000;
-// Mirror of OPEN_HOLD_FLOOR_MS for the close side: while TD shows a train still short
-// of its close-anchor berth, the gated (CLOSED) onset is held this far into the future
-// so a drifting bestTime can't close the barrier for a train we can see isn't there.
-// Short, because it must release promptly once the train does reach the anchor.
-const CLOSE_HOLD_FLOOR_MS = 30 * 1000;
+// How many closure periods getApiState returns by default. Was 200 — effectively the whole
+// day, 18.4 KB measured, of which the apps display three (public, expandable) and two
+// (observer). 89% of every poll was periods nobody was going to look at, and that payload
+// is what made a fast poll expensive: at 200 a 10s poll costs 6.6 MB/h per open tab, at 6
+// it costs 1.8 MB/h — less than the old 30s poll while refreshing three times as often.
+// `?limit=` raises it for "Show More"; `closureCount` tells the client how many exist.
+const DEFAULT_CLOSURE_LIMIT = 6;
+
+// --- HELD countdowns (register #14) -------------------------------------------------
+//
+// There used to be two constants here: OPEN_HOLD_FLOOR_MS (60s) and CLOSE_HOLD_FLOOR_MS
+// (30s), floors on how close to `now` a predicted open/close was allowed to sit while we
+// waited for the physical trigger. Both are gone, and nothing replaces them with another
+// number, because the right value was never arbitrary — it was already measured and
+// already in the config:
+//
+//   close  cannot happen sooner than closeTrigger.<dir>.classes.<class>.offsetSecs after
+//          an anchor strike that has not happened yet   (east 20-100s, west 10-61s)
+//   open   cannot happen sooner than openLagSecs[<dir>][<class>] after a clear step that
+//          has not happened yet                         (east 35/70s, west 18/30s)
+//
+// Both are the class's own lag from its own trigger, so a held countdown reads as a real
+// lower bound and joins continuously to the live value the instant the trigger fires
+// (strike + offset ~= now + offset). See _closeTimeInfo and _periodEndInfo.
+//
+// What made the old floors load-bearing was not the countdown but the STATE: a period
+// whose `end` slipped into the past stopped being current in three separate places and
+// the app declared the crossing clear with a train still on it. That is now gated on the
+// clear step rather than on the clock — see the holdingOpen flag and its three readers.
 
 class CrossingState {
   constructor(crossingId, config) {
@@ -138,6 +156,13 @@ class CrossingState {
     // were being lost for precisely the events that need them. _matchKnownTrain falls back
     // here so they survive the departure.
     this.knownTrains = new Map();
+
+    // "prevHeadcode|nextHeadcode" → ts(ms) of a boundary the overlap pass has already
+    // coalesced. Hysteresis for _coalesceOverlapping: a pair we have merged stays merged
+    // until the barrier is KNOWN to have lifted between them, so the grouping cannot flap
+    // as the two moving estimates either side of it drift past each other. TTL-pruned on
+    // write. See _coalesceOverlapping for why a physical event, not a threshold.
+    this.coalescedPairs = new Map();
 
     // Computed state
     this.closurePeriods = [];
@@ -255,6 +280,14 @@ class CrossingState {
       lastSeen: ms,
       history
     });
+    // Prune HERE, on the write, and at the longest horizon any reader uses — not in
+    // getLiveTrains, which is a read that two different consumers make for two different
+    // reasons (register #14). The map is now a position MEMORY; each reader applies its own
+    // tolerance: display and projection want a fresh position (live.ttlSecs, 240s), the
+    // CLOSED gate wants to know whether a strike has been missed and is happy with a much
+    // older one (CLOSE_STRIKE_TTL_MS, 20 min). Pruning at the shorter of those inside a read
+    // is what let a /live poll change what the prediction said.
+    this._pruneLiveTrains(ms);
     // Register #13. The projection is computed FROM this map (_strikeOrProjection ->
     // _chainIndex -> liveTrains), so a step that moves a train along its approach chain has
     // just made a sharper estimate available. Without this the new position waited for the
@@ -359,6 +392,15 @@ class CrossingState {
     return !!(cfg && cfg.approach && cfg.approach.from === berth);
   }
 
+  // Drop remembered positions past the longest horizon any reader uses. Called on the
+  // write path only — see the note in recordTdBerth for why not on read.
+  _pruneLiveTrains(nowMs) {
+    const horizon = Math.max(this._getLiveTtlMs(), CLOSE_STRIKE_TTL_MS);
+    for (const [headcode, t] of this.liveTrains) {
+      if (nowMs - t.lastSeen > horizon) this.liveTrains.delete(headcode);
+    }
+  }
+
   _pruneCloseStrikes(nowMs) {
     for (const [key, s] of this.closeStrikeSeen) {          // key is `headcode|berth`
       if (nowMs - s.ts > CLOSE_STRIKE_TTL_MS) this.closeStrikeSeen.delete(key);
@@ -428,11 +470,17 @@ class CrossingState {
   //  - stopping: true if the train is on the PLD LDB board (boards only list
   //    calling services); otherwise "unknown" — never false (a non-stopping
   //    fast simply isn't on the board, so absence ≠ non-stopping).
+  // A READ. It must not mutate this.liveTrains — see _upstreamOfAnchor. This loop used to
+  // delete entries past the display TTL, which meant serving GET /crossing/:id/live (every
+  // 2.5s from the observer) destroyed the position evidence the CLOSED gate depends on, and
+  // the app's behaviour changed according to whether anyone had the observer open. Filtering
+  // here, pruning on the write path (recordTdBerth), and each reader applying its own
+  // staleness tolerance is the whole fix (register #14).
   getLiveTrains(now = Date.now()) {
     const ttl = this._getLiveTtlMs();
     const out = [];
     for (const [headcode, t] of this.liveTrains) {
-      if (now - t.lastSeen > ttl) { this.liveTrains.delete(headcode); continue; }
+      if (now - t.lastSeen > ttl) continue;               // stale for DISPLAY; still remembered
       const match = this._matchKnownTrain(headcode);
       // On the board now, or on it when we last saw this train — an LDB-sourced cached
       // record is proof it was a calling service, so a departure shouldn't downgrade a
@@ -735,7 +783,13 @@ class CrossingState {
   // copies that could drift, and nothing outside could ask "which class did you use?". It is
   // now also surfaced on the B1 live feed so a barrier observation is recorded against the
   // class the predictor picked, rather than one re-derived afterwards by an analyst.
+  // `forceClass` is the introspection path, used by getTriggers to ask "what would this rule
+  // be FOR class X" without a real train to classify. Explicit, because the alternative was
+  // a stub object shaped to fall through the heuristics into the class you wanted — which
+  // silently resolved every eastbound class to `fast` when first written, and would have
+  // put four of the five map markers in the wrong place.
   _classOf(t) {
+    if (t.forceClass) return t.forceClass;
     if (t.direction === 'east') return this._eastClass(t);
     if (this._isStopping(t)) return 'stopping';
     return t.trainType === 'freight' ? 'freight' : t.trainType === 'ecs' ? 'ecs' : 'fast';
@@ -763,8 +817,22 @@ class CrossingState {
   // gives a fresher origin and a tighter spread, and the projection is replaced outright
   // by the real event once it happens.
   //
-  // Returns { ts, sdSecs, projected:true, from } or null when we can't project — no live
-  // position, no transit sample, or the train is already past `berth`.
+  // Returns { ts, sdSecs, projected:true, expired, from } or null when we can't project —
+  // no live position, no transit sample, or the train is already past `berth`.
+  //
+  // `expired` is the difference between a projection and a strike, and it is why the close
+  // countdown used to walk through zero with no trigger behind it (register #14). A recorded
+  // strike is monotone: it happened, and nothing can falsify it. A projection has a shelf
+  // life — the instant `now` passes it with no strike, the train has falsified it BY NOT
+  // ARRIVING, and continuing to serve it means serving a time in the past. Measured on the
+  // 0008 dwell: median 71s, sd 14, so a train still there at 180s is 7.8 sd out. It is not
+  // running late, it is STOPPED, and there is nothing in the data that says when it will
+  // move. Callers must not fabricate one — see _closeTimeInfo / _periodEndInfo, which
+  // switch to the class's own lower bound and say so.
+  //
+  // `ts` is left UNTOUCHED when expired, deliberately: _mergeTrains drives the
+  // late-runner drop rule off it (projected + SIGHTING_DROP_GRACE_MS), and that grace is
+  // what stops a held closure lasting forever. Flooring ts here would extend it.
   _projectBerth(t, berth, now) {
     if (!t.headcode) return null;
     const live = this.liveTrains.get(t.headcode);
@@ -773,7 +841,8 @@ class CrossingState {
     if (live.berth === berth) return null;              // already there; caller wants the real strike
     const cell = this._transit(t, live.berth, berth);
     if (!cell) return null;
-    return { ts: live.lastSeen + cell.secs * 1000, sdSecs: cell.sdSecs, projected: true, from: live.berth };
+    const ts = live.lastSeen + cell.secs * 1000;
+    return { ts, sdSecs: cell.sdSecs, projected: true, expired: ts < now.getTime(), from: live.berth };
   }
 
   // The strike a prediction should use for `berth`: the real one if it has happened,
@@ -845,12 +914,60 @@ class CrossingState {
   //  - WEST stopping passenger → max(strike + minAfterStrikeSecs, departure − 45s);
   //    before the strike, departure − 45s. bestTime IS the LDB departure for westbound.
   //  - WEST freight / non-stopping → strike+otherSecs; before the strike, bestTime − closeBefore.west.
+  //
+  // Thin wrapper over _closeTimeInfo, which carries the `held` flag alongside the time.
+  // Kept because several callers only want the Date, and re-deriving `held` at each of
+  // them would be the same predicate written four times.
   _computeCloseTime(t, now) {
+    return this._closeTimeInfo(t, now).at;
+  }
+
+  // { at: Date, held: bool }. `held` means the anchor strike has NOT happened and the
+  // projection of it has expired, so `at` is a LOWER BOUND (now + the class's own offset),
+  // not a prediction — the client renders it as "held" rather than counting it down.
+  _closeTimeInfo(t, now) {
     const ct = this.timing && this.timing.closeTrigger;
-    const cbFallback = () => new Date(t.bestTime.getTime() - this._getCloseBefore(t.direction) * 60000);
+    const cbFallback = () => ({ at: new Date(t.bestTime.getTime() - this._getCloseBefore(t.direction) * 60000), held: false });
     if (!ct) return cbFallback();
 
     const stopping = this._isStopping(t);
+
+    // Apply a class offset to its anchor. Three cases, and the third is register #14:
+    //   real strike       -> strike + offset. Known to the second, monotone, not held.
+    //   live projection   -> projected strike + offset. A genuine prediction; it sharpens
+    //                        on every berth step and is replaced by the real strike.
+    //   EXPIRED projection-> the train should have struck by now and hasn't, so we no longer
+    //                        know when it will. Serve the only remaining true statement —
+    //                        the close cannot come sooner than `offset` after a strike, and
+    //                        the strike has not happened — and flag it as a bound.
+    // The third case joins continuously to the first: holding at now+offset means that when
+    // the strike finally lands, strike+offset is where the countdown already was.
+    const anchored = (struck, offsetSecs, floorSecs) => {
+      const held = !!(struck && struck.expired);
+      const base = held ? now.getTime() : struck.ts;
+      return {
+        at: new Date(Math.max(base + offsetSecs * 1000, base + (floorSecs || 0) * 1000)),
+        held
+      };
+    };
+
+    // Final guard on every UNSTRUCK fall-back path below, and the last hole in #14.
+    // `anchored` above only fires when we can still project; once the position is older
+    // than the live TTL _projectBerth returns null rather than an expired projection, so
+    // the code dropped to the timetable lead — and for a train held long enough, that lead
+    // is already in the past, which is the "Soon with no trigger" symptom all over again
+    // (reproduced at a 300s dwell). But we have not actually lost the train: the CLOSED
+    // gate can still place it short of its anchor for a full 20 minutes. Whenever it can,
+    // the same bound holds — no strike means no close for at least the class's own offset.
+    const boundIfUpstream = (info) => {
+      if (info.held) return info;
+      const spec = this._closeAnchor(t);
+      if (!spec || typeof spec.offsetSecs !== 'number') return info;
+      if (this._freshStrike(t, now, spec.berth)) return info;
+      if (!this._upstreamOfAnchor(t, now)) return info;   // can't place it ⇒ no claim to make
+      const floor = now.getTime() + spec.offsetSecs * 1000;
+      return info.at.getTime() >= floor ? info : { at: new Date(floor), held: true };
+    };
 
     if (t.direction === 'east') {
       const c = ct.east || {};
@@ -860,7 +977,7 @@ class CrossingState {
         // now. Either way the SAME rule runs on it, so recalibrating offsetSecs moves the
         // projection with it — the engine is the close logic, fed an estimated input.
         const struck = this._strikeOrProjection(t, anchor.berth, now);
-        if (struck) return new Date(struck.ts + anchor.offsetSecs * 1000);
+        if (struck) return anchored(struck, anchor.offsetSecs);
       } else {
         // Legacy flat config: one approach berth, class picked by type only. Projected
         // too, so a crossing on the older config shape gets the same sharpening.
@@ -868,13 +985,13 @@ class CrossingState {
         const secs = t.trainType === 'freight' ? c.freightSecs
                    : (t.trainType === 'passenger' && stopping) ? c.stoppingSecs
                    : c.otherSecs;                        // non-stopping / ECS / unknown
-        if (struck && typeof secs === 'number') return new Date(struck.ts + secs * 1000);
+        if (struck && typeof secs === 'number') return anchored(struck, secs);
       }
       // Pre-strike east prediction leads the crossing by predictedLeadSecs (measured
       // ~2–3.5 min), not closeBefore — so the countdown doesn't lurch when the strike lands.
       const lead = typeof c.predictedLeadSecs === 'number' ? c.predictedLeadSecs
                  : this._getCloseBefore('east') * 60;
-      return new Date(t.bestTime.getTime() - lead * 1000);
+      return boundIfUpstream({ at: new Date(t.bestTime.getTime() - lead * 1000), held: false });
     }
 
     // ---- west: berth-anchored per class, same shape as east (register #12) --------------
@@ -915,8 +1032,7 @@ class CrossingState {
         // projection carries error, so this stops a close landing on top of, or before, the
         // strike that anchored it. It BINDS for fast (2s -> 10s), which is deliberate: at that
         // margin our own pipeline latency is the larger term anyway.
-        const at = struck.ts + anchor.offsetSecs * 1000;
-        return new Date(Math.max(at, struck.ts + (c.minAfterStrikeSecs || 0) * 1000));
+        return anchored(struck, anchor.offsetSecs, c.minAfterStrikeSecs);
       }
     }
 
@@ -932,20 +1048,34 @@ class CrossingState {
     const lead = isDeparture
       ? (typeof c.predictedDepartureLeadSecs === 'number' ? c.predictedDepartureLeadSecs : null)
       : (typeof c.crossingLeadSecs === 'number' ? c.crossingLeadSecs : null);
-    if (lead !== null) return new Date(t.bestTime.getTime() - lead * 1000);
-    return cbFallback();
+    if (lead !== null) return boundIfUpstream({ at: new Date(t.bestTime.getTime() - lead * 1000), held: false });
+    return boundIfUpstream(cbFallback());
   }
 
   // Where a train currently is on its direction's approach chain: the index in
   // td.<dir>.approachChain of the berth it last stepped into, or null when we don't
   // know (no live position, no chain configured, or it is somewhere else in the TD area).
-  _chainIndex(t) {
+  //
+  // `maxAgeMs` is the caller's own staleness tolerance, because the two callers want
+  // genuinely different things and conflating them was a bug (register #14). A PROJECTION
+  // needs a recent position — a 10-minute-old berth says nothing about where the train is
+  // now — so it passes the live display TTL. The CLOSED gate is asking a different
+  // question: "do we have any reason to believe the anchor strike has already happened?"
+  // A position from 10 minutes ago, with no strike recorded since, is strong evidence that
+  // it has NOT, because approach strikes miss 14 times in 15,064 crossings (0.093%). So
+  // the gate passes the strike TTL — the same window over which it would trust a strike
+  // record, since trusting the absence of one is the same fact.
+  _chainIndex(t, maxAgeMs, now) {
     const cfg = this.config && this.config.td &&
       this.config.td[t.direction === 'east' ? 'eastbound' : 'westbound'];
     const chain = cfg && cfg.approachChain;
     if (!Array.isArray(chain) || !t.headcode) return null;
     const live = this.liveTrains.get(t.headcode);
     if (!live || !live.berth) return null;
+    if (maxAgeMs != null) {
+      const nowMs = now instanceof Date ? now.getTime() : (now || Date.now());
+      if (nowMs - live.lastSeen > maxAgeMs) return null;
+    }
     const i = chain.indexOf(live.berth);
     return i === -1 ? null : i;
   }
@@ -955,7 +1085,20 @@ class CrossingState {
   // close the barrier off a timetable estimate for a train we can SEE is not there yet.
   // That is exactly what produced the 2026-07-24 21:42 false CLOSED. Unknown position ⇒
   // false (allow the backstop) — a train we cannot see must still be able to close.
-  _upstreamOfAnchor(t) {
+  //
+  // Register #14: this gate used to be decided by WHO HAD CALLED THE API. It read
+  // liveTrains, and getLiveTrains DELETED entries past the 240s display TTL as a side
+  // effect of serving GET /crossing/:id/live — which the observer polls every 2.5s. So a
+  // train held short of its anchor for over 4 minutes stopped being "visibly upstream",
+  // the gate opened, and CLOSED fired off bestTime with no strike anywhere — but only if
+  // someone happened to have the observer open. Reproduced deterministically before the
+  // fix. Now: the read no longer mutates (see getLiveTrains), and this asks for the
+  // position on the strike TTL rather than the display TTL.
+  //
+  // Deliberately NO timer on the hold. It releases on the train's own next berth step —
+  // the moment it reaches the anchor, hereIdx stops being upstream and the strike lands
+  // anyway — so a held closure resolves itself on a physical event rather than expiring.
+  _upstreamOfAnchor(t, now) {
     const anchor = this._closeAnchor(t);
     const berth = anchor ? anchor.berth : this._approachBerth(t.direction);
     if (!berth) return false;
@@ -963,7 +1106,7 @@ class CrossingState {
     const chain = cfg && cfg.approachChain;
     if (!Array.isArray(chain)) return false;
     const anchorIdx = chain.indexOf(berth);
-    const hereIdx = this._chainIndex(t);
+    const hereIdx = this._chainIndex(t, CLOSE_STRIKE_TTL_MS, now);
     if (anchorIdx === -1 || hereIdx === null) return false;
     return hereIdx < anchorIdx;
   }
@@ -1006,16 +1149,30 @@ class CrossingState {
       if (!c.confirmedMayFollowPredicted) {
         backstop = Math.min(backstop, this._computeCloseTime(t, now).getTime());
       }
-      if (this._upstreamOfAnchor(t)) {
+      if (this._upstreamOfAnchor(t, now)) {
         // TD shows the train still short of its anchor berth, so the anchor strike is
-        // genuinely still to come — HOLD the gated close in the near future rather than
-        // let a drifting bestTime fire CLOSED early. Floored (not just "skip the
-        // backstop"): falling through to _computeCloseTime would return the pre-strike
-        // prediction bestTime − predictedLeadSecs, which is EARLIER than the backstop
-        // now that safetyNet < predictedLead — i.e. the gate would have made CLOSED fire
-        // sooner, the exact opposite of its purpose. Releases as soon as the train
-        // reaches the anchor, or the strike lands and re-anchors properly.
-        return new Date(Math.max(backstop, now.getTime() + CLOSE_HOLD_FLOOR_MS));
+        // genuinely still to come — HOLD the gated close rather than let a drifting
+        // bestTime fire CLOSED early. Floored (not just "skip the backstop"): falling
+        // through to _computeCloseTime would return the pre-strike prediction
+        // bestTime − predictedLeadSecs, which is EARLIER than the backstop now that
+        // safetyNet < predictedLead — i.e. the gate would have made CLOSED fire sooner,
+        // the exact opposite of its purpose.
+        //
+        // The floor used to be a flat now+30s, which still let CLOSED fire up to two
+        // minutes before the train's own predicted close. It is now the two things that
+        // are actually true while the anchor is unstruck, whichever is later:
+        //   - the predicted close itself — CLOSED must not precede the countdown, and
+        //   - now + offsetSecs — the close cannot come sooner than the class's own lag
+        //     after a strike that has not happened (register #14; same bound the
+        //     predicted close holds at, so the two agree while held).
+        // Releases as soon as the train reaches the anchor, or the strike lands and
+        // re-anchors properly. No timer: a physical event ends the hold, not a clock.
+        const offsetSecs = anchor && typeof anchor.offsetSecs === 'number' ? anchor.offsetSecs : 0;
+        return new Date(Math.max(
+          backstop,
+          this._closeTimeInfo(t, now).at.getTime(),
+          now.getTime() + offsetSecs * 1000
+        ));
       }
       return new Date(backstop);
     }
@@ -1075,7 +1232,11 @@ class CrossingState {
         confStart = confClose;
         end = openTime;
         currentTrains = [t];
-      } else if (closeTime.getTime() - end.getTime() <= this.timing.consecutiveWindow * 60000) {
+        // `?? 1.5` so a crossing that omits consecutiveWindow falls back rather than
+        // comparing against NaN (which is false, i.e. never merges — a silent behaviour
+        // change). Portslade omits it: it uses the directional grouping above, and the key
+        // sat in its config for weeks looking live while nothing read it.
+      } else if (closeTime.getTime() - end.getTime() <= (this.timing.consecutiveWindow ?? 1.5) * 60000) {
         // Merge with current period
         end = new Date(Math.max(end.getTime(), openTime.getTime()));
         currentTrains.push(t);
@@ -1108,13 +1269,17 @@ class CrossingState {
   // countdown / closing-soon); the end is the clear-step-anchored latest predicted open.
   _computeClosuresDirectional(trains, now) {
     const maxGap = this.timing.mergeOppositeMaxGapSecs;
-    const ann = trains.map(t => ({
-      train: t,
-      predClose: this._computeCloseTime(t, now),
-      confClose: this._confirmedCloseTime(t, now),
-      openPred: this._openPred(t, now),
-      struck: !!this._freshStrike(t, now, this._anchorBerthFor(t))
-    }));
+    const ann = trains.map(t => {
+      const ci = this._closeTimeInfo(t, now);
+      return {
+        train: t,
+        predClose: ci.at,
+        closeHeld: ci.held,
+        confClose: this._confirmedCloseTime(t, now),
+        openPred: this._openPred(t, now),
+        struck: !!this._freshStrike(t, now, this._anchorBerthFor(t))
+      };
+    });
 
     const groups = [];
     let cur = null;
@@ -1128,18 +1293,116 @@ class CrossingState {
       else { cur = [a]; groups.push(cur); }
     }
 
+    this._coalesceOverlapping(groups, now);
+
     return groups.map(g => {
       const groupTrains = g.map(a => a.train);
       const predStart = new Date(Math.min(...g.map(a => a.predClose.getTime())));
       const confStart = new Date(Math.min(...g.map(a => a.confClose.getTime())));
       const maxOpenPred = new Date(Math.max(...g.map(a => a.openPred.getTime())));
-      const end = this._anchorEndToClearStep(maxOpenPred, groupTrains, now);
+      const endInfo = this._periodEndInfo(maxOpenPred, groupTrains, now);
       // Is the close that actually gates this period anchored to a physical berth
       // strike, or still a timetable estimate? Read off the train that SET confStart,
       // since that is the one the CLOSED state follows.
       const driver = g.reduce((m, a) => (a.confClose < m.confClose ? a : m), g[0]);
-      return this._makePeriod(confStart, end, groupTrains, predStart, driver.struck);
+      // closePending: the close that gates this period is a HELD lower bound, not a
+      // prediction — the client renders it as held rather than counting it down.
+      const closer = g.reduce((m, a) => (a.predClose < m.predClose ? a : m), g[0]);
+      return this._makePeriod(confStart, endInfo.at, groupTrains, predStart, driver.struck,
+        { closePending: !!closer.closeHeld, holdingOpen: endInfo.holdingOpen });
     });
+  }
+
+  // Register #15 — re-ask the grouping question against the ANCHORED ends.
+  //
+  // The grouping above compares each train's close with the previous train's RAW openPred
+  // (bestTime + openAfter, or a recorded clear step). The end a user actually sees is
+  // computed afterwards by _periodEndInfo, which can push it much later — hold-until-
+  // cleared, or the open-lag bound while a train sits short of the crossing. Nothing then
+  // re-checked the grouping, so the API could assert both "barrier lifts at 18:46:03" and
+  // "barrier drops at 18:45:51". Observed in the field 2026-08-01 and reproduced against
+  // the shipped config: BARRIERS DOWN, next close +28s, next open +40s.
+  //
+  // Merge-only, and iterated to a fixed point because merging changes which train is
+  // final, and therefore the end. It cannot split a group the base pass produced, so it
+  // is NOT the measured-worse "projecting the merge key" (which fed an estimate to the
+  // grouping key itself and churned which trains merged in both directions, pushing
+  // westbound stopper error 62s -> 84s). This only ever joins two periods that would
+  // otherwise render as barrier-up-then-instantly-down.
+  //
+  // Physically: Boundary Road is MCB-CCTV. A signaller watching a second train's close
+  // land inside the first train's hold does not raise and immediately re-lower — they
+  // hold. One closure is what actually happens on the ground.
+  _coalesceOverlapping(groups, now) {
+    // Bounded by the number of merges possible; each pass removes at least one group.
+    for (let guard = groups.length; guard > 0 && groups.length > 1; guard--) {
+      let merged = false;
+      for (let i = 0; i < groups.length - 1; i++) {
+        const prev = groups[i], next = groups[i + 1];
+        const prevTrains = prev.map(a => a.train);
+        const prevEnd = this._periodEndInfo(
+          new Date(Math.max(...prev.map(a => a.openPred.getTime()))), prevTrains, now).at.getTime();
+        // The next period's barrier-down moment, whichever of its two closes comes first:
+        // predictedStart drives the countdown, start drives CLOSED, and either landing
+        // before the previous end is the inversion.
+        const nextClose = Math.min(
+          ...next.map(a => Math.min(a.predClose.getTime(), a.confClose.getTime())));
+        if (nextClose > prevEnd) continue;
+        if (this._barrierKnownToLift(prev, next, now)) continue;
+        groups[i] = prev.concat(next);
+        groups.splice(i + 1, 1);
+        this._rememberCoalesced(prev, next, now);
+        merged = true;
+        break;
+      }
+      if (!merged) break;
+    }
+    // Hysteresis. Without it this pass can flap: while a train is held the end bound moves
+    // with the clock and sweeps across the following close (merge), and an LDB revision
+    // moving that close by a minute sweeps it back (split). That is C1's failure mode —
+    // merged<->split oscillating 5-6x per pair, wrong 72-82% of the time — and the fix
+    // there was the same one as here: let a PHYSICAL event decide, not an arithmetic
+    // threshold on two moving estimates. A pair we have already coalesced stays coalesced
+    // until the earlier train's clear step is recorded, i.e. until the barrier is known to
+    // have lifted between them.
+    for (let i = 0; i < groups.length - 1; i++) {
+      const prev = groups[i], next = groups[i + 1];
+      if (!this._wasCoalesced(prev, next, now)) continue;
+      if (this._barrierKnownToLift(prev, next, now)) continue;
+      groups[i] = prev.concat(next);
+      groups.splice(i + 1, 1);
+      i--;
+    }
+  }
+
+  // Do we have physical evidence the barrier came up between these two groups? Only a
+  // recorded clear step counts: the earlier group's final train has cleared, and the later
+  // group's close falls after that clear step + its open lag. Anything else is two
+  // estimates being compared, which is what we are trying to stop deciding this.
+  _barrierKnownToLift(prev, next, now) {
+    const finalTrain = prev[prev.length - 1].train;
+    if (!finalTrain || !finalTrain.headcode) return false;
+    const cleared = this.clearStepSeen.get(finalTrain.headcode);
+    if (!cleared || (now.getTime() - cleared.ts) > CLEAR_STEP_TTL_MS) return false;
+    const lagSecs = this._getOpenLagSecs(finalTrain.direction, finalTrain.trainType) || 0;
+    const liftedAt = cleared.ts + lagSecs * 1000;
+    const nextClose = Math.min(
+      ...next.map(a => Math.min(a.predClose.getTime(), a.confClose.getTime())));
+    return nextClose > liftedAt;
+  }
+
+  _coalesceKey(prev, next) {
+    return `${prev[prev.length - 1].train.headcode || '?'}|${next[0].train.headcode || '?'}`;
+  }
+  _rememberCoalesced(prev, next, now) {
+    this.coalescedPairs.set(this._coalesceKey(prev, next), now.getTime());
+    for (const [k, ts] of this.coalescedPairs) {
+      if (now.getTime() - ts > CLEAR_STEP_TTL_MS) this.coalescedPairs.delete(k);
+    }
+  }
+  _wasCoalesced(prev, next, now) {
+    const ts = this.coalescedPairs.get(this._coalesceKey(prev, next));
+    return ts != null && (now.getTime() - ts) <= CLEAR_STEP_TTL_MS;
   }
 
   // start = CONFIRMED close (gated CLOSED onset). predictedStart = PREDICTED close
@@ -1148,7 +1411,13 @@ class CrossingState {
   // a timetable estimate, so the client can show it without a confidence band instead of
   // inferring that from start === predictedStart, which is only a coincidence of the
   // current arithmetic.
-  _makePeriod(start, end, trains, predictedStart = start, closeConfirmed = false) {
+  // closePending / holdingOpen (register #14) say that the corresponding time is a HELD
+  // LOWER BOUND rather than a prediction: the physical trigger has not fired and the
+  // projection of it has expired, so the value is "no sooner than this", recomputed against
+  // now. Two consequences for a client: render it as held rather than counting it down, and
+  // — for holdingOpen — keep treating the period as current past its `end`, because the
+  // closure ends when the clear step lands, not when the clock runs out.
+  _makePeriod(start, end, trains, predictedStart = start, closeConfirmed = false, held = {}) {
     // Determine reason
     let reason = 'single_train';
     if (trains.length > 1) reason = 'merged_consecutive';
@@ -1162,6 +1431,8 @@ class CrossingState {
       start: start.toISOString(),
       predictedStart: (predictedStart || start).toISOString(),
       closeConfirmed: !!closeConfirmed,
+      closePending: !!held.closePending,
+      holdingOpen: !!held.holdingOpen,
       end: end.toISOString(),
       durationMins: Math.round((end - start) / 60000),
       reason,
@@ -1220,52 +1491,72 @@ class CrossingState {
     return typeof secs === 'number' ? secs : null;
   }
 
-  // Anchor a finalised period's END to the TD clear step of its FINAL train.
+  // Anchor a finalised period's END to the TD clear step of its FINAL train. Thin wrapper
+  // over _periodEndInfo for callers that only want the Date.
+  _anchorEndToClearStep(end, trains, now) {
+    return this._periodEndInfo(end, trains, now).at;
+  }
+
+  // { at: Date, holdingOpen: bool }.
   //  - Cleared (clear step recorded, fresh): end = clearStep + openLagSecs[dir][class].
   //    Overrides the bestTime-based end in BOTH directions — earlier if the train ran
   //    early, later if it ran late (the late-running extend is the point of the feature).
-  //  - Sighted but NOT yet cleared: never open before it clears — hold the end to the
-  //    near future (floored), even if the bestTime-based end has already passed.
+  //  - Sighted but NOT yet cleared: the barrier physically cannot be up, so the period is
+  //    HOLDING OPEN — `at` is a lower bound and the flag says so.
   //  - Not TD-sighted: unchanged (bestTime + openAfter fallback).
   // Only the FINAL train is consulted, so an intermediate train's clear step in a
   // merged period can neither shorten nor open the period. Gated entirely on
   // timing.openLagSecs, so crossings without it keep the pure fallback behaviour.
-  // The merge grouping upstream still uses the raw bestTime ends, so a late-running
-  // extend here only stretches this period's tail (it won't re-group followers).
-  _anchorEndToClearStep(end, trains, now) {
-    if (!this.timing || !this.timing.openLagSecs) return end;
+  //
+  // The old code floored a held end at `now + 60s` (OPEN_HOLD_FLOOR_MS). Two things were
+  // wrong with that. The number was arbitrary — sized to exceed the client's poll interval
+  // rather than measured — and because it was recomputed against `now` every pass, the
+  // "Next Open" countdown SAT FROZEN at 60s instead of decaying, which is also how it
+  // overtook the following period's close (register #15). The bound is now the class's own
+  // measured openLagSecs: the barrier cannot rise until that long after a clear step that
+  // has not happened. East passenger 35s, west passenger 18s — n=11, 31 Jul.
+  //
+  // What made the flat floor load-bearing was never the countdown, it was the STATE: an
+  // `end` in the past stops the period being current, and the app declares the crossing
+  // clear with a train still on it. That is what holdingOpen fixes, at its three readers —
+  // which is what lets the bound here be the honest small number instead of a safe big one.
+  //
+  // Cannot hold forever: _mergeTrains drops a sighted train SIGHTING_DROP_GRACE_MS (3 min)
+  // past its projected crossing, and a period with no trains ceases to exist.
+  _periodEndInfo(end, trains, now) {
+    const plain = (at) => ({ at, holdingOpen: false });
+    if (!this.timing || !this.timing.openLagSecs) return plain(end);
     const finalTrain = trains[trains.length - 1];
-    if (!finalTrain || !finalTrain.headcode) return end;
+    if (!finalTrain || !finalTrain.headcode) return plain(end);
 
     const cleared = this.clearStepSeen.get(finalTrain.headcode);
     if (cleared && (now.getTime() - cleared.ts) <= CLEAR_STEP_TTL_MS) {
       const lagSecs = this._getOpenLagSecs(finalTrain.direction, finalTrain.trainType);
-      if (lagSecs != null) return new Date(cleared.ts + lagSecs * 1000);
-      return end; // configured direction/class missing a value — safe fallback
+      if (lagSecs != null) return plain(new Date(cleared.ts + lagSecs * 1000));
+      return plain(end); // configured direction/class missing a value — safe fallback
     }
 
     // No clear step yet. PROJECT one from wherever TD has the train, and reopen at
     // projectedClear + the same openLagSecs the real anchor would use — so the estimate
-    // sharpens berth by berth instead of sitting on a placeholder. Replaces the old
-    // `now + OPEN_HOLD_FLOOR_MS` floor, which trailed the clock and made the reopen
-    // countdown tick BACKWARDS as it was recomputed.
+    // sharpens berth by berth instead of sitting on a placeholder.
     const lagSecs = this._getOpenLagSecs(finalTrain.direction, finalTrain.trainType);
     const proj = this._projectBerth(finalTrain, 'XING', now);
     if (proj && lagSecs != null) {
-      // Never in the past: the train demonstrably has not cleared, so the barrier cannot
-      // be up. A stale projection (train held at a signal past its expected transit) is
-      // floored rather than allowed to expire the closure.
-      return new Date(Math.max(proj.ts + lagSecs * 1000, now.getTime() + OPEN_HOLD_FLOOR_MS));
+      const at = proj.ts + lagSecs * 1000;
+      // A live projection is a real prediction and is used as-is. An EXPIRED one (the train
+      // should have crossed by now and has not) has been falsified, so fall back to the
+      // bound: at least one open lag from now, and holding until the clear step lands.
+      if (!proj.expired && at > now.getTime()) return plain(new Date(at));
+      return { at: new Date(now.getTime() + lagSecs * 1000), holdingOpen: true };
     }
 
     // No projection available (no live position, or no transit sample for this class):
-    // fall back to the old behaviour — hold into the near future so a TD-sighted train
-    // can never have its closure end before it has cleared.
+    // a TD-sighted train that has not cleared still holds the period, on the same bound.
     if (this.tdSeenToday.has(finalTrain.headcode)) {
-      const floorMs = now.getTime() + OPEN_HOLD_FLOOR_MS;
-      if (end.getTime() < floorMs) return new Date(floorMs);
+      const floorMs = now.getTime() + (lagSecs != null ? lagSecs * 1000 : 0);
+      if (end.getTime() < floorMs) return { at: new Date(floorMs), holdingOpen: true };
     }
-    return end;
+    return plain(end);
   }
 
   // Recompute everything
@@ -1293,9 +1584,7 @@ class CrossingState {
   // period start test, and the countdown never passes zero before CLOSED shows.
   _deriveState(now) {
     const closeTarget = (p) => new Date(p.predictedStart || p.start);
-    const currentClosure = this.closurePeriods.find(p =>
-      now >= new Date(p.start) && now <= new Date(p.end)
-    );
+    const currentClosure = this.closurePeriods.find(p => this._isCurrent(p, now));
     if (currentClosure) return 'CLOSED';
 
     // Pick the next period by whether it has STARTED, not by whether its predicted
@@ -1310,11 +1599,126 @@ class CrossingState {
     return 'OPEN';
   }
 
+  // Is this period the one we are IN? The end test is `holdingOpen ? still open : clock`,
+  // and that distinction is the whole point of the flag (register #14).
+  //
+  // A period whose end is a HELD bound has not finished when that bound passes — the train
+  // has not performed its clear step, so the barrier is physically still down. Testing the
+  // clock alone dropped the period at three separate sites (here, the getApiState filter,
+  // and PREDICT.derive on the client), each of which would then report the crossing CLEAR
+  // with a train on it. That false-clear is the reason the old code floored the end at a
+  // flat 60s; gating on the trigger instead is what lets the bound be the measured open lag.
+  //
+  // Bounded by _mergeTrains dropping a sighted train 3 min past its projected crossing: the
+  // period loses its trains and ceases to exist, so a hold cannot outlive the train.
+  _isCurrent(p, now) {
+    const t = now instanceof Date ? now.getTime() : now;
+    return t >= Date.parse(p.start) && (p.holdingOpen || t <= Date.parse(p.end));
+  }
+
+  // Every close and open TRIGGER, with its position on the approach chain. Serves the
+  // observer's strip map (a field tool: "where on the ground does the barrier actually
+  // start moving?").
+  //
+  // The PLACEMENT is computed here, not in the app, and that is the point. A trigger is
+  // "berth B + N seconds", so where it sits between the drawn berths depends on the same
+  // per-class transit table the prediction uses — and a copy of that table in the frontend
+  // would drift away from the predictor the first time either is recalibrated. Config
+  // change, deploy, map moves. Nothing to keep in step by hand.
+  //
+  // Walks the chain from the anchor berth, spending `offsetSecs` against each measured leg,
+  // and reports where it runs out: { from, to, fraction }. This is the same arithmetic the
+  // close rule performs, read positionally instead of temporally.
+  //
+  // Note what the numbers say: every east class fires 137-149s before the train reaches the
+  // crossing and every west class at 92s (west offsets are DERIVED as transit − 92), yet
+  // they land in different gaps — a Southwick stopper's 0006 is 246s from the road, a
+  // fast's is 96s. Same instant-before-crossing, different place on the ground. That is
+  // real, and it is why the anchor berth is per class in the first place.
+  getTriggers() {
+    const td = this.config.td || {};
+    const ct = (this.timing && this.timing.closeTrigger) || {};
+    const out = { crossingId: this.id, close: [], open: [], chain: {}, clear: {} };
+
+    for (const direction of ['east', 'west']) {
+      const dirCfg = td[direction === 'east' ? 'eastbound' : 'westbound'];
+      if (!dirCfg) continue;
+      const chain = Array.isArray(dirCfg.approachChain) ? dirCfg.approachChain : [];
+      out.chain[direction] = chain.concat(['XING']);
+      out.clear[direction] = dirCfg.clear || null;
+
+      const c = ct[direction] || {};
+      const classes = c.classes || {};
+      for (const [cls, spec] of Object.entries(classes)) {
+        if (!spec || !spec.berth) continue;
+        // Resolve the offset exactly as _closeAnchor does — explicit where east calibrated
+        // one, derived from transit − crossingLeadSecs where west did not — by asking
+        // _closeAnchor itself with a stub train, so the two can never disagree.
+        const anchor = this._closeAnchor({ direction, trainType: cls === 'freight' ? 'freight' : 'passenger',
+                                           forceClass: cls });
+        let offsetSecs = anchor && anchor.berth === spec.berth ? anchor.offsetSecs : null;
+        if (offsetSecs === null && typeof spec.offsetSecs === 'number') offsetSecs = spec.offsetSecs;
+        if (offsetSecs === null) continue;               // no sample for this class+berth
+        if (typeof c.minAfterStrikeSecs === 'number') offsetSecs = Math.max(offsetSecs, c.minAfterStrikeSecs);
+
+        const toXing = this._transit({ direction, forceClass: cls }, spec.berth, 'XING');
+        out.close.push({
+          direction, trainClass: cls, berth: spec.berth, offsetSecs,
+          derived: !!(anchor && anchor.derived),
+          transitToCrossingSecs: toXing ? toXing.secs : null,
+          transitSdSecs: toXing ? toXing.sdSecs : null,
+          sampleN: toXing ? toXing.n : null,
+          // Seconds before the train reaches the crossing that this trigger fires.
+          firesSecsBeforeCrossing: toXing ? toXing.secs - offsetSecs : null,
+          place: this._placeOnChain(direction, cls, spec.berth, offsetSecs)
+        });
+      }
+
+      // OPEN triggers: the clear step + the measured per-class open lag. Position is the
+      // client's to draw — the transit table only measures the approach, so the observer
+      // places these on its own post-crossing (tac) axis from the same lag value.
+      const lags = (this.timing && this.timing.openLagSecs && this.timing.openLagSecs[direction]) || {};
+      for (const [cls, secs] of Object.entries(lags)) {
+        if (typeof secs !== 'number') continue;
+        out.open.push({
+          direction, trainClass: cls, lagSecs: secs,
+          clearStep: dirCfg.clear || null,
+          clearBerth: dirCfg.clear ? dirCfg.clear.to : null
+        });
+      }
+    }
+    return out;
+  }
+
+  // Walk `offsetSecs` of measured travel downstream from `berth`, and report where it runs
+  // out as a fraction of the leg it lands in. Returns null when the legs aren't measured.
+  _placeOnChain(direction, cls, berth, offsetSecs) {
+    const chain = (this.config.td[direction === 'east' ? 'eastbound' : 'westbound'] || {}).approachChain;
+    if (!Array.isArray(chain)) return null;
+    const nodes = chain.concat(['XING']);
+    let i = nodes.indexOf(berth);
+    if (i === -1) return null;
+    let remaining = offsetSecs;
+    while (i < nodes.length - 1) {
+      const leg = this._transit({ direction, forceClass: cls }, nodes[i], nodes[i + 1]);
+      if (!leg) return null;
+      if (remaining <= leg.secs) {
+        return { from: nodes[i], to: nodes[i + 1],
+                 fraction: leg.secs > 0 ? remaining / leg.secs : 0, legSecs: leg.secs };
+      }
+      remaining -= leg.secs;
+      i++;
+    }
+    // Past the crossing — a rule that fires after its own train has crossed. Should not
+    // happen (offsets are chosen to stay feasible) but the map must not silently drop it.
+    return { from: 'XING', to: 'XING', fraction: 0, legSecs: 0, beyondCrossing: true };
+  }
+
   // Get the full state for the API
-  getApiState() {
+  getApiState(limit = DEFAULT_CLOSURE_LIMIT) {
     const now = new Date();
-    const upcoming = this.closurePeriods.filter(p => new Date(p.end) > now);
-    const current = upcoming.find(p => now >= new Date(p.start) && now <= new Date(p.end));
+    const upcoming = this.closurePeriods.filter(p => p.holdingOpen || new Date(p.end) > now);
+    const current = upcoming.find(p => this._isCurrent(p, now));
     const next = upcoming.find(p => new Date(p.start) > now);
 
     return {
@@ -1329,7 +1733,8 @@ class CrossingState {
       lastStateChange: this.lastStateChange.toISOString(),
       currentClosure: current || null,
       nextClosure: next || null,
-      upcomingClosures: upcoming.slice(0, 200),
+      upcomingClosures: upcoming.slice(0, limit),
+      closureCount: upcoming.length,
       nextCloseTime: next ? next.start : null,
       nextOpenTime: current ? current.end : (next ? next.end : null),
       trainSources: {

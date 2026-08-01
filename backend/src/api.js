@@ -16,6 +16,13 @@ function createApi(crossingStates, port = 3000) {
 
     const url = new URL(req.url, `http://localhost:${port}`);
     const path = url.pathname;
+    // How many closure periods to return. Omitted ⇒ the state's own default (6, enough for
+    // both apps' visible lists); the frontend asks for more only when "Show More" is used.
+    // Clamped so a client cannot ask for an unbounded response.
+    const limitParam = parseInt(url.searchParams.get('limit') || '', 10);
+    const limit = Number.isFinite(limitParam)
+      ? Math.max(1, Math.min(200, limitParam))
+      : undefined;
 
     try {
       // Health check
@@ -60,7 +67,7 @@ function createApi(crossingStates, port = 3000) {
           return;
         }
         res.writeHead(200);
-        res.end(JSON.stringify(state.getApiState()));
+        res.end(JSON.stringify(state.getApiState(limit)));
         return;
       }
 
@@ -74,7 +81,9 @@ function createApi(crossingStates, port = 3000) {
           res.end(JSON.stringify({ error: `Unknown crossing: ${id}` }));
           return;
         }
-        const apiState = state.getApiState();
+        // This endpoint's whole purpose is the closure list, so it defaults to everything
+        // rather than to the state's display-sized default.
+        const apiState = state.getApiState(limit || 200);
         res.writeHead(200);
         res.end(JSON.stringify({
           crossingId: id,
@@ -107,6 +116,24 @@ function createApi(crossingStates, port = 3000) {
         return;
       }
 
+      // Close/open TRIGGERS and where they sit on the approach chain: /crossing/:id/triggers
+      // Static per deploy (it describes config + the measured transit table, not live
+      // trains), so the observer fetches it once at startup. Placement is computed
+      // server-side so the map can't drift from the rule it is drawing — see getTriggers.
+      const triggersMatch = path.match(/^\/crossing\/([^/]+)\/triggers$/);
+      if (triggersMatch) {
+        const id = triggersMatch[1];
+        const state = crossingStates[id];
+        if (!state) {
+          res.writeHead(404);
+          res.end(JSON.stringify({ error: `Unknown crossing: ${id}` }));
+          return;
+        }
+        res.writeHead(200);
+        res.end(JSON.stringify(state.getTriggers()));
+        return;
+      }
+
       // Legacy compatibility: /api?station=PLD (for existing frontend)
       if (path === '/api') {
         const station = url.searchParams.get('station');
@@ -125,7 +152,7 @@ function createApi(crossingStates, port = 3000) {
           return;
         }
         res.writeHead(200);
-        res.end(JSON.stringify(entry[1].getApiState()));
+        res.end(JSON.stringify(entry[1].getApiState(limit)));
         return;
       }
 
@@ -139,6 +166,7 @@ function createApi(crossingStates, port = 3000) {
           'GET /crossing/:id',
           'GET /crossing/:id/closures',
           'GET /crossing/:id/live',
+          'GET /crossing/:id/triggers',
           'GET /api?station=PLD  (legacy compat)'
         ]
       }));

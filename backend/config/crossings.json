@@ -58,7 +58,6 @@
         "east": { "passenger": 35, "freight": 70 },
         "west": { "passenger": 18, "freight": 30 }
       },
-      "consecutiveWindow": 1.5,
       "areaEntryLeadSecs": { "east": 150, "west": 112 },
       "closeTrigger": {
         "_comment": "CLOSE start = per-class berth strike-in + offset. EASTBOUND USES PER-CLASS ANCHORS because approach berth 0006 CONTAINS SOUTHWICK: services calling there sit in 0006 for ~150s, those that don't for ~50s, so one anchor cannot serve both. Measured over 7,579 eastbound runs / 77 days of TD logs (2026-07-25). Offsets = median(berth->crossing) - 140s, where 140s is the observed barrier-down lead before the crossing (24 Jun observer taps, crossing-CLOSE = 127/152/257, n=3 — THE WEAK LINK; the anchor CHOICE is robust to it, the offsets are not). Cross-check: the same arithmetic reproduces class B's independently field-calibrated +100s as +106s.",

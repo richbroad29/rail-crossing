@@ -805,8 +805,13 @@ console.log('  -- position-gated backstop --');
     return st._computeClosures([t], new Date(nowMs))[0];
   };
   const held = late('0012', BASE - 100000);          // past bestTime−145s, still at 0012
-  check('upstream past the backstop time: close held to now + 30s (not CLOSED)',
-    held.start, iso(BASE - 100000 + 30000));
+  // The bound is the CLASS's own lag from its own anchor — 1H67 is `stopping`, so 0008+40s
+  // — not the flat 30s constant this used to assert (register #14). Two reasons it changed:
+  // the old number was arbitrary where this one is the same offset the prediction uses, and
+  // at 30s it still let CLOSED fire well before the train's own predicted close. Holding at
+  // now+offset also means the value joins continuously to strike+offset when the strike lands.
+  check('upstream past the backstop time: close held to now + the class offset (not CLOSED)',
+    held.start, iso(BASE - 100000 + 40000));
   check('...so the period is still in the future — no CLOSED', Date.parse(held.start) > BASE - 100000, true);
   const free = late('0006', BASE - 100000);          // same instant, but past the anchor
   check('past the anchor at the same instant: backstop applies and CLOSED is allowed',
@@ -1280,6 +1285,247 @@ console.log('  -- #12 west close: berth-anchored, cannot invert or jump --');
 // The projection is computed FROM liveTrains, so a step along the chain has just made a
 // sharper estimate available. Before this, the new position waited for the next LDB poll.
 // Recomputes are coalesced to one per tick, so each case awaits a macrotask.
+// ---- Register #14: a countdown to a trigger that has not fired ------------------------
+//
+// Observed in the field 2026-08-01: "Next Close" reached zero and rendered "Soon" with no
+// approach strike anywhere, and the app went on to show BARRIERS DOWN. Two causes.
+//
+//  (a) The close is projectedStrike + offset, where projectedStrike = berth entry + the
+//      MEDIAN transit. That is a fixed timestamp, so a train dwelling longer than the
+//      median walks the countdown straight through zero. A train still in 0008 at 180s is
+//      7.8 sd past the median 71s: it is stopped, not slow, and nothing in the data says
+//      when it will move — so the only honest output is the lower bound.
+//  (b) The CLOSED gate read liveTrains, and getLiveTrains DELETED past the display TTL, so
+//      polling /live (2.5s, from the observer) destroyed the evidence the gate needed.
+console.log('  -- #14 held countdowns: no trigger, no zero --');
+{
+  const SHIPPED = JSON.parse(require('fs').readFileSync(
+    require('path').join(__dirname, '..', 'config', 'crossings.json'), 'utf8')).portslade;
+  const T = BASE;
+  // crossingId 'portslade' or the transit table does not load and every class silently
+  // falls back to the pre-strike lead (method trap, 2026-08-01).
+  const eastLocal = (hc, bestMs) => ({
+    ...mkT({ dir: 'east', headcode: hc, bestTimeMs: bestMs }),
+    callsAtStation: true, callsAtApproach: true      // => stoppingLocal, anchor 0006 +100s
+  });
+  const OFFSET = 100;
+
+  // A train that entered 0008 at T and has not moved since. 0008>0006 is a median 71s, so
+  // by +180s the projected strike is long gone.
+  const heldAt = (dwellSecs, { pollLive = false } = {}) => {
+    const st = new CrossingState('portslade', SHIPPED);
+    const now = new Date(T + dwellSecs * 1000);
+    const t = eastLocal('1N01', T + 200000);
+    st.recordTdBerth({ headcode: '1N01', to: '0008', from: '0010', ts: iso(T), event: 'CA' });
+    st.recordTdSighting('1N01', new Date(T));
+    if (pollLive) st.getLiveTrains(now.getTime());     // what GET /crossing/:id/live does
+    return { st, now, p: st._computeClosures([t], now)[0], t };
+  };
+
+  let everExpired = 0, everClosed = 0, everStruck = 0;
+  for (let d = 0; d <= 900; d += 15) {
+    const { st, now, p, t } = heldAt(d);
+    if (Date.parse(p.predictedStart) <= now.getTime()) everExpired++;
+    if (st._isCurrent(p, now)) everClosed++;
+    if (st._freshStrike(t, now, '0006')) everStruck++;
+  }
+  check('#14: 0006 never strikes in this sweep (the premise)', everStruck, 0);
+  check('#14: the close countdown NEVER reaches zero unstruck', everExpired, 0);
+  check('#14: and CLOSED never fires unstruck', everClosed, 0);
+
+  // The bound is the class's own offset, and it is the same whether or not anyone polled
+  // /live — which is the half that made the old behaviour depend on who was watching.
+  for (const d of [180, 250, 400, 900]) {
+    const plain = heldAt(d), polled = heldAt(d, { pollLive: true });
+    check(`#14: held at now + offset at ${d}s dwell`,
+      Date.parse(plain.p.predictedStart) - plain.now.getTime(), OFFSET * 1000);
+    check(`#14: a /live poll cannot change it at ${d}s dwell`,
+      polled.p.predictedStart, plain.p.predictedStart);
+    check(`#14: flagged as a bound, not a prediction, at ${d}s`, plain.p.closePending, true);
+  }
+
+  // Continuity: holding at now+offset means that when the strike finally lands, the
+  // countdown is already where strike+offset puts it — no lurch at the handover.
+  {
+    const strikeAt = T + 400000;
+    const st = new CrossingState('portslade', SHIPPED);
+    const t = eastLocal('1N02', T + 200000);
+    st.recordTdBerth({ headcode: '1N02', to: '0008', from: '0010', ts: iso(T), event: 'CA' });
+    const before = st._computeClosures([t], new Date(strikeAt - 1000))[0];
+    setStrike(st, '1N02', strikeAt, 'east', '0006');
+    st.recordTdBerth({ headcode: '1N02', to: '0006', from: '0008', ts: iso(strikeAt), event: 'CA' });
+    const after = st._computeClosures([t], new Date(strikeAt))[0];
+    check('#14: struck close = strike + offset', after.predictedStart, iso(strikeAt + OFFSET * 1000));
+    check('#14: no longer a bound once struck', after.closePending, false);
+    checkTruthy('#14: the handover moves the close by <= 1s (no lurch)',
+      Math.abs(Date.parse(after.predictedStart) - Date.parse(before.predictedStart)) <= 1000);
+    // ...and now that it IS a real anchor, zero means closed: for a struck train the gated
+    // close equals the predicted one, so the countdown can finally run out — as it should.
+    check('#14: struck ⇒ gated close == predicted close', after.start, after.predictedStart);
+  }
+
+  // The OPEN side of the same idea. A train that has not performed its clear step cannot
+  // have let the barrier up, so the period is HOLDING OPEN: the end is a bound (one open lag
+  // from now, 18s westbound), and — the part that matters — the period stays current past
+  // it. Testing the clock alone is what would report the crossing clear with a train on it.
+  {
+    const st = new CrossingState('portslade', SHIPPED);
+    const now = new Date(T + 600000);                 // long past any projection from 0005
+    const t = mkT({ dir: 'west', headcode: '1W09', bestTimeMs: T + 60000 });
+    setStrike(st, '1W09', T, 'west', '0003');
+    st.recordTdBerth({ headcode: '1W09', to: '0005', from: '0003', ts: iso(T + 30000), event: 'CA' });
+    st.recordTdSighting('1W09', new Date(T));
+    const p = st._computeClosures([t], now)[0];
+    check('#14: no clear step ⇒ holdingOpen', p.holdingOpen, true);
+    check('#14: end held at now + the class open lag (west passenger 18s)',
+      Date.parse(p.end) - now.getTime(), 18000);
+    checkTruthy('#14: and the period is still CURRENT despite an end that keeps moving',
+      st._isCurrent(p, now));
+    // All three readers, because the old flat floor was load-bearing at each of them.
+    st.closurePeriods = [p];
+    check('#14: _deriveState still CLOSED', st._deriveState(now), 'CLOSED');
+    const api = st.getApiState();
+    checkTruthy('#14: getApiState keeps it in upcomingClosures', api.upcomingClosures.length === 1);
+    checkTruthy('#14: ...and reports it as the current closure', !!api.currentClosure);
+
+    // Once the train clears, the hold ends and the end becomes the real anchored value.
+    st.clearStepSeen.set('1W09', { ts: now.getTime(), direction: 'west' });
+    const q = st._computeClosures([t], now)[0];
+    check('#14: clear step ⇒ no longer holding', q.holdingOpen, false);
+    check('#14: end = clear step + open lag', q.end, iso(now.getTime() + 18000));
+  }
+}
+
+// ---- Register #15: a closure may not open after the next one closes -------------------
+//
+// The screenshot: BARRIERS DOWN, next close +28s, next open +40s. The barrier cannot drop
+// 12s before it rises. Cause: grouping compares each train's close with the previous
+// train's RAW openPred, but the displayed end is computed afterwards by _periodEndInfo,
+// which can push it much later (hold-until-cleared). Nothing re-checked the grouping.
+// This is #12 one scope wider — that was one train's own open preceding its own close.
+console.log('  -- #15 anchored ends cannot invert across periods --');
+{
+  const SHIPPED = JSON.parse(require('fs').readFileSync(
+    require('path').join(__dirname, '..', 'config', 'crossings.json'), 'utf8')).portslade;
+  const T = BASE;
+
+  // The field case: a westbound stopper struck 0003 and sitting in the protecting berth
+  // without clearing (so its end is held), and an eastbound behind it whose close lands
+  // inside that hold. Raw openPred puts them 40s apart — beyond the 20s opposite-direction
+  // merge window — so the base pass splits them.
+  const build = (nowMs) => {
+    const st = new CrossingState('portslade', SHIPPED);
+    const A = mkT({ dir: 'west', headcode: '1W01', bestTimeMs: T - 60000 });
+    const B = mkT({ dir: 'east', headcode: '1E02', bestTimeMs: T + 190000 });
+    setStrike(st, '1W01', T - 120000, 'west', '0003');
+    st.recordTdBerth({ headcode: '1W01', to: '0005', from: '0003', ts: iso(T - 100000), event: 'CA' });
+    st.recordTdSighting('1W01', new Date(T - 120000));
+    return { st, trains: [A, B], ps: st._computeClosures([A, B], new Date(nowMs)) };
+  };
+
+  const { st, ps } = build(T);
+  check('#15: the overlapping pair is one period, not two', ps.length, 1);
+  check('#15: and it carries both trains', ps[0].trainCount, 2);
+  checkTruthy('#15: the merged period is still current at now', st._isCurrent(ps[0], new Date(T)));
+
+  // The invariant itself, swept: no period may start before the previous one ends, and
+  // while CLOSED the next close may never precede the current open.
+  let inversions = 0, gapViolations = 0;
+  for (let d = -120; d <= 300; d += 5) {
+    const now = T + d * 1000;
+    const { st: s2, ps: list } = build(now);
+    for (let i = 0; i < list.length - 1; i++) {
+      if (Math.min(Date.parse(list[i + 1].start), Date.parse(list[i + 1].predictedStart))
+          <= Date.parse(list[i].end)) inversions++;
+    }
+    const cur = list.find(p => s2._isCurrent(p, new Date(now)));
+    const nxt = list.find(p => Date.parse(p.start) > now);
+    if (cur && nxt && Date.parse(nxt.predictedStart) < Date.parse(cur.end)) gapViolations++;
+  }
+  check('#15: no period starts before the previous ends, across the sweep', inversions, 0);
+  check('#15: while CLOSED, the next close never precedes the current open', gapViolations, 0);
+
+  // Hysteresis. The end bound moves with the clock and the following close moves with each
+  // LDB revision, so without a physical tie-breaker the pair merges and splits as the two
+  // drift past each other — C1's failure mode (5-6 flips per pair, wrong 72-82% of the
+  // time). Sweep the clock AND jitter the follower's estimate: the grouping must not flap.
+  {
+    const s3 = new CrossingState('portslade', SHIPPED);
+    const A = mkT({ dir: 'west', headcode: '1W03', bestTimeMs: T - 60000 });
+    const B = mkT({ dir: 'east', headcode: '1E04', bestTimeMs: T + 190000 });
+    setStrike(s3, '1W03', T - 120000, 'west', '0003');
+    s3.recordTdBerth({ headcode: '1W03', to: '0005', from: '0003', ts: iso(T - 100000), event: 'CA' });
+    s3.recordTdSighting('1W03', new Date(T - 120000));
+    let flips = 0, prevCount = null;
+    for (let i = 0; i <= 40; i++) {
+      B.bestTime = new Date(T + 190000 + ((i % 4) - 2) * 60000);   // +/- 2 min of Darwin jitter
+      const n = s3._computeClosures([A, B], new Date(T + i * 5000)).length;
+      if (prevCount !== null && n !== prevCount) flips++;
+      prevCount = n;
+    }
+    check('#15: grouping does not oscillate under clock + estimate jitter', flips, 0);
+
+    // But a PHYSICAL event may still split them: once the first train has demonstrably
+    // cleared and the barrier is up before the second close, two periods is the truth.
+    s3.clearStepSeen.set('1W03', { ts: T - 30000, direction: 'west' });
+    B.bestTime = new Date(T + 190000);
+    const split = s3._computeClosures([A, B], new Date(T));
+    check('#15: a recorded clear step CAN split the pair again', split.length, 2);
+  }
+}
+
+// ---- Trigger map (GET /crossing/:id/triggers) ------------------------------------------
+// Feeds the observer's approach map. The assertions that matter are the PLACEMENTS: they
+// come from the per-class transit table, so if the classification silently collapses (as it
+// did on first write — every east class resolved to `fast`, putting four of five markers in
+// the wrong gap) the fractions move and this catches it.
+console.log('  -- trigger map --');
+{
+  const SHIPPED = JSON.parse(require('fs').readFileSync(
+    require('path').join(__dirname, '..', 'config', 'crossings.json'), 'utf8')).portslade;
+  const tg = new CrossingState('portslade', SHIPPED).getTriggers();
+  const byKey = Object.fromEntries(tg.close.map(c => [`${c.direction}:${c.trainClass}`, c]));
+
+  check('every configured close class is placed', tg.close.filter(c => !c.place).length, 0);
+  check('east has 5 close triggers', tg.close.filter(c => c.direction === 'east').length, 5);
+  check('west has 4 close triggers', tg.close.filter(c => c.direction === 'west').length, 4);
+  check('open triggers cover both directions x2 classes', tg.open.length, 4);
+
+  // A Southwick stopper and a fast BOTH strike 0008, but their 0008 is a different distance
+  // from the road, so the same rule shape lands in different places. This is the assertion
+  // that fails if the class lookup collapses.
+  check('east stoppingLocal anchors 0006 +100s',
+    `${byKey['east:stoppingLocal'].berth}+${byKey['east:stoppingLocal'].offsetSecs}`, '0006+100');
+  check('east stoppingLocal lands between 0006 and 0004',
+    `${byKey['east:stoppingLocal'].place.from}>${byKey['east:stoppingLocal'].place.to}`, '0006>0004');
+  check('east fast lands between 0008 and 0006 (different gap, same 0008 anchor as stopping)',
+    `${byKey['east:fast'].place.from}>${byKey['east:fast'].place.to}`, '0008>0006');
+  checkTruthy('east stopping and east fast are placed differently despite sharing a berth',
+    Math.abs(byKey['east:stopping'].place.fraction - byKey['east:fast'].place.fraction) > 0.1);
+
+  // West offsets are DERIVED (transit − crossingLeadSecs), so every west class must fire at
+  // exactly crossingLeadSecs before the crossing. That is the invariant of the derivation.
+  const westLead = SHIPPED.timing.closeTrigger.west.crossingLeadSecs;
+  const westFires = tg.close.filter(c => c.direction === 'west' && !c.offsetClamped)
+    .map(c => c.firesSecsBeforeCrossing);
+  check('west stopping/freight/ecs fire at exactly crossingLeadSecs before the crossing',
+    westFires.filter(s => s === westLead).length, 3);
+  checkTruthy('west fast is the exception — its derived +2s is clamped up to minAfterStrikeSecs',
+    byKey['west:fast'].offsetSecs === SHIPPED.timing.closeTrigger.west.minAfterStrikeSecs);
+  check('west offsets are flagged as derived', tg.close.filter(c => c.direction === 'west' && c.derived).length, 4);
+  check('east offsets are NOT derived (field-calibrated, explicit in config)',
+    tg.close.filter(c => c.direction === 'east' && c.derived).length, 0);
+
+  // No rule may fire after its own train has already crossed.
+  check('no trigger lands beyond the crossing', tg.close.filter(c => c.place.beyondCrossing).length, 0);
+  check('every fraction is within its leg',
+    tg.close.filter(c => c.place.fraction < 0 || c.place.fraction > 1).length, 0);
+
+  // Open triggers carry the clear step the observer draws them from.
+  const eop = tg.open.find(o => o.direction === 'east' && o.trainClass === 'passenger');
+  check('east open = 0002 strike + 35s', `${eop.clearBerth}+${eop.lagSecs}`, '0002+35');
+}
+
 console.log('  -- #13 recompute on berth steps (coalesced) --');
 {
   const tick = () => new Promise(r => setImmediate(r));
