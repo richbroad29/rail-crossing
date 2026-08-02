@@ -68,8 +68,12 @@ const setNow = ms => { nowMs = ms; global.Date = class extends RealDate {
 setNow(nowMs);
 
 const core = fs.readFileSync(path.join(REPO, 'shared/predict.js'), 'utf8');
+// closure-card.js was split out of crossing.js after this harness was written, and
+// renderClosures() calls into it — without it every run died on `CLOSURE_CARD is not
+// defined` before reaching the picker. Load whatever the page loads.
+const card = fs.readFileSync(path.join(REPO, 'shared/closure-card.js'), 'utf8');
 const appSrc = fs.readFileSync(path.join(REPO, 'shared/crossing.js'), 'utf8');
-const app = new Function(core + ';\n' + appSrc + `;return {
+const app = new Function(core + ';\n' + card + ';\n' + appSrc + `;return {
   openFeedbackPicker, renderFbPicker, buildClosuresFromVps, parseVpsResponse, updateStatus,
   fbBuildPayload, fbPollLive, tick: (typeof fbTickPositions === 'function') ? fbTickPositions : null,
   setCFG:c=>{CFG=c}, setId:i=>{crossingId=i}, setPeriods:p=>{closurePeriods=p},

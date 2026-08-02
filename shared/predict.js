@@ -426,6 +426,116 @@
              overdueSecs: secs < 0 ? -secs : 0 };
   }
 
+  // ---- which train an observed barrier event belongs to ----
+  //
+  // One rule for both events: rank every candidate by how far it is from the trigger that
+  // fires THIS event, counting distance on either side of it. For a CLOSE that is the
+  // train's own per-class close trigger (0008+55, 0006+100, …); for an OPEN it is the
+  // clear step plus the class open lag. Both are published by GET /crossing/:id/triggers,
+  // so the picker points at the same physical instants the predictor fires on.
+  //
+  // The key this replaced was `ageSecs`, the age of the train's last berth step — and a
+  // train keeps stepping after it crosses (west 0007→0009→0011→0013, east 0002→T686), so
+  // each step reset it. At the 2026-08-01 17:43:36 barrier-up, 1H46 had crossed 175 s
+  // earlier but stepped into 0013 36 s earlier, while 1N47 had crossed 51 s earlier and
+  // was standing in 0002. `ageSecs` chose 1H46 — and the app was at that moment rendering
+  // "Passed (+4m54s)" beside the train it recommended. The observation went into the sheet
+  // against the wrong train.
+  //
+  // Why the trigger and not simply "nearest the crossing": the open trigger sits AFTER the
+  // crossing (clear step + 18–40 s), so a train 20 s short of the road ranks worse than one
+  // 80 s past it. That is the physical truth — the barrier cannot rise before a train has
+  // cleared — and the asymmetry comes out of the calibrated lag rather than a hand-set
+  // constant. With no triggers to hand the reference degrades to the crossing itself, which
+  // is still strictly better than the step age.
+
+  // Signed seconds until the train reaches the crossing: positive ahead of it, negative
+  // once past. null when the train isn't on the chain at all.
+  function secsToCrossing(t, nowMs) {
+    var e = eta(t, nowMs);
+    if (!e) return null;
+    return e.secs != null ? e.secs : -(e.sinceSecs || 0);
+  }
+
+  // Where this event's trigger sits for this train, in signed seconds-before-crossing.
+  // CLOSE: the class's own firesSecsBeforeCrossing. OPEN: minus the class's open lag,
+  // since that trigger is that many seconds AFTER the crossing. 0 when we can't tell,
+  // which makes the reference the crossing itself.
+  function triggerRef(type, t, triggers) {
+    if (!triggers || !t) return 0;
+    var dir = t.direction, i, list;
+    if (type === 'opening' || type === 'OPEN') {
+      // The backend keys open lags by passenger/freight only (see _getOpenLagSecs), not by
+      // the five close classes, so collapse to the same two buckets it uses.
+      var cls = ((t.trainClass || t.type) === 'freight') ? 'freight' : 'passenger';
+      list = triggers.open || [];
+      for (i = 0; i < list.length; i++) {
+        if (list[i].direction === dir && list[i].trainClass === cls) {
+          return typeof list[i].lagSecs === 'number' ? -list[i].lagSecs : 0;
+        }
+      }
+      return 0;
+    }
+    list = triggers.close || [];
+    for (i = 0; i < list.length; i++) {
+      if (list[i].direction === dir && list[i].trainClass === t.trainClass) {
+        return typeof list[i].firesSecsBeforeCrossing === 'number' ? list[i].firesSecsBeforeCrossing : 0;
+      }
+    }
+    return 0;
+  }
+
+  // Seconds between this train and the trigger that fires this event. null off-chain, so
+  // callers can sort those last rather than inventing a distance for them.
+  //
+  // Two things are physically impossible and the distance alone does not rule them out: a
+  // barrier does not close for a train that has already gone, and it does not rise for one
+  // that has not yet arrived. Those trains are ranked into a band ABOVE every eligible one
+  // (INELIGIBLE_BAND) instead of being dropped, so they still appear in the picker and can
+  // still be chosen when nothing else is on the chain — which is the case that matters when
+  // the berth feed is lagging. The 2026-07-27 replay is what caught this: without the guard
+  // a CLOSE was attributed to a train that had crossed 25 s earlier.
+  //
+  // Note `secs` is clamped at zero by eta() and `sinceSecs` is only set for a passed train,
+  // so s < 0 is exactly prox.stage === 'passed' — the same test the berth-based filter this
+  // replaced was making, now expressed once for both apps.
+  var INELIGIBLE_BAND = 90000;
+  function eventRank(type, t, nowMs, triggers) {
+    var s = secsToCrossing(t, nowMs);
+    if (s == null) return null;
+    var opening = (type === 'opening' || type === 'OPEN');
+    var rank = Math.abs(s - triggerRef(type, t, triggers));
+    var possible = opening ? (s <= 0) : (s >= 0);
+    return possible ? rank : INELIGIBLE_BAND + Math.min(rank, 9999);
+  }
+
+  // The app's best guess at which train an observed event belongs to: nearest its trigger.
+  //
+  // The two events differ in what they do when nothing eligible is on the chain, and the
+  // asymmetry is deliberate — it is the behaviour both apps already had, kept because a
+  // wrong suggestion is worse than none. A picker default gets accepted: every one of the
+  // 15 rows in the 1 Aug session carries wasOurGuess=TRUE, including the one Rich then
+  // annotated as the wrong train.
+  //  - OPEN falls back to an approaching train. A barrier that has just risen means a train
+  //    HAS cleared, so if none shows as cleared the berth feed is behind and the train about
+  //    to be named is very likely the right one.
+  //  - CLOSE does not fall back. No approaching train means the one causing the close has
+  //    not been sighted in our berths yet; the trains that HAVE been sighted are the ones
+  //    that already went, and naming one of those is a guess with nothing behind it. The
+  //    2026-07-27 replay produced exactly that — a close attributed to a train 2 s past the
+  //    road. They stay in the list (see eventRank) so a human can still pick one.
+  function suggestForEvent(type, trains, nowMs, triggers) {
+    var allowIneligible = (type === 'opening' || type === 'OPEN');
+    var best = null, bestRank = Infinity;
+    (trains || []).forEach(function (t) {
+      var r = eventRank(type, t, nowMs, triggers);
+      if (r == null || r >= bestRank) return;
+      if (r >= INELIGIBLE_BAND && !allowIneligible) return;
+      best = t; bestRank = r;
+    });
+    return best;
+  }
+
   // ---- live-train enrichment (feedback / attribution) -----------------------------
   function trainKind(hc) { if (!hc) return 'passenger'; var c = hc.charAt(0); if (c === '6' || c === '7') return 'freight'; if (c === '5') return 'ecs'; if (c === '3') return 'test'; return 'passenger'; }
   // Extract HH:MM from a feed time (full ISO like 2026-07-24T08:29:00, or already HH:MM).
@@ -538,6 +648,8 @@
     buildClosures: buildClosures, getWindowTier: getWindowTier, parseTrains: parseTrains,
     derive: derive, stateLabel: stateLabel,
     proximity: proximity, etaToCrossing: etaToCrossing, eta: eta,
+    secsToCrossing: secsToCrossing, triggerRef: triggerRef,
+    eventRank: eventRank, suggestForEvent: suggestForEvent,
     trainKind: trainKind, hhmm: hhmm, enrich: enrich, feedbackPayload: feedbackPayload
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

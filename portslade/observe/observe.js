@@ -102,19 +102,12 @@
   }
   function shortName(t) { return t.destination ? t.destination.split(/[ (,]/)[0] : t.headcode; }
 
-  function suggestForClose(trains) {
-    var cand = trains.filter(function (t) { var p = t.prox; return p && p.stage === 'approach'; });
-    if (!cand.length) return null;
-    cand.sort(function (a, b) { return liveRank(a) - liveRank(b); });
-    return cand[0];
-  }
-  function suggestForOpen(trains) {
-    var cleared = trains.filter(function (t) { var p = t.prox; return p && p.stage === 'passed'; });
-    if (cleared.length) { cleared.sort(function (a, b) { return (a.ageSecs || 0) - (b.ageSecs || 0); }); return cleared[0]; }
-    var appr = trains.filter(isApproaching);
-    appr.sort(function (a, b) { return (a.ageSecs || 0) - (b.ageSecs || 0); });
-    return appr[0] || null;
-  }
+  // Attribution is PREDICT.eventRank in both apps now — nearest this event's own trigger,
+  // either side of it. `triggers` is the backend table this app already fetches for the
+  // approach map, so the CLOSE guess ranks against the real per-class anchor (0008+55,
+  // 0006+100, …) rather than against distance to the crossing, which is a different point.
+  function suggestForClose(trains) { return PREDICT.suggestForEvent('closing', trains, Date.now(), triggers); }
+  function suggestForOpen(trains) { return PREDICT.suggestForEvent('opening', trains, Date.now(), triggers); }
 
   function categoryOf(rec) {
     if (rec.test) return null;                  // test-mode capture: not a real observation
@@ -208,13 +201,6 @@
     }
     return { sched: null, live: null };
   }
-  // Seconds to the crossing for ranking: the live figure, so a stopper dwelling at
-  // Southwick doesn't outrank a fast that will actually get here first.
-  function liveRank(t) {
-    var e = PREDICT.eta(t);
-    return (e && e.secs != null) ? e.secs : (t.prox ? t.prox.rank : 100000);
-  }
-
   // ---- live feed poll (B1) ----
   function poll() {
     var t0 = Date.now();
@@ -537,9 +523,13 @@
   function renderPicker() {
     var box = $('attrPicker'); box.innerHTML = ''; var parts = partition();
     if (!liveTrains.length) { box.innerHTML = '<div class="empty">No trains in feed — mark Unknown or add a note.</div>'; return; }
+    // Ordered by the same key that produced the suggestion, so the list reads as "most
+    // likely first" for THIS event rather than "nearest the crossing" regardless of it.
+    var evType = pending.eventType === 'OPEN' ? 'opening' : 'closing', evNow = Date.now();
+    var evRank = function (t) { var r = PREDICT.eventRank(evType, t, evNow, triggers); return r == null ? 100000 : r; };
     parts.appr.sort(function (a, b) {
       if (a.headcode === pending.suggestedHeadcode) return -1; if (b.headcode === pending.suggestedHeadcode) return 1;
-      return liveRank(a) - liveRank(b);
+      return evRank(a) - evRank(b);
     });
     if (parts.appr.length) { box.appendChild(el('div', 'pick-group', 'On the Portslade approach')); parts.appr.forEach(function (t) { box.appendChild(pickRow(t)); }); }
     if (parts.rest.length) {

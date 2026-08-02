@@ -381,28 +381,27 @@ function fetchLive(){
     .then(function(d){ return d.trains || []; })
     .catch(function(){ return []; });
 }
-// Seconds to the crossing for ranking: the live figure, so a stopper dwelling at
-// Southwick doesn't outrank a fast that will actually get here first. Falls back to the
-// static berth median for anything eta() can't place.
-function fbRank(t){
-  var e = PREDICT.eta(t);
-  return (e && e.secs != null) ? e.secs : (t.prox ? t.prox.rank : 100000);
+// The backend's trigger table (GET /crossing/:id/triggers), fetched once — it is static
+// per deploy. It is what lets the picker rank trains against the instants the predictor
+// actually fires on rather than against the crossing. Absent (old backend, failed fetch)
+// the ranking degrades to distance-from-crossing, which is still correct in the ordinary
+// case; see PREDICT.eventRank for why the reference point matters.
+var fbTriggers = null;
+function fbFetchTriggers(){
+  fetch(API_BASE+'/crossing/'+crossingId+'/triggers', { cache:'no-store' })
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(d){ fbTriggers = d; })
+    .catch(function(){ fbTriggers = null; });
 }
-// Pick the app's best-guess train: opening → the just-passed train; else the
-// nearest approaching one.
+// Which train an event belongs to, and the order the picker lists them in. Both are
+// PREDICT.eventRank so the observer and this app cannot disagree about the same event —
+// the ranking used to be `ageSecs` in both, separately, and was wrong in both.
 function fbSuggest(type, enriched){
-  if(type==='opening'){
-    var passed = enriched.filter(function(t){ return t.prox && t.prox.stage==='passed'; });
-    if(passed.length){ passed.sort(function(a,b){ return a.ageSecs-b.ageSecs; }); return passed[0]; }
-  }
-  var appr = enriched.filter(function(t){ return t.prox && t.prox.stage==='approach'; });
-  appr.sort(function(a,b){ return fbRank(a)-fbRank(b); });
-  return appr[0] || null;
+  return PREDICT.suggestForEvent(type, enriched, Date.now(), fbTriggers);
 }
 function fbSortKey(type, t){
-  if(!t.prox) return 100000 + (t.ageSecs||0);                          // off-chain: last
-  if(t.prox.stage==='passed') return (type==='opening') ? (t.ageSecs||0) : 90000+(t.ageSecs||0);
-  return fbRank(t);                                                    // approaching: by eta
+  var r = PREDICT.eventRank(type, t, Date.now(), fbTriggers);
+  return r == null ? 100000 + (t.ageSecs||0) : r;                      // off-chain: last
 }
 
 var fbEvent = null;      // frozen event snapshot { type, tsISO, predictedState, snapshot, order, guess }
@@ -614,6 +613,8 @@ async function initCrossing(id) {
   if (roadLabel) roadLabel.textContent = CFG.road.toUpperCase();
 
   setRefreshState('idle');
+  fbFetchTriggers();   // static per deploy, and only the feedback picker reads it — fire
+                       // and forget, never blocking the first render on it
   refreshData();
   setInterval(updateStatus, 1000);
   // 10s, not 30s. A berth strike can move a predicted close by over a minute (one measured
