@@ -1,0 +1,143 @@
+# Known issues register
+
+## Deliberately deferred — do NOT raise these as outstanding (Rich, 2026-07-30)
+
+- **Finishing the 2026-07-27 audit window** (`truth.py` / `detect.py` never run on it). The
+  recording is kept and still valid; re-run it when there's a reason to, not as a backlog item.
+- **Yapton / S-Class barrier data** (38 days, ~29k barrier events, capture still running). Not a
+  route to calibrating *Portslade* — Rich's call, and it stands: Portslade is the priority and
+  Yapton's numbers are Yapton's. This data comes into play when the app expands to other
+  crossings, which is what it was collected for.
+
+Neither is urgent and neither blocks anything. Leave them out of "what's outstanding".
+
+**Read `DATA-SOURCES.md` (beside this file) before any analysis.** Observation and log data spans
+the Mac, the VPS and the Google Sheet; on 2026-07-31 an analysis used one export, concluded n=3
+where n=11 existed, and nearly recommended replacing a correct rule.
+
+Re-check every open entry at the start of each audit (`detect.py <OUT> --regress`).
+Mark each **fixed** / **recurring** / **latent** (code path intact but condition didn't arise).
+"Didn't trigger" is not "fixed" — confirm the code changed before closing an entry.
+
+Last audited: **2026-07-26 07:05–08:58** (Sunday) against backend `3d2d3b1`, frontend `82b2a87`.
+Now deployed: backend **`d9c95d1`**, frontend **`95e1b7d`**. Entries 3, 4, 5, 7, 8, 10 closed and 6 split;
+12 opened; **13 closed live 2026-07-30 (C15)**; **1 measured and closed as not-worth-building 2026-07-30**.
+**Re-verify those in the next window rather than trusting this file** — several are closed on a
+unit test plus a live spot-check, not on a full observation run.
+
+**2026-08-01 — C14 and C15 written and closed on unit tests + reproductions, NOT DEPLOYED YET
+and NOT observed in the field.** Both were reported from the field by Rich, both reproduced
+deterministically against the shipped config, both fixed with falsified regression tests. But
+neither has run against live TD, so treat them as the least-proven entries here and re-check them
+first in the next window. Two things specifically want a live look: whether `closePending`
+("Train held") appears on trains that are merely slow rather than stopped — the projection expires
+at the class median, so a train in the upper tail may briefly read as held — and whether the
+coalescing pass merges anything a human at the crossing would call two closures. 16 opened the
+same day (`mergeOppositeMaxGapSecs` unvalidated, deliberately not measured).
+
+## Open
+
+| # | Issue | Where | Last seen | Detector |
+|---|---|---|---|---|
+| 1 | Double-traversal / reversing schedules dropped entirely (`traverses:false` on ambiguity) — service crossing twice is invisible both times. **MEASURED 2026-07-30, and it is not worth building.** Of 43,584 schedules active that day, 251 touch both sides and exactly **4** land on the ambiguous branch: `8Y91`, `3S97`, `3S93` (genuine double traversals — `SHRHMBS`↔`HOVE` both ways, 7–11.5 min apart) and `1Q76` (**not** a Portslade traversal at all — Arundel Jn ↔ Preston Park, 81 and 228 min apart via the Arun valley, so a naive fix would invent 2 phantom closures a week). All 4 are `atoc=ZZ` departmental and all 4 are **Q-flagged**; **none has been sighted by TD in 83 days** (~180 weekday opportunities). Caveat: departmental trains sometimes run under a reporting number other than their CIF `signalling_id`, so that is strong evidence rather than proof. The drop is now **logged** rather than silent, with `bracketPair` per transition — that flag is the discriminator any real fix needs. Cost of the real fix is not the parser (a transition walk generalises cleanly, single traversal = n=1) but **identity**: `schedulesByUid` is UID-keyed, `tdSeenToday` is headcode-keyed and holds only the day's FIRST sighting, and `closeStrikeSeen` is `headcode\|berth` — a train crossing twice collides in all three. **Revisit only if the new log line shows an ambiguous headcode that TD actually sights.** | `schedule-parser.js` `analyseRoute` ambiguous branch | 2026-07-30 (measured; 0 running) | parse log line: "dropped N ambiguous multi-traversal/reversing schedule(s)" |
+| 2 | STP-replaced service leaves a phantom CIF duplicate (`1S11` vs real `1S61`, +69 s on a real closure). The "0 cancellations every run" half is **not** a bug — see C7. Relaxing the loose dedup was **rejected**: dropping the `!t.headcode` guard and matching on direction+time ±3 min would suppress *real* trains (three crossed within 90 s on 25 Jul), trading a self-correcting 69 s overstatement for a missed closure | `crossing-state.js:387` | 2026-07-26 | RTT diff; TD never sights the phantom |
+| 6b | `tdBerth` still never populated, so the ±90→±60→±30 ladder is unbuilt and the `imminent` tier unreachable. The headline symptom — a strike-confirmed close still showing a band — is fixed (C6). Deliberately **not** done: keying the near tier on proximity instead of source, so CIF closures leave ±2 min. A CIF train has no realtime data, so its timing genuinely is less certain; a strike gives it ±0 when it earns one | `crossing.js` `getWindowTier` | 2026-07-26 | `detect.py` §6 |
+| 9 | `etaText` mixes labels (`Timetabled`, `Live (TD)`, `On time`) with raw ISO timestamps. Not rendered, so latent | `crossing-state.js` `_mergeTrains`; LDB poller | 2026-07-26 | inspect `etaText` value set |
+| 16 | **`mergeOppositeMaxGapSecs: 20` is unvalidated** — the only number in `backend/config/crossings.json` with no `_comment`, no provenance and no n, while every other value there carries its sample size. The audit skill's own worked example uses it as the archetype of a hard threshold on the difference of two noisy estimates. Physical reasoning says it is probably too SHORT: Boundary Road is MCB-CCTV, so a signaller must watch the crossing clear on CCTV, raise, and re-lower — nobody does that for a 25 s gap, they hold. So the current value likely splits periods that in reality merge. **Deliberately not measured on 2026-08-01 (Rich's call)** — the #15 fix removes the visible symptom and this is a calibration question, not a bug. Measurable when wanted: for every consecutive crossing pair in the TD logs, take (second train's close anchor − first train's clear step) and cross-reference the observer sessions' barrier-up events to get the real distribution of "did it actually lift" | `backend/config/crossings.json` `timing.mergeOppositeMaxGapSecs` | 2026-08-01 (not measured) | TD pair-gap distribution vs observed barrier-up |
+| 11 | **Close offsets are largely ungrounded.** **31 Jul session added n=7 close observations** (3 east, 4 west) — see the OPEN-LAG note below for what shipped from it. Close leads measurable on 4: **east stopping 58 s, east through 98 s** (physically sensible — a through train needs the barrier earlier than one standing in the platform), **west stopping 154 s and 80 s**. That west pair is the problem: near-identical platform dwells (105/111 s) yet **74 s apart**. Boundary Road is MCB-CCTV — a signaller lowers it on CCTV — so part of this is human timing, not train position, and n=2 cannot separate a class effect from signaller variance. **If it is signaller variance there is a FLOOR on westbound precision and chasing below it is wasted effort**; settling that is the highest-value thing more westbound observations would do. Class discriminator now recorded with every observation (`trainClass`/`callsAtStation`/`callsAtApproach`, `ea64c09`), so future sessions no longer need it re-derived from protecting-berth dwell. Only 2 of 5 close rules have barrier observations: `east+Southwick 0006+100` (n=5) and `west stopper dep−45` (n=8), both from 24 Jun. `east 1H 0008+40`, `east fast/ECS` and `west non-stopping 0003+20` are **n=0**. **CORRECTED 2026-08-01:** the old note said `west 0003+20` fires "~70 s early". That computed the lead with the STOPPING transit (153 s) against a NON-stopping rule. With the correct `fast` transit (53 s, n=60) it gave a 33 s lead, i.e. it fired roughly **59 s LATE** — opposite sign. Superseded by C16, which anchors fast at `0001` | `backend/config/crossings.json` `closeTrigger` | 2026-07-31 | observer session |
+
+## Closed
+
+| # | Issue | Fixed by | Verified |
+|---|---|---|---|
+| C14 | **A countdown to a trigger that had not fired ran to zero, and then to CLOSED.** Reported from the field 2026-08-01 ("Next Close reached 0s / Soon with no train at the trigger, and it went on to say closed"). Two independent causes, both reproduced deterministically against the SHIPPED config before the fix. **(a) Expired projections were still served.** The close is `projectedStrike + offset` where `projectedStrike = berth entry + MEDIAN transit` — a fixed timestamp with a shelf life. Once `now` passes it with no strike, the train has falsified it by not arriving, but the code kept serving it, so the countdown walked through zero. A train still in `0008` at a 180 s dwell is **7.8 sd** past the 71 s median: stopped, not slow, and nothing in the data says when it will move. Measured: dwell 180 s → `Soon`; 420 s → still `Soon`, forever. **(b) A READ mutated the CLOSED gate's evidence.** `_upstreamOfAnchor` reads `liveTrains`; `getLiveTrains` **deleted** entries past the 240 s display TTL as a side effect of serving `GET /crossing/:id/live` — which the observer polls every 2.5 s. So a train held >4 min stopped being "visibly upstream", the gate opened, and CLOSED fired off `bestTime` with no strike — **but only if someone had the observer open**. Measured: at a 250 s dwell, `pollLive=false` → not closed, `pollLive=true` → `*** CLOSED ***` | **Projections now expire** (`_projectBerth` sets `expired`), and an unstruck close/open is served as a LOWER BOUND at the class's own lag from its own trigger — close `now + offsetSecs` (east 20–100 s, west 10–61 s), open `now + openLagSecs` (east 35/70 s, west 18/30 s) — flagged `closePending` / `holdingOpen` so the client renders "held" instead of counting down. **Both arbitrary floors deleted** (`OPEN_HOLD_FLOOR_MS` 60 s, `CLOSE_HOLD_FLOOR_MS` 30 s): the right value was never arbitrary, it was already measured and already in the config. What made the 60 s floor load-bearing was the STATE, not the countdown — an `end` in the past stopped the period being current at **three** sites (`_deriveState`, the `getApiState` filter, `PREDICT.derive`) and reported the crossing CLEAR with a train on it; all three now gate on `holdingOpen`. The read no longer mutates (`getLiveTrains` filters; pruning moved to `recordTdBerth` at the longest horizon), and `_chainIndex` takes the caller's own tolerance — projections want a fresh position, the gate is happy with a 20-min-old one plus the absence of a strike. **No timer on the hold**: it releases on the train's next berth step | 34 new tests. Sweeping 0–900 s of dwell: **0** samples where the countdown expired unstruck, **0** where CLOSED fired, `0006` never struck (the premise). Held value = `now + 100 s` exactly at 180/250/400/900 s, **identical with and without a `/live` poll**. Continuity: the strike handover moves the close **≤1 s** (holding at `now+offset` is where `strike+offset` lands). Falsified each half independently — reverting (a) fails 10 assertions, reverting (b) fails exactly the three `/live`-poll ones at ≥250 s dwell, i.e. precisely where the 240 s display TTL bites |
+| C15 | **A closure could be predicted to OPEN after the next one CLOSED.** Field screenshot 2026-08-01: BARRIERS DOWN, next close **+28 s**, next open **+40 s** — the barrier dropping 12 s before it rose. `_computeClosuresDirectional` groups on each train's **raw** `openPred`, but the displayed end is computed afterwards by `_periodEndInfo`, which can push it much later (hold-until-cleared). Nothing re-checked the grouping — the code comment said so. This is **#12 one scope wider**: that was one train's own open preceding its own close | **A coalescing pass over the ANCHORED ends** (`_coalesceOverlapping`), merging any period whose close lands at or before the previous period's end, iterated to a fixed point because merging changes which train is final. Merge-**only**, so it is NOT the measured-worse "projecting the merge key" (which fed an estimate to the grouping key and churned membership in both directions, 62 s → 84 s westbound); it can only ever join two periods that would otherwise render as barrier-up-then-instantly-down. Physically right for MCB-CCTV: a signaller does not raise and re-lower for a gap inside the hold. **Hysteresis** on top, grounded the way C1's was — a coalesced pair stays coalesced until the barrier is KNOWN to have lifted (a recorded clear step, `_barrierKnownToLift`), because the end bound moves with the clock and the follower's close moves with every LDB revision, and without a physical tie-breaker the pair flaps as they drift past each other | The field case now yields **1** period carrying both trains. Swept −120→+300 s: **0** periods starting before the previous ends, **0** samples where the next close precedes the current open. Oscillation: clock sweep × ±2 min of Darwin jitter over 40 recomputes → **0** grouping flips; **falsified** — disabling only the hysteresis makes that test fail. A recorded clear step still splits the pair, so the merge is not a one-way ratchet |
+| C15 | **Berth steps didn't trigger a recompute, so projections lagged up to 30 s.** The projection is computed FROM `liveTrains`, but `recordTdBerth` wrote that map without recomputing — its comment said the live map "must not touch predictions", true until the projection started reading it on 2026-07-26. A sharper estimate sat unused until the next LDB poll | `d9c95d1` — recorders now `_markDirty()` and one coalesced `setImmediate` recomputes. **Not** the one-line inline recompute the entry proposed: measured `_recompute()` at **13.09 ms**, and `td-listener` parses each STOMP frame into an ARRAY emitting one sighting per message synchronously, so inline would block the loop for N×13 ms per frame with the API queued behind it. Marking is gated on the berth being on a configured `approachChain` (reuses `_matchCloseStrikeBerth`) — `_chainIndex` returns null for anything else, so an off-chain step cannot change a prediction. That gate is the difference between 7,672 and 1,234 recompute requests/day. Side benefits: one recompute per frame not per message, and every recompute now sees a fully-updated state (previously `recordTdClearStep` recomputed before `recordTdCloseStrike` had written `closeStrikeSeen`) | **live 2026-07-30**, deployed `d9c95d1`. 426 samples over 18.9 min, 13 on-chain berth steps → **2 step-attributable prediction moves**: `1N21` 0012→0010 (−1 s) and `1S27` 0018→**0016** (**−74 s**, i.e. the close corrected 74 s earlier the instant the train struck the first chain berth). Attributable because only the stepping train's `predictedStart` moved; LDB polls move several at once and were counted separately (7 poll-like samples). Most steps correctly move nothing — a train running to the median transit projects the same close from either berth. Cost: steady-state CPU **0.471 %** of one core vs a 0.5 % baseline (`/proc/<pid>/stat` delta over 240 s, excluding the startup reparse — the naive `ps %cpu` reading of 18.1 % was an artefact of amortising a 2-min CIF parse over 8.8 min uptime). Local API latency p50 **6.8 ms**, max **7.9 ms** over 40 requests on the VPS — every response faster than a single recompute, so nothing ever queued behind one. 9 new unit tests incl. the end-to-end claim (a berth step alone yields the +197 s projection, not the +220 s bestTime fallback) |
+| C16 | **A westbound closure could be predicted to OPEN before it CLOSED** ("Down For" blank), and its close jumped in 60 s steps for a single train. Both came from one cause: the close was `departure − 45 s` and Darwin publishes that to the MINUTE, while the period end moved smoothly off the second-precision berth projection | `69456ec` — the west close is now BERTH-anchored per class: `strikeOrProjection(anchor) + transit[anchor>XING] − crossingLeadSecs(92)`, offset **derived at runtime** so it tracks the transit table instead of drifting from it. Anchors: stopping/freight `0003`, ecs/fast `0001` (chosen so the derived offset stays positive — a rule cannot fire before its own strike). `predictedDepartureLeadSecs=46` is the pre-strike prediction, and it preserves the LDB-vs-CIF distinction the old `_hasLiveDeparture` guard protected: an LDB `bestTime` is a DEPARTURE, a CIF one an interpolated CROSSING. **No dwell term** — three measurements killed it (booked dwell has only 30/60 s against realised 0–180 s; refitting on booked gave sd 61 s, worse than the old rule; subtracting LIVE dwell DOUBLED sd 13.5→25.8 s, being the difference of two minute-rounded times) | **Anchor n=771**: berth strikes predict the crossing 2.5× better than the departure estimate (sd `0005` 19.6 s, `0003` 21.7 s, `liveDep` 48.8 s, `schedDep` 253 s). **Offset n=11** — the weak link. ACCEPTANCE, honestly: on those 11 the new rule scores sd **66.9 s** where the departure rule scored 43.1 s, driven entirely by two long-dwell trains (`2E28`, `1S30`, 260 s `0003`→crossing against a 153 s median) that sit beyond the 90th percentile of 771 crossings; 8 of 11 come from one disrupted day whose transits average 178 s vs the population's 156 s. Excluding those two: mean +4.6 s, **sd 38.2 s**, better than the old rule. Shipped on Rich's call — the stability win (a close that cannot move once struck) does not appear in sd at all. **Watch:** on a long-dwell train the close fires ~140 s early. 189 tests; the #12 regression test loads the SHIPPED config (a fixture missing `openLagSecs` invents inversions production lacks) and sweeps the departure estimate ±10 min asserting no inversion, one distinct close, and a frozen value across recomputes |
+| C1 | Closure grouping flip-flops — merged↔split oscillating 5–6× per pair, wrong 72–82% of the time; a cleared train's stale `bestTime` dragged the following train into its period | `3a051a5` clear-step-aware merge key (`_openPred` prefers a recorded clear step) | 2026-07-26: **0** oscillations in 1,168 samples; independently 4 one-way regroups in 74 samples |
+| C2 | Eastbound close anchored to `0006` for every class, so a 1H semi-fast's close fired after it had already cleared | `7f18ecc` per-class anchors + `d1dfad5`/`f90b65f` calling-pattern classification | 2026-07-26: east `stoppingLocal` `0006+100` +0 s ×2; 1H67 live — 0008 strike 20:47:53, crossed 20:51:02 (189 s, the measured median exactly) |
+| C3 | Premature CLOSED off a drifting `bestTime` while the train was demonstrably still upstream | `3d2d3b1` position-gated backstop | 2026-07-26: gate held `start`, released exactly on the `0003` strike |
+| C4 | `state` a stored snapshot served beside live-filtered fields → self-contradictory responses; `_deriveState` skipped a period whose `predictedStart` had passed but `start` hadn't, reporting OPEN in the final minute before the barrier drops | `b6c304c` — `state` derived per request; next-closure keyed on `start`, not `closeTarget` | unit tests + live spot-check. **Re-verify over a full window** |
+| C5 | `start` later than `predictedStart` for west CIF (`safetyNetSecs.west 90` vs `closeBefore.west 150`) → 60 s of "clear" after its own predicted barrier-down | `b6c304c` — backstop clamped to the prediction unless the direction opts in via `confirmedMayFollowPredicted` (east only, where 145 < 180 is deliberate and is what makes "Soon" live). **Not** fixed by raising `safetyNetSecs.west` to 150 as proposed: one number can't serve both west classes, and it would make CLOSED fire ~2 min early for every stopper | live: 0 west periods with `start` later than predicted. Measured **no-op for real trains** — 96.89% of 7,518 westbound crossings strike 0003 more than 90 s out, so the strike wins and the clamp is unreachable; the 3.11% remainder is *better* (no premature CLOSED + flicker) |
+| C6 | A strike-confirmed close — known to the second — still rendered with a ±2 min band (320 samples) | backend `b6c304c` emits `closeConfirmed`; frontend `208aec4` drops the band and switches to the precise countdown | live: `1S38` observed confirmed, rendering unbanded |
+| C7 | "Update extract logs 0 cancellations/overlays/deletes every run" read as a smell | **Not a bug.** The extract does carry them — 644 schedules, STP `C=55 O=206 N=26 P=357`. Zero match because Portslade sees ~211 of ~582,467 national schedules, so expected hits ≈ 0.02 | inspected the live extract |
+| C8 | `· in now` on every closure pill | `8b660d4` — `fmtWhen()`: "any moment now" past zero, "in under a minute" below the rough tier | headless render of all three pill states |
+| C9 | Feedback picker labelled a train with **no live estimate** "on time", and logged that fallback into the calibration sheet's live columns | `a3ae895` — `liveArrReal`/`liveDepReal` kept separate from the display fallback; picker shows "timetabled"; payload carries the real value or blank | headless render of both cases |
+| C10 | Picker lost all four Portslade times once a train departed | `73184b6` last-known cache + `b6c304c` **per-field** fallback | Darwin does not drop a departed service — it keeps the row and blanks the estimates (`liveArr` on arrival, `liveDep` on departure), so a record-level fallback never fired. Caught on `1N34`, 20:09:42 |
+| C12 | Held-open end trailed the clock (`now + OPEN_HOLD_FLOOR_MS` recomputed each pass) so "Next Open" counted **backwards** ~25 s | `1315934` — the reopen for an uncleared train is now PROJECTED from its current berth (`transit[berth→XING] + openLagSecs`) instead of a rolling placeholder, floored so it can never expire a closure early | replay 2026-07-25: reopen error vs (clear step + openLag) median 30 s → 20 s, \|err\|>30 s 18/32 → 14/32 |
+| C13 | `areaEntryLeadSecs` projected from "sighted anywhere in area LA" — a median 2,329 s from the crossing eastbound against a 330 s drop deadline, so 95% of trains would breach it | `1315934` — superseded by berth projection wherever TD can place the train; retained only as the fallback when it can't | measured over 10 days of TD |
+| C14 | Restart artefact — a restart wiped `tdSeenToday`, so every train then in area LA was stamped with a boot-time "first sighting" and any whose scheduled crossing had passed was resurrected as imminent | `313dc1f` — the day's TD log is replayed into `tdSeenToday` before the feed starts, restoring the real first-sighting times | live: the 21:57:19 restart produced **0** resurrected CIF trains, against 2 at the 21:42:13 restart 15 min earlier. Its CLOSED was real — 2Y10 was physically on the crossing (0005→0007 at 21:56:44) |
+| C11 | Closure pill and "Down For" card rounded the same duration differently ("~5 min" beside "~4m 50s") | `a3ae895` / `8b660d4` — both use `fmtDuration`; pill reads `Closed 3m 20s · opens in 26s` | headless render; fits a 360 px layout (290 px available, 180 px needed) |
+
+## Verified working (don't "fix" these)
+
+- **Clear-step-anchored reopen**: +0 s vs truth on 6 of 7 measurable trains (−10 s on the 7th).
+  `_anchorEndToClearStep`, `recordTdClearStep`, `OPEN_HOLD_FLOOR_MS` and `openLagSecs` are
+  byte-identical to `ccfe6b7` — none of the close work touched them. Open lag re-measured against
+  the 24 Jun taps: east stopping 38–49 s (ship 45), west stopping 16–24 s (ship 18), east freight
+  67 s (ship 70). East ECS observed 27 s against a shipped 45 — n=1, a candidate for its own
+  bucket, not a change.
+- **Open lag re-measured 31 Jul (n=10)** — barrier-up minus the train's own clear-step strike.
+  East passenger 23,31,32,32,35,43,46 (n=7, mean 35, median 32) against a shipped **45**, which
+  its own config comment records was never measured: 24 Jun saw 36–43 (n=4) and 45 was adopted
+  as a safety margin. Corroborated independently by the prediction stamp — all four stamped
+  opens fired EARLY (−3,−13,−14,−22 s). **Shipped 45 → 35** (`8c86861`, Rich's call to take the
+  mean rather than keep a margin); pooled n=11 mean ≈36, so it does not hinge on which session
+  you weight. Accepted trade, recorded in the config: about half of eastbound closures now
+  reopen a few seconds LATER than predicted. West measured 13,15,30 (n=3, mean 19) against a
+  shipped 18 — **confirmed, left alone**. NOT split by stopping/through: hinted at (stopping
+  46,31 vs through 43,32,32,35,23, and a train accelerating from a stand plausibly clears more
+  slowly) but n=2 stopping is not evidence — revisit once `trainClass` has a few sessions behind it.
+- West LDB stopper close rule `departure − 45 s`: +0 s ×3.
+- Hold-until-clear correctly stretches then retracts a closure end when a train runs late.
+- Coverage of regular passenger service: 10/10 trains that crossed were in the app.
+- **Approach strikes are near-perfectly reliable**: 14 missing in 15,064 crossings over 77 days
+  (0.093%); 76 of 77 days had no daytime TD gap over 10 min. The backstop is a genuine rare path,
+  so don't design as though strikes are flaky.
+
+## Measured negative results (tried, made things worse, don't re-add)
+
+- **Projecting the merge key (`_openPred`).** Looks like an obvious gap once the period end
+  is projected. Replaying 2026-07-25 it pushed westbound stopper close error at T−300 s from
+  62 s to 84 s and added nothing eastbound: feeding an estimate to the GROUPING key churns
+  which trains merge, so `predictedStart` (the group minimum) starts coming from the wrong
+  train. Grouping wants a stable key more than a sharp one. Comment left at the call site.
+- **Relaxing the loose CIF dedup** to direction+time ±3 min for entries that have a headcode.
+  Three trains crossed within 90 s on 25 Jul; it would suppress real ones, trading a
+  self-correcting overstatement for a missed closure.
+- **Raising `safetyNetSecs.west` to 150** to fix the start-later-than-predicted window. One
+  number can't serve both west classes — it would make CLOSED fire ~2 min early for every
+  stopper. Clamped behind an opt-in instead (C5).
+
+## Method traps (each cost a wrong conclusion on 2026-07-26)
+
+- **Read the server's `lastRefresh`, never the sampler's clock.** A suspended laptop left a
+  17 m 25 s hole in a capture; against local time it looked like two trains vanished 8–10 min
+  before crossing and were missed closures. They weren't — the sample the far side of the gap
+  was 17 min later than it appeared.
+- **Assert the specific field, not "any of".** A watch checking
+  `any([schedArr, schedDep, liveArr, liveDep])` reported success on two scheduled fields while
+  both live fields were empty, masking C10 for an hour.
+- **Measure runtime behaviour; never infer it from the code path.** A clamp that read like a 60 s
+  regression proved unreachable for 96.89% of trains, because a struck train returns early and
+  never enters that branch.
+- **Validate a proposed discriminator against observed behaviour before shipping it.** The
+  eastbound class split was first built on Fishersgate, which *looks* like the relevant station;
+  cross-tabulating against real berth-0006 transit gave 41/93 mismatches for FSHRSGT and 0/93 for
+  STHWICK.
+- **TD logs rotate at 23:00Z** — stitch consecutive days, or a strike at 22:59 looks missing.
+  This alone inflates the apparent missed-strike rate 4×.
+- **`new CrossingState('t', cfg)` silently disables the transit table.** Transits load as
+  `config.transits || TRANSITS[crossingId]`, so a dummy id means no transits, which means
+  `_closeAnchor` cannot derive an offset and EVERY class falls back to the pre-strike lead. This
+  produced four separate false failures on 2026-08-01, each of which read like a code fault. Use
+  `'portslade'` in any harness that touches close anchors or projections, or attach `cfg.transits`
+  explicitly.
+- **A hand-made config fixture is not the shipped config.** The #12 regression test first "failed"
+  with 20 inversions purely because its fixture lacked `openLagSecs`, so the period end could not
+  anchor to the clear step and drifted with `bestTime`. Production had zero. For a regression test
+  about a production bug, load `backend/config/crossings.json` — the thing worth asserting is that
+  the DEPLOYED configuration cannot reproduce it.
+- **Node's `console.log` does not take printf widths** (`%-6s`, `%4d`). It prints them literally
+  and appends the args, which mangles every table and cost several re-runs today. Use `padEnd()`
+  and string concatenation.
