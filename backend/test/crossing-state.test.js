@@ -1179,6 +1179,9 @@ console.log('  -- _classOf single source of truth --');
   check('east, Southwick unknown => stoppingLocal (calibrated anchor)', st._classOf(mk({dir:'east',hc:'1H03',station:true,approach:null})), 'stoppingLocal');
 
   // _closeAnchor must resolve via the SAME label, so a class change moves the anchor with it.
+  // The numbers below are this block's FIXTURE, not the shipped config — east stopping ships
+  // at 0008+55 since 2026-08-02. Don't read these literals as live calibration; what is being
+  // asserted is that the label resolves to its own class's anchor, whatever that anchor is.
   const anchorFor = (t) => { const a = st._closeAnchor(t); return a ? a.berth + '+' + a.offsetSecs : null; };
   check('_closeAnchor agrees with _classOf (stoppingLocal -> 0006+100)', anchorFor(mk({dir:'east',hc:'1N01',station:true,approach:true})), '0006+100');
   check('_closeAnchor agrees with _classOf (stopping -> 0008+40)',       anchorFor(mk({dir:'east',hc:'1H01',station:true,approach:false})), '0008+40');
@@ -1522,8 +1525,12 @@ console.log('  -- trigger map --');
     tg.close.filter(c => c.place.fraction < 0 || c.place.fraction > 1).length, 0);
 
   // Open triggers carry the clear step the observer draws them from.
+  // Read the lag from the shipped config, as the west block above does: this asserts the
+  // WIRING (clear berth + configured lag reach the endpoint), not the calibrated number.
+  // Hard-coding it made a pure recalibration (35 -> 40, 2026-08-02) look like a code break.
+  const eastLag = SHIPPED.timing.openLagSecs.east.passenger;
   const eop = tg.open.find(o => o.direction === 'east' && o.trainClass === 'passenger');
-  check('east open = 0002 strike + 35s', `${eop.clearBerth}+${eop.lagSecs}`, '0002+35');
+  check(`east open = 0002 strike + ${eastLag}s`, `${eop.clearBerth}+${eop.lagSecs}`, `0002+${eastLag}`);
 }
 
 console.log('  -- #13 recompute on berth steps (coalesced) --');
