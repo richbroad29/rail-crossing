@@ -338,8 +338,15 @@ function setStrike(state, hc, ts, dir, berth) {
   state.closeStrikeSeen.set(`${hc}|${b}`, { ts, direction: dir, headcode: hc, berth: b });
 }
 // close a single train and return its one period (predictedStart / start / end).
-function periodFor(cfg, train, nowMs, strikes = []) {
+// `seen` seeds tdSeenToday — "TD has sighted this train at some point today". The safety-net
+// backstop requires it: its purpose is a MISSED STRIKE on a train that demonstrably exists,
+// not a train TD has never seen at all (that one holds instead — see _confirmedCloseTime and
+// the 1H92 / 6O40 closures of 2026-08-03). A supplied strike implies a sighting.
+function periodFor(cfg, train, nowMs, strikes = [], seen = true) {
   const state = new CrossingState('t', cfg);
+  if (seen && train.headcode) {
+    state.seedSightings([{ headcode: train.headcode, ts: new Date(nowMs) }]);
+  }
   for (const s of strikes) setStrike(state, s.hc, s.ts, s.dir, s.berth);
   return state._computeClosures([train], new Date(nowMs))[0];
 }
@@ -536,6 +543,7 @@ console.log('  -- gated state (confirmed start / predicted countdown) --');
 // the backstop; then CLOSED at the safety net (no-strike east period: start −210, pred −180).
 {
   const state = new CrossingState('t', closeCfg);
+  state.seedSightings([{ headcode: '1A08', ts: new Date(BASE - 400000) }]);   // exists, strike missed
   state.closurePeriods = state._computeClosures([mkT({ dir: 'east', headcode: '1A08', bestTimeMs: BASE })], new Date(BASE - 400000));
   check('no strike: CLOSING_SOON before the backstop (not CLOSED)', state._deriveState(new Date(BASE - 250000)), 'CLOSING_SOON');
   check('no strike: OPEN well before the predicted close', state._deriveState(new Date(BASE - 600000)), 'OPEN');
@@ -780,8 +788,12 @@ const classCfg = {
 // ---- Position-gated backstop ---------------------------------------------
 console.log('  -- position-gated backstop --');
 {
+  // Sighted throughout — this block is the live POSITION gate, not the sighting gate. "No
+  // live position" means TD saw the train and no longer has a berth for it: a missed strike,
+  // exactly what the backstop is for. Never-sighted is covered under "sighting gate on CLOSED".
   const withPos = (berth) => {
     const st = new CrossingState('t', classCfg);
+    st.seedSightings([{ headcode: '1H67', ts: new Date(BASE - 300000) }]);
     const t = { ...mkT({ dir: 'east', headcode: '1H67', bestTimeMs: BASE }), callsAtApproach: false };
     if (berth) st.liveTrains.set('1H67', { berth, lastSeen: BASE - 200000 });
     return st._computeClosures([t], new Date(BASE - 200000))[0];
@@ -800,6 +812,7 @@ console.log('  -- position-gated backstop --');
   // we can see is still four berths away would show CLOSED off a drifting bestTime.
   const late = (berth, nowMs) => {
     const st = new CrossingState('t', classCfg);
+    st.seedSightings([{ headcode: '1H67', ts: new Date(BASE - 300000) }]);
     const t = { ...mkT({ dir: 'east', headcode: '1H67', bestTimeMs: BASE }), callsAtApproach: false };
     if (berth) st.liveTrains.set('1H67', { berth, lastSeen: nowMs });
     return st._computeClosures([t], new Date(nowMs))[0];
@@ -978,9 +991,55 @@ console.log('  -- closeConfirmed + state + west invariant --');
 
   // ...and a west stopper is untouched: its backstop is already earlier.
   const stopW = mkT({ dir: 'west', headcode: '2W30', bestTimeMs: BASE, source: 'ldb' });
-  const ps = new CrossingState('t', wCfg)._computeClosures([stopW], new Date(BASE - 400000))[0];
+  const stW2 = new CrossingState('t', wCfg);
+  stW2.seedSightings([{ headcode: '2W30', ts: new Date(BASE - 400000) }]);
+  const ps = stW2._computeClosures([stopW], new Date(BASE - 400000))[0];
   check('west stopper: still gated at bestTime − 90s (no regression)', ps.start, iso(BASE - 90000));
   check('west stopper: prediction is departure − 46s', ps.predictedStart, iso(BASE - 46000));
+}
+
+// ---- The sighting gate on CLOSED (1H92 / 6O40, 2026-08-03) ----------------------
+// A CIF train TD has never seen must not reach CLOSED off its timetable. The countdown is
+// deliberately untouched — it still predicts and still reaches CLOSING_SOON.
+console.log('  -- sighting gate on CLOSED --');
+{
+  const t = () => mkT({ dir: 'east', headcode: '1H92', bestTimeMs: BASE, source: 'cif' });
+  const unseen = periodFor(closeCfg, t(), BASE - 250000, [], false);
+  const seen = periodFor(closeCfg, t(), BASE - 250000, [], true);
+  check('unsighted: the prediction is unchanged (bestTime - 180s)', unseen.predictedStart, iso(BASE - 180000));
+  check('sighted but unstruck: backstop still fires (bestTime - 210s)', seen.start, iso(BASE - 210000));
+  check('unsighted: the gated close is NOT at the backstop', unseen.start !== iso(BASE - 210000), true);
+  check('unsighted: the gated close is held into the future', Date.parse(unseen.start) > BASE - 250000, true);
+  const sweep = [300, 250, 200, 150, 100, 50, 0].map(sec => {
+    const nowMs = BASE - sec * 1000;
+    const st = new CrossingState('t', closeCfg);
+    st.closurePeriods = st._computeClosures([t()], new Date(nowMs));
+    return st._deriveState(new Date(nowMs));
+  });
+  check('unsighted: never CLOSED anywhere across its approach', sweep.includes('CLOSED'), false);
+  check('unsighted: but it does still reach CLOSING_SOON', sweep.includes('CLOSING_SOON'), true);
+}
+
+// A runs-as-required path with rate 0 and no sighting is dropped from the train list outright,
+// so it cannot drive OR bridge a closure (6O40, 2026-08-03).
+{
+  const SOON = Date.now() + 600000;   // _mergeTrains reads the wall clock, not BASE
+  const rar = (o) => ({ headcode: '6O40', direction: 'east', trainType: 'freight',
+    estimatedCrossingMins: 0, origin: 'A', destination: 'B', operator: 'ZZ',
+    runsAsRequired: true, recentRunRate: 0, ...o });
+  const mk = (entries, sight) => {
+    const st = new CrossingState('t', closeCfg);
+    if (sight) st.seedSightings([{ headcode: '6O40', ts: new Date(SOON) }]);
+    st.scheduleTrains = entries;
+    st._scheduleTimeToDate = () => new Date(SOON);
+    return st._mergeTrains().filter(x => x.headcode === '6O40');
+  };
+  check('runsAsRequired + rate 0 + unsighted: dropped', mk([rar({})], false).length, 0);
+  check('runsAsRequired + rate 0 + SIGHTED: kept (a sighting beats the rate)', mk([rar({})], true).length, 1);
+  check('runsAsRequired + rate null (no data): kept, null is not zero',
+    mk([rar({ recentRunRate: null })], false).length, 1);
+  check('rate 0 but NOT runsAsRequired: kept (a booked path is not conditional)',
+    mk([rar({ runsAsRequired: false })], false).length, 1);
 }
 
 // ---- Berth projection: sharpening prediction ------------------------------

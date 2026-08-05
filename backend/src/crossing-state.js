@@ -670,6 +670,14 @@ class CrossingState {
       const floorMs = now.getTime() + BEST_TIME_EPSILON_MS;
       if (bestTime.getTime() < floorMs) bestTime = new Date(floorMs);
 
+      // A runs-as-required path with a measured run rate of ZERO, never sighted today, is a
+      // timetable entry for a train that does not run. Dropped outright rather than held,
+      // because a phantom in the list also bridges merges: on 2026-08-03 the 06:41 group was
+      // [1H13, 1N14, 6O40] and the phantom 6O40 sat between two real trains. Requires BOTH
+      // conditions — a sighting overrides the rate (a train TD can see is running whatever
+      // its history says), and a null rate means no data, not zero.
+      if (t.runsAsRequired && t.recentRunRate === 0 && !tdSighting) continue;
+
       merged.push({
         origin: t.origin,
         destination: t.destination,
@@ -887,6 +895,17 @@ class CrossingState {
     if (!cell) return null;                              // no sample for this class+berth
     return { berth: spec.berth, offsetSecs: Math.round(cell.secs - ct.crossingLeadSecs),
              derived: true, transitSecs: cell.secs, transitSd: cell.sdSecs };
+  }
+
+  // Has TD seen this headcode AT ALL today? Deliberately not TTL-gated and not direction-
+  // matched: the question is "does this train exist in the real world", not "where is it
+  // now". tdSeenToday is seeded from the day's TD log at boot (seedSightings), so a restart
+  // does not make every train look unsighted. Either map counts — they are fed by the same
+  // TD events but written by different hooks, and a train with a known BERTH has
+  // self-evidently been seen.
+  _everSighted(t) {
+    if (!t.headcode) return false;
+    return this.tdSeenToday.has(t.headcode) || this.liveTrains.has(t.headcode);
   }
 
   // The train's fresh, direction-matched strike at `berth` (or null). A strike matches
@@ -1149,7 +1168,19 @@ class CrossingState {
       if (!c.confirmedMayFollowPredicted) {
         backstop = Math.min(backstop, this._computeCloseTime(t, now).getTime());
       }
-      if (this._upstreamOfAnchor(t, now)) {
+      // Never TD-sighted today ⇒ the same hold, for a stronger reason. _upstreamOfAnchor can
+      // only answer for a train TD has PLACED; one it has never seen at all falls through it
+      // and the bestTime backstop fires unopposed, so CLOSED comes straight off the timetable.
+      // That is the hole the 2026-07-26 restart incident came through (see seedSightings), but
+      // a restart was never required to reach it. Observed unprompted 2026-08-03: 1H92
+      // (06:41:38, 146s before the real train 1H07 reached 0006) and 6O40 (08:19:07), both
+      // tdSeen:false, both driving BARRIERS DOWN. Audited against the raw TD log, a real
+      // sighted train covered each closure, so holding loses no closure — it only stops one
+      // being asserted from the timetable and attributed to a phantom.
+      //
+      // Holding rather than dropping the period keeps the countdown: the prediction is
+      // untouched, so an unsighted train still reaches CLOSING_SOON.
+      if (this._upstreamOfAnchor(t, now) || !this._everSighted(t)) {
         // TD shows the train still short of its anchor berth, so the anchor strike is
         // genuinely still to come — HOLD the gated close rather than let a drifting
         // bestTime fire CLOSED early. Floored (not just "skip the backstop"): falling
@@ -1168,11 +1199,21 @@ class CrossingState {
         // Releases as soon as the train reaches the anchor, or the strike lands and
         // re-anchors properly. No timer: a physical event ends the hold, not a clock.
         const offsetSecs = anchor && typeof anchor.offsetSecs === 'number' ? anchor.offsetSecs : 0;
-        return new Date(Math.max(
+        const held = Math.max(
           backstop,
           this._closeTimeInfo(t, now).at.getTime(),
           now.getTime() + offsetSecs * 1000
-        ));
+        );
+        // An unsighted train has no confirmed close AT ALL, so its bound must stay strictly
+        // ahead of `now`. Without this, a crossing configured without per-class anchors has
+        // offsetSecs 0, the hold lands exactly on `now`, and CLOSED fires regardless.
+        // safetyNetSecs is the direction's own missed-strike lag. Applied ONLY to the
+        // unsighted case, so the upstream hold keeps its existing value everywhere else.
+        if (!this._everSighted(t)) {
+          const lag = typeof c.safetyNetSecs === 'number' ? c.safetyNetSecs : 60;
+          return new Date(Math.max(held, now.getTime() + lag * 1000));
+        }
+        return new Date(held);
       }
       return new Date(backstop);
     }
