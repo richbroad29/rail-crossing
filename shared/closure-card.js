@@ -68,9 +68,14 @@
     // sees (header countdown, the time on this row, the Down For card) targets the
     // predicted close, and `start` sits earlier by the safety-net margin — measuring
     // from it would overstate the closure and disagree with the Down For card.
-    // fmtDuration so this pill and the "Down For" card round the same way — they were
-    // showing "~5 min" and "~4m 50s" side by side for one closure.
-    var duration = P.fmtDuration(p.end - (p.predictedStart || p.start)).replace('~', '');
+    // fmtDownFor, the SAME formatter the "Down For" card uses — not merely the same
+    // rounding. Both already rounded to 10s so the VALUE always agreed, but the two
+    // spellings did not: on 2026-08-03 this pill read "3m" beside a card reading
+    // "3 mins", 132 samples across the day (register UX5). They differed only on exact
+    // whole minutes; every mixed value ("1m 50s") already matched, which is why it
+    // survived a rounding fix. One formatter is the only way they cannot drift again.
+    // No '~' strip needed — fmtDownFor does not add one.
+    var duration = P.fmtDownFor(p.end - (p.predictedStart || p.start));
     var html = '<div class="closure-card' + (isCurrent ? ' closure-active' : '') + '">';
     html += '<div class="closure-hdr">';
 
