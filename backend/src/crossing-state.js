@@ -1464,16 +1464,28 @@ class CrossingState {
   }
 
   // Do we have physical evidence the barrier came up between these two groups? Only a
-  // recorded clear step counts: the earlier group's final train has cleared, and the later
-  // group's close falls after that clear step + its open lag. Anything else is two
-  // estimates being compared, which is what we are trying to stop deciding this.
+  // recorded clear step counts: EVERY train in the earlier group has cleared, and the later
+  // group's close falls after the LATEST of those clear steps + that train's open lag.
+  // Anything else is two estimates being compared, which is what we are trying to stop
+  // deciding this.
+  //
+  // Register #18 again, in the guard rather than the end. This used to ask only about
+  // `prev[prev.length - 1]`, the final train by bestTime — so a group whose last-sorted
+  // train had cleared claimed the barrier had lifted while another of its trains was still
+  // short of the crossing, and the coalescing pass was blocked from joining two periods the
+  // barrier never came up between. One train yet to cross means the barrier is down whatever
+  // the others have done, which is why this is now an all-of rather than a one-of.
   _barrierKnownToLift(prev, next, now) {
-    const finalTrain = prev[prev.length - 1].train;
-    if (!finalTrain || !finalTrain.headcode) return false;
-    const cleared = this.clearStepSeen.get(finalTrain.headcode);
-    if (!cleared || (now.getTime() - cleared.ts) > CLEAR_STEP_TTL_MS) return false;
-    const lagSecs = this._getOpenLagSecs(finalTrain.direction, finalTrain.trainType) || 0;
-    const liftedAt = cleared.ts + lagSecs * 1000;
+    let liftedAt = null;
+    for (const a of prev) {
+      const t = a.train;
+      if (!t || !t.headcode) return false;
+      const cleared = this.clearStepSeen.get(t.headcode);
+      if (!cleared || (now.getTime() - cleared.ts) > CLEAR_STEP_TTL_MS) return false;
+      const at = cleared.ts + (this._getOpenLagSecs(t.direction, t.trainType) || 0) * 1000;
+      if (liftedAt === null || at > liftedAt) liftedAt = at;
+    }
+    if (liftedAt === null) return false;
     const nextClose = Math.min(
       ...next.map(a => Math.min(a.predClose.getTime(), a.confClose.getTime())));
     return nextClose > liftedAt;
@@ -1620,9 +1632,27 @@ class CrossingState {
   //  - Sighted but NOT yet cleared: the barrier physically cannot be up, so the period is
   //    HOLDING OPEN — `at` is a lower bound and the flag says so.
   //  - Not TD-sighted: unchanged (bestTime + openAfter fallback).
-  // Only the FINAL train is consulted, so an intermediate train's clear step in a
-  // merged period can neither shorten nor open the period. Gated entirely on
-  // timing.openLagSecs, so crossings without it keep the pure fallback behaviour.
+  // EVERY train in the period is consulted and the LATEST answer wins, so an intermediate
+  // train's clear step still cannot shorten or open the period (a maximum cannot pull an
+  // end back), but neither can an already-cleared train end it while another is still on
+  // the approach. Gated entirely on timing.openLagSecs, so crossings without it keep the
+  // pure fallback behaviour.
+  //
+  // Register #18 — why the fold, and not `trains[trains.length - 1]`.
+  //
+  // It used to consult only the final train, on the reasoning that the last train to arrive
+  // is the last to leave. True when a closure runs one way; false the moment it does not.
+  // `trains` is ordered by bestTime, which is the time at the STATION, and the platform sits
+  // BEYOND the crossing eastbound and SHORT of it westbound — so in a group holding both
+  // directions, station order and crossing order come apart by roughly the length of a dwell.
+  //
+  // Observed live 2026-08-06 14:42 BST: group [1H30 west, 2E37 east], 2E37 last by bestTime
+  // but already cleared at 14:41:44, 1H30 not across until 14:42:27. The period ended on
+  // 2E37's clear step (+40s = 14:42:24) and the API reported the crossing clear 21 s before
+  // 1H30 crossed it. holdingOpen could not save it either — that flag was also read off the
+  // final train alone. Structural rather than a near miss: the grouping joins same-direction
+  // trains only on a true overlap, so essentially every merged period here alternates
+  // direction and was exposed. See analysis-data/incident-2026-08-06-triple-merge.log.
   //
   // The old code floored a held end at `now + 60s` (OPEN_HOLD_FLOOR_MS). Two things were
   // wrong with that. The number was arbitrary — sized to exceed the client's poll interval
@@ -1642,12 +1672,28 @@ class CrossingState {
   _periodEndInfo(end, trains, now) {
     const plain = (at) => ({ at, holdingOpen: false });
     if (!this.timing || !this.timing.openLagSecs) return plain(end);
-    const finalTrain = trains[trains.length - 1];
-    if (!finalTrain || !finalTrain.headcode) return plain(end);
+    const named = (trains || []).filter(t => t && t.headcode);
+    if (!named.length) return plain(end);
 
-    const cleared = this.clearStepSeen.get(finalTrain.headcode);
+    // Latest `at` wins; holdingOpen is the OR, because a period must stay current while ANY
+    // of its trains is yet to clear — even when that train's held bound is not the maximum.
+    let at = null, holdingOpen = false;
+    for (const t of named) {
+      const info = this._trainEndInfo(end, t, now);
+      if (at === null || info.at.getTime() > at.getTime()) at = info.at;
+      if (info.holdingOpen) holdingOpen = true;
+    }
+    return { at, holdingOpen };
+  }
+
+  // One train's contribution to the period end. `end` is the group's raw maximum openPred,
+  // used as this train's fallback when TD can tell us nothing sharper about it.
+  _trainEndInfo(end, train, now) {
+    const plain = (at) => ({ at, holdingOpen: false });
+
+    const cleared = this.clearStepSeen.get(train.headcode);
     if (cleared && (now.getTime() - cleared.ts) <= CLEAR_STEP_TTL_MS) {
-      const lagSecs = this._getOpenLagSecs(finalTrain.direction, finalTrain.trainType);
+      const lagSecs = this._getOpenLagSecs(train.direction, train.trainType);
       if (lagSecs != null) return plain(new Date(cleared.ts + lagSecs * 1000));
       return plain(end); // configured direction/class missing a value — safe fallback
     }
@@ -1655,8 +1701,8 @@ class CrossingState {
     // No clear step yet. PROJECT one from wherever TD has the train, and reopen at
     // projectedClear + the same openLagSecs the real anchor would use — so the estimate
     // sharpens berth by berth instead of sitting on a placeholder.
-    const lagSecs = this._getOpenLagSecs(finalTrain.direction, finalTrain.trainType);
-    const proj = this._projectBerth(finalTrain, 'XING', now);
+    const lagSecs = this._getOpenLagSecs(train.direction, train.trainType);
+    const proj = this._projectBerth(train, 'XING', now);
     if (proj && lagSecs != null) {
       const at = proj.ts + lagSecs * 1000;
       // A live projection is a real prediction and is used as-is. An EXPIRED one (the train
@@ -1668,7 +1714,7 @@ class CrossingState {
 
     // No projection available (no live position, or no transit sample for this class):
     // a TD-sighted train that has not cleared still holds the period, on the same bound.
-    if (this.tdSeenToday.has(finalTrain.headcode)) {
+    if (this.tdSeenToday.has(train.headcode)) {
       const floorMs = now.getTime() + (lagSecs != null ? lagSecs * 1000 : 0);
       if (end.getTime() < floorMs) return { at: new Date(floorMs), holdingOpen: true };
     }

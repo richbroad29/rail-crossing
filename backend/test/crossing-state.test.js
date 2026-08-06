@@ -1591,6 +1591,126 @@ console.log('  -- #15 anchored ends cannot invert across periods --');
   }
 }
 
+// ---- Register #18: a merged period ends on the last train to CLEAR ---------------------
+//
+// Observed live 2026-08-06, 14:42 BST (analysis-data/incident-2026-08-06-triple-merge.log).
+// A merged closure ended on ONE train's clear step — trains[trains.length - 1], the last by
+// bestTime — and the API reported the crossing clear 21s BEFORE another train in that same
+// closure had crossed it.
+//
+// bestTime is the time at Portslade STATION, and the platform sits beyond the crossing
+// eastbound and short of it westbound. So in a group holding both directions, station order
+// and crossing order come apart: 2E37 (east) sorted LAST yet had already cleared at 14:41:44,
+// while 1H30 (west) sorted first and did not cross until 14:42:27. The period ended on 2E37's
+// clear step (+40s = 14:42:24) and the group maximum — which already held 1H30's outstanding
+// open — was discarded. holdingOpen (#14) could not fire either: it too only ever consulted
+// the final train.
+//
+// Structural here, not a near miss: the merge rule joins same-direction trains only on a true
+// overlap, so essentially every merged period at Portslade is direction-alternating.
+console.log('  -- #18 a merged period ends on the last train to CLEAR, not the last by bestTime --');
+{
+  const SHIPPED = JSON.parse(require('fs').readFileSync(
+    require('path').join(__dirname, '..', 'config', 'crossings.json'), 'utf8')).portslade;
+
+  // T = 2E37's clear step (0004->0002), 13:41:44Z. Every other instant is the real observed
+  // offset from it, so the arithmetic below is the field case and not a constructed one.
+  const T = BASE;
+  const NOW = T + 42000;              // 13:42:26Z — the second the app said CLOSING SOON
+  const E_STRIKE = T - 317000;        // 2E37 struck 0006 at 13:36:27
+  const W_STRIKE = T - 96000;         // 1H30 struck 0003 at 13:40:08
+  const W_0005   = T - 63000;         // 1H30 reached the westbound platform at 13:40:41
+  const W_CLEAR  = T + 43000;         // 1H30 actually crossed at 13:42:27
+
+  // The group as the API served it: [1H30 west, 2E37 east], east LAST by bestTime.
+  const build = () => {
+    const st = new CrossingState('portslade', SHIPPED);
+    const W = mkT({ dir: 'west', headcode: '1H30', bestTimeMs: T + 28000 });
+    const E = mkT({ dir: 'east', headcode: '2E37', bestTimeMs: T + 30000 });
+    setStrike(st, '2E37', E_STRIKE, 'east', '0006');
+    st.recordTdSighting('2E37', new Date(E_STRIKE));
+    st.recordTdBerth({ headcode: '2E37', to: '0004', from: '0006', ts: iso(T - 155000), event: 'CA' });
+    st.recordTdBerth({ headcode: '2E37', to: '0002', from: '0004', ts: iso(T), event: 'CA' });
+    st.recordTdClearStep({ headcode: '2E37', to: '0002', from: '0004', ts: iso(T) });
+    setStrike(st, '1H30', W_STRIKE, 'west', '0003');
+    st.recordTdSighting('1H30', new Date(W_STRIKE));
+    st.recordTdBerth({ headcode: '1H30', to: '0005', from: '0003', ts: iso(W_0005), event: 'CA' });
+    return { st, W, E };
+  };
+
+  const { st, W, E } = build();
+  const ps = st._computeClosures([W, E], new Date(NOW));
+
+  // Premise first — if these drift the assertion below stops meaning anything.
+  check('#18: the pair is one closure', ps.length, 1);
+  check('#18: …carrying both trains', ps[0].trainCount, 2);
+  check('#18: …and it starts on the real 0006+100s close (13:38:07Z)',
+    ps[0].predictedStart, iso(T - 217000));
+  checkTruthy('#18: the east train HAS cleared, the west train has NOT (the premise)',
+    st.clearStepSeen.has('2E37') && !st.clearStepSeen.has('1H30'));
+
+  // THE BUG. 2E37's clear step + 40s = T+40000, which is 2s before NOW, so the period
+  // expires and the app reports the crossing clear — with 1H30 one second from the road.
+  checkTruthy('#18: the closure is STILL CURRENT while a train in it has not crossed',
+    st._isCurrent(ps[0], new Date(NOW)));
+  checkTruthy('#18: …and its end is not the already-cleared train\'s (13:42:24Z)',
+    Date.parse(ps[0].end) > T + 40000);
+  // The west train is projected across from 0005 (measured 116s) and reopens 18s later,
+  // so the honest end is 13:42:55Z — 10s past the 13:42:45Z truth, i.e. late, which is the
+  // safe direction for an opener.
+  check('#18: the end follows the train that has yet to clear', ps[0].end, iso(T + 71000));
+
+  // All three holdingOpen readers, as #14 does — an end in the past at any one of them is
+  // what puts CROSSING CLEAR on the screen with a train on the road.
+  st.closurePeriods = ps;
+  check('#18: _deriveState still CLOSED', st._deriveState(new Date(NOW)), 'CLOSED');
+
+  // The property the old single-train rule existed to protect, kept: an intermediate train's
+  // clear step must not SHORTEN the period. A maximum cannot, which is why this is safe.
+  {
+    const { st: s2, W: W2, E: E2 } = build();
+    s2.clearStepSeen.set('1H30', { ts: W_CLEAR, direction: 'west' });
+    const p2 = s2._computeClosures([W2, E2], new Date(W_CLEAR + 1000))[0];
+    check('#18: once BOTH have cleared, the end is the LATER clear step + its lag',
+      p2.end, iso(W_CLEAR + 18000));
+    check('#18: …and no longer holding', p2.holdingOpen, false);
+  }
+
+  // And the hold itself: a train whose projection has been falsified (it should have crossed
+  // and has not) must raise holdingOpen even when a LATER-sorted train has already cleared.
+  {
+    const { st: s3, W: W3, E: E3 } = build();
+    const late = W_0005 + 116000 + 60000;        // a minute past the projected crossing
+    const p3 = s3._computeClosures([W3, E3], new Date(late))[0];
+    checkTruthy('#18: an expired projection still holds the period open', p3.holdingOpen);
+    checkTruthy('#18: …and the period stays current on it', s3._isCurrent(p3, new Date(late)));
+  }
+
+  // The same defect in the coalescing guard. _barrierKnownToLift is the physical-evidence
+  // test that stops two periods being joined, and it asked only about the group's final
+  // train — so a group whose last-sorted train had cleared claimed a lift with another of
+  // its trains still short of the road. Evidence of a lift is an ALL-of, not a one-of.
+  {
+    const st = new CrossingState('portslade', SHIPPED);
+    const W = mkT({ dir: 'west', headcode: '1H30', bestTimeMs: T + 28000 });
+    const E = mkT({ dir: 'east', headcode: '2E37', bestTimeMs: T + 30000 });
+    const prev = [{ train: W }, { train: E }];         // E last by bestTime, and cleared
+    const next = [{ predClose: new Date(T + 90000), confClose: new Date(T + 90000) }];
+    st.clearStepSeen.set('2E37', { ts: T, direction: 'east' });
+    checkTruthy('#18: no lift while a train in the group has not cleared',
+      st._barrierKnownToLift(prev, next, new Date(T + 42000)) === false);
+
+    // Both cleared: the lift is the LATER clear step + that train's own lag, not the
+    // earlier one — 1H30 at T+43s on the west 18s lag, i.e. T+61s, not 2E37's T+40s.
+    st.clearStepSeen.set('1H30', { ts: T + 43000, direction: 'west' });
+    checkTruthy('#18: once both have cleared, the barrier is known to lift',
+      st._barrierKnownToLift(prev, next, new Date(T + 61000)) === true);
+    const tooSoon = [{ predClose: new Date(T + 55000), confClose: new Date(T + 55000) }];
+    checkTruthy('#18: …and a close inside that lift is not a lift (T+55s < T+61s)',
+      st._barrierKnownToLift(prev, tooSoon, new Date(T + 61000)) === false);
+  }
+}
+
 // ---- Trigger map (GET /crossing/:id/triggers) ------------------------------------------
 // Feeds the observer's approach map. The assertions that matter are the PLACEMENTS: they
 // come from the per-class transit table, so if the classification silently collapses (as it
