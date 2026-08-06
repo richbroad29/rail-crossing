@@ -1242,13 +1242,55 @@ class CrossingState {
     if (cleared && now && (now.getTime() - cleared.ts) <= CLEAR_STEP_TTL_MS) {
       if (lagSecs != null) return new Date(cleared.ts + lagSecs * 1000);
     }
-    // Deliberately NOT projected. Tried and measured worse: this is the GROUPING key, and
-    // feeding it an estimate churns which trains merge, so predictedStart (the group
-    // minimum) starts coming from the wrong train. Replaying 2026-07-25, projecting here
-    // pushed westbound stopper error at T−300s from 62s to 84s while adding nothing
-    // eastbound. Grouping wants a stable key more than a sharp one; the displayed open
-    // is projected in _anchorEndToClearStep instead, where it can't reorder anything.
-    return new Date(t.bestTime.getTime() + this._getOpenAfter(t.direction) * 60000);
+    // RUNG 2 (2026-08-05) — project the clear step from wherever TD has the train now.
+    //
+    // This used to read "deliberately NOT projected", on the grounds that grouping wants a
+    // stable key more than a sharp one: replaying 2026-07-25, projecting here pushed
+    // westbound stopper error at T−300s from 62s to 84s. That evidence is kept but no longer
+    // decisive, for three measured reasons:
+    //
+    //  1. It was a SECOND-ORDER result. Projecting did not make the open worse; it changed
+    //     which trains merged, which changed the group minimum, which moved the CLOSE. The
+    //     finding was "grouping is fragile to key changes", not "a projected open is bad".
+    //  2. The baseline it was measured against was broken. openAfter was +30s in BOTH
+    //     directions with no provenance, against a measured east median of −21s
+    //     (station-anchored, n=100) — so every east closure ran ~50s long and the A/B was
+    //     scored against a key that was already wrong.
+    //  3. The projection is accurate, and it TIGHTENS as the train advances. Leave-one-out
+    //     over 8 days / 2,921 train-days, p50 absolute error predicting the clear strike:
+    //       east stopping       0016 26s → 0008 18s → 0006 16s → 0004 10s
+    //       east stoppingLocal  0016 52s → 0008 36s → 0006 35s → 0004 20s
+    //       west stopping       T677 33s → 0001 22s → 0003 12s → 0005  9s
+    //     At the anchor berths that matter that is at or inside the 20s merge threshold, and
+    //     3–5× better than the constant it replaces. It is also STABLER: it does not move
+    //     when Darwin revises bestTime by ±2 min, which is what makes the base grouping pass
+    //     flip (register C1: 11 of 112 trains, 9 within 10 min of the closure).
+    //
+    // `XING` in transits.json IS the clear-berth strike (the 0004→0002 / 0005→0007 step —
+    // see the naming warning in derive-transits.js), so barrier-up is that projection plus
+    // openLagSecs, the rear-of-train circuit clear. No new data was needed for this.
+    //
+    // Read straight off _projectBerth rather than via bestTime, deliberately: bestTime is
+    // only TD-projected for CIF trains (_mergeTrains), so going through it would leave every
+    // LDBSVWS train — most near-term passenger traffic — on the timetable rung forever.
+    //
+    // An EXPIRED projection must not be used as-is — it puts the open in the past. It must not
+    // fall through to the timetable rung either: that can move the open EARLIER, and a train we
+    // can see has not cleared cannot have an earlier barrier-up. Falling through made this key
+    // jump ~40s BACKWARDS mid-approach, the wrong direction for a grouping key. Held at
+    // now + openLagSecs — the only thing still true while the clear step is outstanding, and the
+    // same bound the close holds at (boundIfUpstream). Monotone: the key never walks back.
+    if (lagSecs != null && now) {
+      const proj = this._projectBerth(t, 'XING', now);
+      if (proj) {
+        return new Date(proj.expired
+          ? now.getTime() + lagSecs * 1000
+          : proj.ts + lagSecs * 1000);
+      }
+    }
+
+    // RUNG 3 — timetable fallback, anchored per source. Only reached with no live berth.
+    return new Date(t.bestTime.getTime() + this._getOpenAfterSecs(t.direction, t.source) * 1000);
   }
 
   // Compute closure periods from merged train list (sorted by bestTime). Uses the
@@ -1386,6 +1428,19 @@ class CrossingState {
         // The next period's barrier-down moment, whichever of its two closes comes first:
         // predictedStart drives the countdown, start drives CLOSED, and either landing
         // before the previous end is the inversion.
+        // The next period's barrier-down moment, whichever of its two closes comes first:
+        // predictedStart drives the countdown, start drives CLOSED, and either landing
+        // before the previous end is the inversion.
+        //
+        // REVERTED 2026-08-05. Making this pass apply the 20s / true-overlap rule against the
+        // anchored end — so the rule decided once, on displayed quantities — replayed WORSE:
+        // over all 6,538 recorded samples of 3 Aug the grouping changed in 83.4% of them and
+        // the dominant direction was MORE merging (4,642 samples with fewer periods against
+        // 246 with more). _periodEndInfo pushes the anchored end later than the raw openPred
+        // (hold-until-cleared, open-lag floors), so every gap shrinks. 263 unit tests passed
+        // throughout and caught none of it. See the merge-rule note in memory before retrying:
+        // the approach needs the hysteresis below replaced with a confirmation rule first,
+        // because moving all merging into this pass makes that latch universal.
         const nextClose = Math.min(
           ...next.map(a => Math.min(a.predClose.getTime(), a.confClose.getTime())));
         if (nextClose > prevEnd) continue;
@@ -1511,10 +1566,51 @@ class CrossingState {
     return cb || 1.5;
   }
 
+  // Legacy MINUTES form. typeof, not `||` — an explicit 0 is a legitimate value and
+  // `oa[direction] || 0.5` silently turned it into +30s, which would have made an east
+  // setting of 0 a no-op.
   _getOpenAfter(direction) {
     const oa = this.timing.openAfter;
-    if (typeof oa === 'object') return oa[direction] || 0.5;
-    return oa || 0.5;
+    if (oa && typeof oa === 'object') {
+      return typeof oa[direction] === 'number' ? oa[direction] : 0.5;
+    }
+    return typeof oa === 'number' ? oa : 0.5;
+  }
+
+  // Far-out OPEN fallback in SECONDS — the BOTTOM rung of the barrier-up ladder, used only
+  // until TD gives us a clear step (and, once the missing middle rung lands, only until we
+  // can project one). Seconds to match every other timing constant in this config
+  // (openLagSecs, safetyNetSecs, crossingLeadSecs, predictedLeadSecs); openAfter's minutes
+  // are the legacy outlier, kept as the fallback so other crossings and the rollback path
+  // are untouched.
+  //
+  // Portslade 2026-08-05: east 0s, west +35s. Measured against the clear-step-anchored open
+  // over the 3 Aug audit as east median −21s / west +55s (n=100) — but deliberately rounded,
+  // because that sample is STATION-anchored (LDB bestTime dominates near-term passenger)
+  // while CIF trains carry a CROSSING-anchored bestTime, so no single value is strictly
+  // correct for both and false precision would be misleading. Both signs read correctly
+  // against the geometry: eastbound crosses the road BEFORE reaching the platform (so its
+  // barrier is up at or before its station time), westbound departs the platform and then
+  // crosses (so its barrier is up after).
+  // Split by what THIS TRAIN'S bestTime is anchored to, because one offset cannot serve both
+  // sources and the gap between them is ~60s eastbound:
+  //   CIF   → bestTime is estimatedCrossingMins, or _projectBerth('XING') once a berth
+  //           exists, both at/near the crossing ⇒ the open is bestTime + openLagSecs.
+  //   LDBSV → bestTime is Darwin's time at Portslade STATION. Eastbound the crossing is
+  //           BEFORE the platform, so the barrier is already up when bestTime arrives and
+  //           the offset is NEGATIVE. Applying the CIF value here would land it 61s late.
+  // Tested on 'cif' rather than on the LDB label because the poller has used both 'ldb' and
+  // 'ldbsv'; anything that is not CIF is station-anchored. Accepts the older flat
+  // per-direction shape too, so other crossings and the rollback path are untouched.
+  _getOpenAfterSecs(direction, source) {
+    const oas = this.timing.openAfterSecs;
+    if (oas && typeof oas === 'object') {
+      const bucket = source === 'cif' ? oas.crossingAnchored : oas.stationAnchored;
+      if (bucket && typeof bucket[direction] === 'number') return bucket[direction];
+      if (typeof oas[direction] === 'number') return oas[direction];
+    }
+    if (typeof oas === 'number') return oas;
+    return this._getOpenAfter(direction) * 60;
   }
 
   // Per-direction/class OPEN lag (seconds) applied AFTER the TD clear step. Config

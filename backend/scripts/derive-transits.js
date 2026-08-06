@@ -40,6 +40,20 @@ const CHAIN = {
   west: ['T682', 'T677', '0001', '0003', '0005']
 };
 const CLEAR = { east: ['0004', '0002'], west: ['0005', '0007'] };
+
+// NAMING WARNING. `XING` is NOT a synthetic mid-crossing point — it is the CLEAR-BERTH
+// STRIKE, i.e. the moment the train steps 0004→0002 (east) or 0005→0007 (west), which is
+// the front of the train just past the road. Every run below is detected by that step and
+// its timestamp is stored as ins[XING], so `transit['0003>XING']` means "0003 strike to
+// clear-berth strike". Two consequences worth knowing before reading any of this:
+//   - The table ALREADY supports projecting the barrier-UP time. Barrier-up is the clear
+//     strike + openLagSecs (rear-of-train circuit clear), so b>XING + openLagSecs is the
+//     whole calculation. Nothing needs regenerating to add it.
+//   - crossingLeadSecs in crossings.json is measured BACK from this point, which is why
+//     _closeAnchor derives an offset as transit[berth>XING] − crossingLeadSecs.
+// The name cost a full analysis on 2026-08-05: it was read as a mid-crossing node, leading
+// to "the clear berths have no transit cells" — which is false. Left as XING rather than
+// renamed because crossings.json and _closeAnchor key off the string.
 const XING = 'XING';
 
 function classify(dirn, dwellSecs, sec0006) {
