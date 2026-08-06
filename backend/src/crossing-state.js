@@ -162,7 +162,6 @@ class CrossingState {
     // until the barrier is KNOWN to have lifted between them, so the grouping cannot flap
     // as the two moving estimates either side of it drift past each other. TTL-pruned on
     // write. See _coalesceOverlapping for why a physical event, not a threshold.
-    this.coalescedPairs = new Map();
 
     // Computed state
     this.closurePeriods = [];
@@ -1447,28 +1446,21 @@ class CrossingState {
         if (this._barrierKnownToLift(prev, next, now)) continue;
         groups[i] = prev.concat(next);
         groups.splice(i + 1, 1);
-        this._rememberCoalesced(prev, next, now);
         merged = true;
         break;
       }
       if (!merged) break;
     }
-    // Hysteresis. Without it this pass can flap: while a train is held the end bound moves
-    // with the clock and sweeps across the following close (merge), and an LDB revision
-    // moving that close by a minute sweeps it back (split). That is C1's failure mode —
-    // merged<->split oscillating 5-6x per pair, wrong 72-82% of the time — and the fix
-    // there was the same one as here: let a PHYSICAL event decide, not an arithmetic
-    // threshold on two moving estimates. A pair we have already coalesced stays coalesced
-    // until the earlier train's clear step is recorded, i.e. until the barrier is known to
-    // have lifted between them.
-    for (let i = 0; i < groups.length - 1; i++) {
-      const prev = groups[i], next = groups[i + 1];
-      if (!this._wasCoalesced(prev, next, now)) continue;
-      if (this._barrierKnownToLift(prev, next, now)) continue;
-      groups[i] = prev.concat(next);
-      groups.splice(i + 1, 1);
-      i--;
-    }
+    // NO HYSTERESIS, deliberately (removed 2026-08-06). A pair joined above used to STAY
+    // joined until the earlier train's clear step, so new time estimates could not separate
+    // it again. That is contrary to the design intent: if a train's predicted open or close
+    // genuinely moves and carries the pair out of the merge window, the grouping SHOULD
+    // follow — damping it shows a stale answer, which is worse than a number that moves.
+    // It was also measured inert: removing it left all 262 tests passing and the truth-scored
+    // accuracy byte-identical (67.4%, false-merge 57,374, false-split 59,953), because this
+    // pass only fires on the rare inversion case. It had no incident behind it either — the
+    // field report in 2d8ca15 was the inversion itself, which the merge loop above fixes.
+    // Do not reintroduce it, or a debounce, without a measurement showing churn is harmful.
   }
 
   // Do we have physical evidence the barrier came up between these two groups? Only a
@@ -1487,19 +1479,6 @@ class CrossingState {
     return nextClose > liftedAt;
   }
 
-  _coalesceKey(prev, next) {
-    return `${prev[prev.length - 1].train.headcode || '?'}|${next[0].train.headcode || '?'}`;
-  }
-  _rememberCoalesced(prev, next, now) {
-    this.coalescedPairs.set(this._coalesceKey(prev, next), now.getTime());
-    for (const [k, ts] of this.coalescedPairs) {
-      if (now.getTime() - ts > CLEAR_STEP_TTL_MS) this.coalescedPairs.delete(k);
-    }
-  }
-  _wasCoalesced(prev, next, now) {
-    const ts = this.coalescedPairs.get(this._coalesceKey(prev, next));
-    return ts != null && (now.getTime() - ts) <= CLEAR_STEP_TTL_MS;
-  }
 
   // start = CONFIRMED close (gated CLOSED onset). predictedStart = PREDICTED close
   // (countdown / closing-soon target); defaults to start for the legacy/no-trigger path.
