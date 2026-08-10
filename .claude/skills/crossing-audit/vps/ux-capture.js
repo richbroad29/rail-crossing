@@ -34,7 +34,7 @@ const TARGETS = [
 ];
 
 // Ids read off the deployed markup, not guessed.
-const PUBLIC_IDS = ['statusTitle', 'statusMsg', 'statusTime', 'nextCloseCountdown', 'nextCloseTime',
+const PUBLIC_IDS = ['statusTitle', 'statusMsg', 'nextCloseCountdown', 'nextCloseTime',
   'nextOpenCountdown', 'nextOpenTime', 'closureLength', 'closureLengthSub', 'errorBox', 'showMoreBtn'];
 const OBSERVER_IDS = ['predState', 'predClose', 'predCloseAt', 'predOpen', 'predOpenAt', 'predDown',
   'predDownRange', 'predWarn', 'predAge', 'predClosures', 'netText', 'pollAge', 'offsetText', 'clock'];

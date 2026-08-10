@@ -205,22 +205,20 @@ function updateStatus() {
   // THE prediction — the same call the observer app makes, so the two can never show a
   // different state for the same moment. Everything below this line is presentation.
   var pr = PREDICT.derive(closurePeriods, now, payloadAgeMs);
-  var status = pr.status, msg = 'No upcoming closures found';
+  var status = pr.status, msg = '';
   var currentClosure = pr.current, upcoming = pr.upcoming;
   nextCloseTime = pr.nextCloseTime; nextOpenTime = pr.nextOpenTime;
   downForMs = pr.downForMs; downForRange = pr.downForRange;
   if (currentClosure) {
     var openMs = currentClosure.end.getTime() - t;
+    // One headline and one countdown line, the same shape in every state — the card used to
+    // carry a third line here (the reopen clock time) and nowhere else, which is what made
+    // it change height on every state change. The clock time is still on the Next Open card.
+    //
     // A held open has no time to reopen at — the train hasn't cleared the crossing, so we
     // genuinely don't know. Say that rather than counting down to a bound (register #14).
-    if (pr.openHeld) {
-      msg = 'Barriers likely DOWN. Waiting for the train to clear';
-      $('statusTime').textContent = 'Opens once the train is clear';
-    } else {
-      msg = 'Barriers likely DOWN. ' + (openMs <= 0 ? 'Reopens soon' : 'Reopens in ~' + fmtCountdown(openMs));
-      $('statusTime').textContent = 'Opens ~' + fmtShort(currentClosure.end);
-    }
-    $('statusTime').classList.remove('hidden');
+    if (pr.openHeld) { msg = 'Opening once the train is clear'; }
+    else { msg = openMs <= 0 ? 'Opening soon' : 'Opening in ~' + fmtCountdown(openMs); }
     $('statusCard').classList.add('pulse');
   } else {
     $('statusCard').classList.remove('pulse');
@@ -229,12 +227,13 @@ function updateStatus() {
       // Held: a train is stopped short of the point that triggers the barrier, so the
       // countdown is a floor, not a prediction. Deliberately worded WITHOUT the berth —
       // "0006" means nothing to someone at the roadside. The observer, which is a field
-      // tool, does name it.
-      if (pr.closeHeld) { msg = 'Train held on approach. No closure for at least ' + fmtCountdown(Math.max(0, ms)); }
+      // tool, does name it. "≥" carries the floor in the space of one line: the long form
+      // wrapped on a phone, and a line that sometimes wraps is a card that changes size.
+      // Past the bound, fmtHeld reads "held", so drop the number rather than print "for held".
+      if (pr.closeHeld) { msg = ms > 0 ? 'Train held — no closure for ' + PREDICT.fmtHeld(ms) : 'Train held on approach'; }
       else if (status === 'CLOSING_SOON') { msg = ms <= 0 ? 'Closing soon' : 'Closing in ~' + fmtCountdown(ms); }
       else { msg = 'Next closure in ~' + fmtCountdown(ms); }
     } else { msg = 'No more closures expected today'; }
-    $('statusTime').classList.add('hidden');
   }
   var c = getColors(status);
   var card = $('statusCard');

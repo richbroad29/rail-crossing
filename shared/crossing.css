@@ -6,8 +6,11 @@ body{background:#0F172A;color:#E2E8F0;font-family:-apple-system,BlinkMacSystemFo
 .hdr-road{font-size:12px;color:#94A3B8}
 .status-card{border-radius:16px;padding:14px 16px;text-align:center;margin-bottom:16px;transition:all .5s}
 .status-title{font-size:22px;font-weight:700;margin-bottom:2px}
-.status-msg{font-size:13px;opacity:.9;font-variant-numeric:tabular-nums}
-.status-time{margin-top:4px;font-size:16px;font-weight:600;font-variant-numeric:tabular-nums}
+/* One line, always. line-height is pinned because `normal` varies by font, and the matching
+   min-height holds the box open if the message is ever empty — together they make the card
+   the same height in every barrier state, which is the point. Every string it renders fits
+   one line at 320px; check that before lengthening one. */
+.status-msg{font-size:13px;opacity:.9;font-variant-numeric:tabular-nums;line-height:1.35;min-height:1.35em}
 .barrier-wrap{display:flex;flex-direction:column;align-items:center;margin:16px 0}
 .cards{display:flex;gap:8px;margin-bottom:16px}
 .card{flex:1;background:#1E293B;border-radius:12px;padding:12px 10px;text-align:center;display:flex;flex-direction:column;align-items:center;justify-content:space-between;min-height:76px}
