@@ -12,11 +12,25 @@ body{background:#0F172A;color:#E2E8F0;font-family:-apple-system,BlinkMacSystemFo
    one line at 320px; check that before lengthening one. */
 .status-msg{font-size:13px;opacity:.9;font-variant-numeric:tabular-nums;line-height:1.35;min-height:1.35em}
 .barrier-wrap{display:flex;flex-direction:column;align-items:center;margin:16px 0}
-.cards{display:flex;gap:8px;margin-bottom:16px}
-.card{flex:1;background:#1E293B;border-radius:12px;padding:12px 10px;text-align:center;display:flex;flex-direction:column;align-items:center;justify-content:space-between;min-height:76px}
+/* Two-slot timeline. The track holds THREE cards — two visible, one waiting off the right
+   edge — and a state change slides the whole strip one slot left: the spent card leaves, the
+   right card takes the left slot, and the waiting one arrives. `overflow:hidden` on the
+   window is what makes the third card invisible until it is pushed in.
+   A card is exactly half the window: basis (100% - gap)/2, so the shift distance is
+   card + gap = 50% + 4px. Keep those two in step if the gap changes.
+   The .55s here and CARD_SHIFT_MS in crossing.js describe the same animation. */
+.cards{overflow:hidden;margin-bottom:16px}
+.cards-track{display:flex;gap:8px;transition:transform .55s cubic-bezier(.4,0,.2,1)}
+.cards-track.shifted{transform:translateX(calc(-50% - 4px))}
+@media (prefers-reduced-motion:reduce){.cards-track{transition:none}}
+.card{flex:0 0 calc((100% - 8px)/2);background:#1E293B;border-radius:12px;padding:12px 10px;text-align:center;display:flex;flex-direction:column;align-items:center;justify-content:space-between;min-height:76px}
 .card-label{font-size:9px;color:#94A3B8;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px}
 .card-value{font-size:18px;font-weight:700;display:flex;align-items:center;flex:1;font-variant-numeric:tabular-nums}
-.card-sub{font-size:10px;color:#64748B;margin-top:2px}
+/* The "Open for" / "Closed for" line. Deliberately lifted off the old 10px/#64748B: at that
+   weight it read as a caption on the countdown above it rather than as a second fact. Same
+   grey as .card-label so the two grey lines in a card match, and a step below .card-value in
+   size so the countdown still leads. */
+.card-sub{font-size:11px;font-weight:600;color:#94A3B8;margin-top:3px;font-variant-numeric:tabular-nums}
 .section{background:#1E293B;border-radius:12px;padding:12px;margin-bottom:16px}
 .section-hdr{font-size:12px;font-weight:600;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center}
 .refresh-btn{background:none;border:1px solid #334155;border-radius:6px;color:#94A3B8;padding:4px 10px;font-size:10px;cursor:pointer;display:inline-flex;align-items:center;gap:4px;min-width:32px;justify-content:center}

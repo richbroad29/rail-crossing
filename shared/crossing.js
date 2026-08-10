@@ -9,8 +9,6 @@ var nextCloseTime = null;
 var nextOpenTime = null;
 // "Down For" card: how long the barrier is expected to be down for the closure the
 // other two cards refer to — the CURRENT one while closed, otherwise the next one.
-var downForMs = null;
-var downForRange = null;
 var lastError = '';
 var trainHistory = [];
 var crossingId = '';
@@ -37,6 +35,89 @@ function $(id) { return document.getElementById(id); }
 var fmtTime = PREDICT.fmtTime, fmtShort = PREDICT.fmtShort, fmtCountdown = PREDICT.fmtCountdown,
     fmtUncertainty = PREDICT.fmtUncertainty, fmtWhen = PREDICT.fmtWhen, fmtSoon = PREDICT.fmtSoon,
     fmtDuration = PREDICT.fmtDuration, fmtDownFor = PREDICT.fmtDownFor;
+// How long the crossing stays clear from `time`: the gap to the first predicted close after
+// it. Walks the period list rather than reading derive(), which surfaces only the FIRST
+// upcoming closure — while the crossing is clear the relevant one is the second, because the
+// first is the closure we are counting down to. Null when the backend sent nothing beyond it.
+function gapToNextCloseAfter(time) {
+  for (var i = 0; i < closurePeriods.length; i++) {
+    var s = closurePeriods[i].predictedStart || closurePeriods[i].start;
+    if (s.getTime() > time) return s.getTime() - time;
+  }
+  return null;
+}
+// ---- the two-slot event timeline ------------------------------------------------------
+// Must match the .55s transition on .cards-track in crossing.css.
+var CARD_SHIFT_MS = 550;
+var cardLeftKind = null;   // 'open' | 'close' — what is in the left slot right now
+var cardShiftEnd = 0;      // while now < this, an animation owns the DOM; don't touch it
+
+// One card = one upcoming event: when it happens, over how long the state it starts lasts.
+function buildEventCard(kind, pr, closedForMs, openForMs) {
+  if (kind === 'open') {
+    return { kind: 'open', at: pr.nextOpenTime, held: pr.openHeld,
+             sub: pr.openHeld ? 'until train clears'
+                              : (openForMs > 0 ? 'Open for ' + fmtDownFor(openForMs) : '') };
+  }
+  return { kind: 'close', at: pr.nextCloseTime, held: pr.closeHeld,
+           sub: pr.closeHeld ? 'train held'
+                             : (closedForMs > 0 ? 'Closed for ' + fmtDownFor(closedForMs) : '') };
+}
+
+// fmtEta renders a held value as "≥ 1m 40s" and a live one as the plain countdown; the
+// sub-line says so in words when held, because a bound has no duration to promise.
+function fillEventCard(slot, ev, t) {
+  $('c' + slot + 'label').textContent = ev ? (ev.kind === 'open' ? 'Next Open' : 'Next Close') : '';
+  var v = $('c' + slot + 'value');
+  if (!ev || !ev.at) {
+    v.textContent = ev ? '--' : ''; v.style.color = '#475569';
+    $('c' + slot + 'sub').textContent = ''; return;
+  }
+  v.textContent = PREDICT.fmtEta(ev.at.getTime() - t, ev.held);
+  v.style.color = ev.held ? '#94A3B8' : (ev.kind === 'open' ? '#16A34A' : '#F59E0B');
+  $('c' + slot + 'sub').textContent = ev.sub;
+}
+
+// The slots are positional: slot 0 is whatever happens NEXT. While the barriers are down
+// that is the open; while the crossing is clear it is the close. So the pair swaps order
+// exactly when an event happens, and the swap is animated as a push rather than a redraw —
+// the spent card slides out left, the other takes its place, and the following event comes
+// in from the right.
+//
+// The trigger is the left slot changing KIND, which is precisely "an event has happened":
+// CROSSING CLEAR -> CLOSING SOON leaves it alone (nothing has happened yet), CLOSING SOON ->
+// BARRIERS DOWN flips it. Nothing here reads the status directly for that reason.
+function renderEventCards(pr, t, closedForMs, openForMs) {
+  var kinds = pr.status === 'CLOSED' ? ['open', 'close'] : ['close', 'open'];
+  var evs = [buildEventCard(kinds[0], pr, closedForMs, openForMs),
+             buildEventCard(kinds[1], pr, closedForMs, openForMs)];
+  var track = $('cardsTrack');
+  // Mid-animation: leave the DOM alone. The shifted strip is showing slots 1 and 2, which
+  // ARE the current pair, so arriving here late costs nothing but a second of countdown.
+  if (t < cardShiftEnd) return;
+  if (cardShiftEnd) {
+    cardShiftEnd = 0;
+    track.style.transition = 'none';        // snap back without animating the return
+    track.classList.remove('shifted');
+    track.offsetHeight;                     // reflow, so the removal is not transitioned
+    track.style.transition = '';
+  }
+  // No animation without a real browser: the audit harnesses run this file against a stub
+  // DOM with no rAF and no working timers, and must still get the right text in the slots.
+  var canAnimate = typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function';
+  var shift = canAnimate && cardLeftKind !== null && cardLeftKind !== kinds[0];
+  cardLeftKind = kinds[0];
+  if (!shift) {
+    fillEventCard(0, evs[0], t); fillEventCard(1, evs[1], t); fillEventCard(2, null, t);
+    return;
+  }
+  // Stage the arriving card off-screen, then push. Slot 1 already holds evs[0] — it is the
+  // same event, one position along — so the strip stays continuous through the move.
+  fillEventCard(2, evs[1], t);
+  cardShiftEnd = t + CARD_SHIFT_MS;
+  window.requestAnimationFrame(function () { track.classList.add('shifted'); });
+}
+
 function getColors(st) {
   switch(st) {
     case 'CLOSED': return {bg:'#DC2626',text:'#FFF',glow:'0 0 30px rgba(220,38,38,.5)'};
@@ -208,7 +289,6 @@ function updateStatus() {
   var status = pr.status, msg = '';
   var currentClosure = pr.current, upcoming = pr.upcoming;
   nextCloseTime = pr.nextCloseTime; nextOpenTime = pr.nextOpenTime;
-  downForMs = pr.downForMs; downForRange = pr.downForRange;
   if (currentClosure) {
     var openMs = currentClosure.end.getTime() - t;
     // One headline and one countdown line, the same shape in every state — the card used to
@@ -240,30 +320,35 @@ function updateStatus() {
   card.style.background = c.bg; card.style.color = c.text; card.style.boxShadow = c.glow;
   $('statusTitle').textContent = status === 'CLOSED' ? 'BARRIERS DOWN' : status === 'CLOSING_SOON' ? 'CLOSING SOON' : 'CROSSING CLEAR';
   $('statusMsg').textContent = msg;
-  var arm = $('barrierArm'), bar = $('armBar'), la = $('lightA'), lb = $('lightB');
-  var stripes = document.querySelectorAll('.stripe');
-  if (status === 'CLOSED') {
-    arm.style.transform = 'rotate(0deg)'; bar.setAttribute('fill', '#DC2626');
-    stripes.forEach(function(s) { s.setAttribute('fill', '#FFF'); });
-    la.setAttribute('opacity', '1'); la.className = 'blink-a';
-    lb.setAttribute('opacity', '1'); lb.className = 'blink-b';
-  } else if (status === 'CLOSING_SOON') {
-    arm.style.transform = 'rotate(-30deg)'; bar.setAttribute('fill', '#F59E0B');
-    stripes.forEach(function(s) { s.setAttribute('fill', '#000'); });
-    la.setAttribute('opacity', '0'); la.className = ''; lb.setAttribute('opacity', '0'); lb.className = '';
-  } else {
-    arm.style.transform = 'rotate(-80deg)'; bar.setAttribute('fill', '#16A34A');
-    stripes.forEach(function(s) { s.setAttribute('fill', '#15803d'); });
-    la.setAttribute('opacity', '0'); la.className = ''; lb.setAttribute('opacity', '0'); lb.className = '';
-  }
-  // fmtEta renders a held value as "≥ 1m 40s" and a live one as the plain countdown; the
-  // sub-line drops the clock time when held, because a bound has no clock time to show.
-  if (nextCloseTime) { $('nextCloseCountdown').textContent = PREDICT.fmtEta(nextCloseTime.getTime() - t, pr.closeHeld); $('nextCloseCountdown').style.color = pr.closeHeld ? '#94A3B8' : '#F59E0B'; $('nextCloseTime').textContent = pr.closeHeld ? 'train held' : fmtShort(nextCloseTime); }
-  else { $('nextCloseCountdown').textContent = '--'; $('nextCloseCountdown').style.color = '#475569'; $('nextCloseTime').textContent = ''; }
-  if (nextOpenTime) { $('nextOpenCountdown').textContent = PREDICT.fmtEta(nextOpenTime.getTime() - t, pr.openHeld); $('nextOpenCountdown').style.color = pr.openHeld ? '#94A3B8' : '#16A34A'; $('nextOpenTime').textContent = pr.openHeld ? 'until train clears' : fmtShort(nextOpenTime); }
-  else { $('nextOpenCountdown').textContent = '--'; $('nextOpenCountdown').style.color = '#475569'; $('nextOpenTime').textContent = ''; }
-  if (downForMs !== null && downForMs > 0) { $('closureLength').textContent = fmtDownFor(downForMs); $('closureLength').style.color = '#94A3B8'; $('closureLengthSub').textContent = downForRange; }
-  else { $('closureLength').textContent = '--'; $('closureLength').style.color = '#475569'; $('closureLengthSub').textContent = ''; }
+  // Two booms, mirrored, so one angle drives both with the sign flipped. CLOSING_SOON sits
+  // at 55° — nearer "up" than "down" on purpose: the old 30° drew a boom most of the way
+  // down while the barrier was physically still up, which reads as "already closed".
+  //
+  // Angle only — the boom is the SAME length in every state and runs off the top of the
+  // frame when raised (see the note on the svg). Do not reintroduce a scale here: shrinking
+  // the boom as it rises keeps it in frame but draws a stubby half-boom, which reads as a
+  // broken barrier rather than a raised one.
+  var deg = status === 'CLOSED' ? 0 : status === 'CLOSING_SOON' ? 55 : 80;
+  var barFill = status === 'CLOSED' ? '#DC2626' : status === 'CLOSING_SOON' ? '#F59E0B' : '#16A34A';
+  var stripeFill = status === 'CLOSED' ? '#FFF' : status === 'CLOSING_SOON' ? '#000' : '#15803d';
+  $('barrierArmL').style.transform = 'rotate(-' + deg + 'deg)';
+  $('barrierArmR').style.transform = 'rotate(' + deg + 'deg)';
+  document.querySelectorAll('.arm-bar').forEach(function(b) { b.setAttribute('fill', barFill); });
+  document.querySelectorAll('.stripe').forEach(function(s) { s.setAttribute('fill', stripeFill); });
+  // setAttribute('class'), NOT .className: on an SVG element className is a read-only
+  // SVGAnimatedString, so `el.className = 'blink-a'` silently does nothing — which is why
+  // the wig-wag lights appeared but never actually blinked.
+  var lit = status === 'CLOSED';
+  $('lightA').setAttribute('opacity', lit ? '1' : '0');
+  $('lightB').setAttribute('opacity', lit ? '1' : '0');
+  $('lightA').setAttribute('class', lit ? 'blink-a' : '');
+  $('lightB').setAttribute('class', lit ? 'blink-b' : '');
+  // Neither duration comes from pr.downForMs: that describes whichever closure is CURRENT,
+  // which is the wrong one for a card about the NEXT one. "Closed for" is the length of the
+  // upcoming closure; "Open for" is the gap from the reopen to the close after it.
+  var closedForMs = upcoming ? upcoming.end.getTime() - (upcoming.predictedStart || upcoming.start).getTime() : null;
+  var openForMs = nextOpenTime ? gapToNextCloseAfter(nextOpenTime.getTime()) : null;
+  renderEventCards(pr, t, closedForMs, openForMs);
   renderClosures();
 
   var allForHistory = trainHistory.length > 0 ? trainHistory : trains;

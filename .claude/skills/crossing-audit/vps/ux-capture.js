@@ -34,8 +34,10 @@ const TARGETS = [
 ];
 
 // Ids read off the deployed markup, not guessed.
-const PUBLIC_IDS = ['statusTitle', 'statusMsg', 'nextCloseCountdown', 'nextCloseTime',
-  'nextOpenCountdown', 'nextOpenTime', 'closureLength', 'closureLengthSub', 'errorBox', 'showMoreBtn'];
+// c0* / c1* are the two timeline slots. They are POSITIONAL — slot 0 is whatever happens
+// next — so read c0label to know whether it is the open or the close.
+const PUBLIC_IDS = ['statusTitle', 'statusMsg', 'c0label', 'c0value', 'c0sub',
+  'c1label', 'c1value', 'c1sub', 'errorBox', 'showMoreBtn'];
 const OBSERVER_IDS = ['predState', 'predClose', 'predCloseAt', 'predOpen', 'predOpenAt', 'predDown',
   'predDownRange', 'predWarn', 'predAge', 'predClosures', 'netText', 'pollAge', 'offsetText', 'clock'];
 

@@ -64,8 +64,11 @@ for (const line of fs.readFileSync(path.join(OUT, 'main.jsonl'), 'utf8').trim().
     time: new RealDate(ms).toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour12: false }),
     backendState: rec.main.state,
     uiTitle: els.statusTitle.textContent, uiMsg: els.statusMsg.textContent,
-    nextClose: els.nextCloseCountdown.textContent, nextOpen: els.nextOpenCountdown.textContent,
-    downFor: els.closureLength.textContent, downForRange: els.closureLengthSub.textContent,
+    // The two cards are a positional timeline now: slot 0 is whatever happens next, so its
+    // label flips between "Next Open" and "Next Close" with the barrier state. Sub-lines are
+    // durations ("Closed for 2m 30s"), not the clock times they used to be.
+    slot0: els.c0label.textContent + ' ' + els.c0value.textContent + ' / ' + els.c0sub.textContent,
+    slot1: els.c1label.textContent + ' ' + els.c1value.textContent + ' / ' + els.c1sub.textContent,
     card1: card.slice(0, 200),
     currentClosureNull: rec.main.currentClosure === null,
     firstStart: c0 && c0.start, firstPredStart: c0 && c0.predictedStart, firstEnd: c0 && c0.end,
@@ -75,9 +78,9 @@ fs.writeFileSync(path.join(OUT, 'replay.json'), JSON.stringify(out, null, 1));
 console.log('samples:', out.length);
 let prev = null;
 for (const r of out) {
-  const key = [r.backendState, r.uiTitle, r.downFor, r.firstStart, r.firstEnd].join('|');
+  const key = [r.backendState, r.uiTitle, r.slot0, r.firstStart, r.firstEnd].join('|');
   if (key !== prev) console.log([r.time, String(r.backendState).padEnd(12),
-    r.uiTitle.padEnd(15), 'close:' + r.nextClose.padEnd(8), 'open:' + r.nextOpen.padEnd(8),
-    'downFor:' + r.downFor.padEnd(9), '| ' + r.card1.slice(0, 90)].join(' '));
+    r.uiTitle.padEnd(15), r.slot0.padEnd(34), r.slot1.padEnd(34),
+    '| ' + r.card1.slice(0, 70)].join(' '));
   prev = key;
 }

@@ -26,38 +26,71 @@
   </div>
 
   <div class="barrier-wrap">
-    <svg width="200" height="100" viewBox="0 0 200 100">
-      <rect x="15" y="20" width="8" height="80" rx="2" fill="#555"/>
-      <g id="barrierArm" style="transform-origin:19px 24px;transition:transform 1s ease">
-        <rect x="19" y="20" width="140" height="8" rx="3" id="armBar"/>
-        <rect x="35" y="20" width="14" height="8" rx="1" class="stripe" opacity=".3"/>
-        <rect x="63" y="20" width="14" height="8" rx="1" class="stripe" opacity=".3"/>
-        <rect x="91" y="20" width="14" height="8" rx="1" class="stripe" opacity=".3"/>
-        <rect x="119" y="20" width="14" height="8" rx="1" class="stripe" opacity=".3"/>
-        <rect x="147" y="20" width="14" height="8" rx="1" class="stripe" opacity=".3"/>
+    <!-- Two booms, one each side. Posts flush with the ends of the road and standing ON the
+         road line (y=95), booms a constant 91 long so they stop 10 apart when down.
+         The frame is DELIBERATELY too short to contain a raised boom: 91 long pivoting at
+         y=49 needs 90 units of headroom and the viewBox gives 19, so the raised and closing
+         booms run off the top and are clipped. That is the intended trade — a frame tall
+         enough to hold them leaves half the picture empty whenever the barriers are down,
+         which is the state people look at it in. Clipped at the edge reads as "continues
+         past the frame"; drawing the boom shorter instead (an earlier attempt scaled it)
+         reads as a stubby half-boom, which is worse. Keep the length constant.
+         Move the viewBox top and you trade empty space against how much boom is visible. -->
+    <svg width="200" height="68" viewBox="0 30 200 68">
+      <rect x="2" y="45" width="8" height="50" rx="2" fill="#555"/>
+      <rect x="190" y="45" width="8" height="50" rx="2" fill="#555"/>
+      <!-- The fills here are the LOADING state, before updateStatus() has a prediction to
+           colour them with. They must be set explicitly: an SVG rect with no fill defaults
+           to black, which on this background is invisible, so the barrier appeared to be
+           missing for the first moment after load. -->
+      <g id="barrierArmL" style="transform-origin:6px 49px;transition:transform 1s ease">
+        <rect x="6" y="45" width="91" height="8" rx="3" class="arm-bar" fill="#475569"/>
+        <rect x="22" y="45" width="13" height="8" rx="1" class="stripe" fill="#94A3B8" opacity=".3"/>
+        <rect x="48" y="45" width="13" height="8" rx="1" class="stripe" fill="#94A3B8" opacity=".3"/>
+        <rect x="74" y="45" width="13" height="8" rx="1" class="stripe" fill="#94A3B8" opacity=".3"/>
       </g>
-      <circle cx="19" cy="12" r="6" id="lightA" fill="#DC2626" opacity="0"/>
-      <circle cx="170" cy="12" r="6" id="lightB" fill="#DC2626" opacity="0"/>
+      <g id="barrierArmR" style="transform-origin:194px 49px;transition:transform 1s ease">
+        <rect x="103" y="45" width="91" height="8" rx="3" class="arm-bar" fill="#475569"/>
+        <rect x="113" y="45" width="13" height="8" rx="1" class="stripe" fill="#94A3B8" opacity=".3"/>
+        <rect x="139" y="45" width="13" height="8" rx="1" class="stripe" fill="#94A3B8" opacity=".3"/>
+        <rect x="165" y="45" width="13" height="8" rx="1" class="stripe" fill="#94A3B8" opacity=".3"/>
+      </g>
+      <!-- r=5.5 against an 8-wide post, so the lamp overhangs it by 1.5 on each side, and
+           reaches x=0.5 / x=199.5. The posts sit 2 in from the frame edge for exactly this
+           reason: on a post flush with the edge the outer half of the lamp would fall
+           outside the viewBox and be sliced flat. Any larger radius needs the posts moved
+           further in again. -->
+      <circle cx="6" cy="70" r="5.5" id="lightA" fill="#DC2626" opacity="0"/>
+      <circle cx="194" cy="70" r="5.5" id="lightB" fill="#DC2626" opacity="0"/>
       <line x1="0" y1="95" x2="200" y2="95" stroke="#888" stroke-width="3" stroke-dasharray="10,8"/>
       <text x="100" y="92" text-anchor="middle" fill="#888" font-size="8" font-family="monospace" id="roadLabel">LOADING</text>
     </svg>
   </div>
 
+  <!-- A two-slot timeline of the next two events, each "when it happens" over "how long the
+       state it starts lasts". The slots are POSITIONAL, not fixed roles: slot 0 is always
+       whatever happens next, so it is Next Open while the barriers are down and Next Close
+       while the crossing is clear. Slot 2 sits off the right edge holding the event after
+       those two; it exists so the strip can be pushed along when one happens.
+       Every line has an id because the audit harnesses drive this file through a stub DOM
+       that implements getElementById and nothing else. -->
   <div class="cards">
-    <div class="card">
-      <div class="card-label">Next Close</div>
-      <div class="card-value" id="nextCloseCountdown" style="color:#475569">--</div>
-      <div class="card-sub" id="nextCloseTime"></div>
-    </div>
-    <div class="card">
-      <div class="card-label">Next Open</div>
-      <div class="card-value" id="nextOpenCountdown" style="color:#475569">--</div>
-      <div class="card-sub" id="nextOpenTime"></div>
-    </div>
-    <div class="card">
-      <div class="card-label">Down For</div>
-      <div class="card-value" id="closureLength" style="color:#475569">--</div>
-      <div class="card-sub" id="closureLengthSub"></div>
+    <div class="cards-track" id="cardsTrack">
+      <div class="card">
+        <div class="card-label" id="c0label"></div>
+        <div class="card-value" id="c0value" style="color:#475569">--</div>
+        <div class="card-sub" id="c0sub"></div>
+      </div>
+      <div class="card">
+        <div class="card-label" id="c1label"></div>
+        <div class="card-value" id="c1value" style="color:#475569">--</div>
+        <div class="card-sub" id="c1sub"></div>
+      </div>
+      <div class="card">
+        <div class="card-label" id="c2label"></div>
+        <div class="card-value" id="c2value" style="color:#475569"></div>
+        <div class="card-sub" id="c2sub"></div>
+      </div>
     </div>
   </div>
 
