@@ -72,6 +72,24 @@ so a device that has lost the backend can't sit on BARRIERS DOWN.
 
 The **frontend has no build step** — edit files, push to `main`, GitHub Pages deploys within ~1 minute.
 
+### Run `sh scripts/bump-assets.sh` before pushing a frontend change
+
+Every asset tag in `index.html` and `portslade/index.html` carries a `?v=` token; the script
+re-stamps them. **Run it whenever you change `shared/*.js` or `shared/*.css`, and commit the
+result with the change.**
+
+GitHub Pages sends `cache-control: max-age=600` on everything and offers no way to override it,
+so without the token a browser can hold the OLD `crossing.js` for ten minutes while fetching the
+NEW `index.html`. Those two are not interchangeable: on 2026-08-10 that pairing threw on a removed
+element id and aborted `updateStatus()` halfway, leaving the banner counting down while the
+barrier and the cards sat frozen at their markup defaults. The page looks alive, so it does not
+get reported — it was only caught because Rich happened to look at desktop and mobile side by
+side. The token makes the pairing impossible: old HTML asks for the old URL, new HTML for the new.
+
+The observer PWA is deliberately **not** stamped — its service worker already fetches code with
+`cache: 'reload'` and matches its precached shell on the exact URL, so a token would miss that
+cache and break the offline launch it exists for.
+
 ## Branches
 
 - **`main`** — what's live. Frontend-only, calls the VPS backend (see Architecture).
