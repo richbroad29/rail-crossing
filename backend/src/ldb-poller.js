@@ -105,29 +105,68 @@ function parseTime(timeStr) {
 
 // ---- Common train extraction logic ----
 
-// Resolve an LDB estimate to an HH:MM string: an explicit estimate wins; "On time"
-// ⇒ the scheduled time; "Delayed"/absent ⇒ blank (don't fabricate a time).
-function liveOf(sched, est) {
-  if (est && est.includes(':')) return est;
+// Does this feed value carry a time, as opposed to a status word? Both feed shapes put
+// a ':' in every time they send (ISO on REST, HH:MM on SOAP) and none in "On time" or
+// "Delayed", so this is the one test that works for both.
+function hasTime(v) {
+  return typeof v === 'string' && v.includes(':');
+}
+
+// Resolve an LDB time to a display string, best knowledge first: a published ACTUAL
+// beats a forecast, a forecast beats "On time" ⇒ the scheduled time, and nothing at all
+// stays blank (don't fabricate a time).
+//
+// The actual belongs here, not just on bestTime. This is the field the feedback picker
+// shows and the calibration sheet records, and the train a user taps "Barriers Opening
+// Now" for is by definition one that has just been past — precisely when the forecast is
+// gone and the actual exists. It used to go out blank, so the picker tagged the train
+// "timetabled" and the sheet stored no live time for the single most informative row.
+function liveOf(sched, est, act) {
+  if (hasTime(act)) return act;
+  if (hasTime(est)) return est;
   if (est === 'On time') return sched || '';
   return '';
 }
 
-function extractTrain(sta, eta, std, etd, origin, dest, operator, trainid, source = 'ldbsv', uid = null) {
+// LDBSVWS reports every location three ways — scheduled, forecast, and ACTUAL — and it
+// stops sending the forecast once the actual exists (arrivalType/departureType flip
+// Forecast -> Actual). Reading only the first two meant that at the instant a train's
+// real time became known we threw it away and fell back to the timetable: 1H42 on
+// 2026-08-14 was re-published as "17:29, delay 0" while it was on the crossing 9 minutes
+// late, and ~180 services a day did the same for a median of 90s each.
+//
+// So: actual -> forecast -> timetable, and `timeSource` records which, because the caller
+// cannot otherwise tell "genuinely on time" from "we have nothing". That distinction is
+// the whole bug — a timetable fallback and a punctual train produced byte-identical
+// output, so nothing downstream could decline to trust the one or the other.
+function extractTrain(svc) {
+  const { sta, eta, ata, std, etd, atd, origin, dest, operator, trainid } = svc;
+  const source = svc.source || 'ldbsv';
+  const uid = svc.uid === undefined ? null : svc.uid;
   const direction = isEastOrigin(origin) ? 'west' : 'east';
 
-  let sch, et;
+  // Each direction reads its own three values, and the choice is physical: the crossing
+  // sits immediately west of the platform, so a westbound train pulls out of the platform
+  // straight onto it (departure) while an eastbound one crosses on its way in (arrival).
+  let sch, est, act;
   if (direction === 'east') {
-    sch = sta || std; et = eta || etd;
+    sch = sta || std; est = eta || etd; act = ata || atd;
   } else {
-    sch = std || sta; et = etd || eta;
+    sch = std || sta; est = etd || eta; act = atd || ata;
   }
 
   let bestTimeStr = sch;
+  let timeSource = 'scheduled';
   let isUncertain = false;
-  if (et && et !== 'On time' && et !== 'Delayed' && et.includes(':')) {
-    bestTimeStr = et;
-  } else if (et === 'Delayed') {
+  if (hasTime(act)) {
+    bestTimeStr = act; timeSource = 'actual';
+  } else if (hasTime(est)) {
+    bestTimeStr = est; timeSource = 'forecast';
+  } else if (est === 'On time') {
+    // A forecast that happens to equal the timetable is still a forecast — the feed has
+    // told us something. Not the same state as silence, however identical the time.
+    timeSource = 'forecast';
+  } else if (est === 'Delayed') {
     isUncertain = true;
   }
 
@@ -136,9 +175,9 @@ function extractTrain(sta, eta, std, etd, origin, dest, operator, trainid, sourc
   const scheduledTime = parseTime(sch);
 
   let delayMins = 0;
-  if (et && et.includes(':') && sch) {
-    const e2 = parseTime(et), s2 = parseTime(sch);
-    if (e2 && s2) delayMins = Math.round((e2 - s2) / 60000);
+  if (timeSource !== 'scheduled' && hasTime(bestTimeStr) && sch) {
+    const b2 = parseTime(bestTimeStr), s2 = parseTime(sch);
+    if (b2 && s2) delayMins = Math.round((b2 - s2) / 60000);
   }
 
   let trainType = 'passenger';
@@ -154,19 +193,96 @@ function extractTrain(sta, eta, std, etd, origin, dest, operator, trainid, sourc
     scheduledTime: scheduledTime?.toISOString(),
     bestTime: bestTime.toISOString(),
     direction, delayMins, isUncertain,
-    etaText: et || 'On time',
+    // Where bestTime came from: 'actual' | 'forecast' | 'scheduled'. Read by the LDB log
+    // and by applyEstimateMemory below; nothing renders it.
+    timeSource,
+    // What the feed itself called each of its two times, verbatim. Recorded because a
+    // withdrawn forecast is not diagnosable after the fact from the resolved time alone —
+    // 1S30 on 2026-08-13 could only be described, not explained, from three days of logs.
+    arrivalType: svc.arrivalType || null,
+    departureType: svc.departureType || null,
+    etaText: timeSource === 'actual' ? 'Actual' : (est || 'Timetabled'),
     headcode: trainid,
     uid,
     trainType,
     source,
-    // Raw four-way Portslade times (HH:MM) for the feedback picker's calibration
-    // capture: scheduled & live (estimated) arrival & departure, straight from LDB.
+    // Raw four-way Portslade times for the feedback picker's calibration capture:
+    // scheduled & live arrival & departure, straight from LDB. "Live" means the best the
+    // feed knows — a published actual once there is one, else the forecast.
     schedArr: sta || '',
     schedDep: std || '',
-    liveArr: liveOf(sta, eta),
-    liveDep: liveOf(std, etd),
+    liveArr: liveOf(sta, eta, ata),
+    liveDep: liveOf(std, etd, atd),
     dedupKey: `${sch || ''}|${dest}`
   };
+}
+
+// --- A live estimate is not un-given by silence -------------------------------------
+//
+// The feed can also stop sending a forecast BEFORE the train has passed, and that is the
+// case that moves a real prediction rather than merely mislabelling a row. 1S30 on
+// 2026-08-13 (scheduled 11:36, actually crossed 11:47:32) fell back to "11:36" at 11:36
+// and again 11:38-11:41 while it was eleven minutes away and not yet visible to TD; that
+// put its predicted close in the past, which showed up as a phantom closure card in the
+// list and a CLOSING_SOON that should have read OPEN.
+//
+// Falling back to the timetable there is strictly worse than keeping what we were last
+// told, so we keep it. Replaced by any newer forecast (including an earlier one — the
+// memory is a fallback, never a floor on the time itself) and by any actual; held only
+// while the feed says nothing.
+//
+// HOW FAR THIS IS ACTUALLY ESTABLISHED, because it is less than it looks. The trigger is
+// "the feed gave a time and now gives none". Whether 1S30 was in that state is NOT known:
+// the LDB log stored only the resolved time, and a withdrawn etd and an etd equal to std
+// are byte-identical once resolved. If the feed withdrew, this fixes it; if the feed
+// actively re-asserted the timetable time, this never fires and 1S30 recurs. The
+// arrType/depType fields added to logLdb alongside this exist to settle that the next time
+// it happens — do not assume it is settled now.
+//
+// What IS measured: replaying three days through the real grouping code, substituting
+// wherever the logs give positive evidence of a withdrawal, moves 12 grouping decisions
+// and 2 banner states out of 7,386 polls, and produces no false BARRIERS DOWN. That is an
+// upper bound on the disruption, and this function reproduces it exactly. Its 14
+// divergences from that proxy are all cases where the proxy waited for the time to pass
+// before calling it silence and this does not have to.
+//
+// Bounded risk in the other direction too: across 288 sampled service-observations on the
+// live board, every one carried an estimate, so on today's evidence this rarely fires.
+const ESTIMATE_MEMORY_TTL_MS = 30 * 60 * 1000;
+
+// Identity for the memory. UID first — it is the only value that survives a headcode
+// being reused later in the day — with headcode+scheduled time as the fallback.
+function memoryKey(t) {
+  if (t.uid) return `uid:${t.uid}`;
+  return `hc:${t.headcode || ''}|${t.scheduledTime || ''}`;
+}
+
+function applyEstimateMemory(trains, memory, nowMs = Date.now()) {
+  if (!memory) return trains;
+  for (const t of trains) {
+    const key = memoryKey(t);
+    const held = memory[key];
+
+    if (t.timeSource === 'forecast' || t.timeSource === 'actual') {
+      memory[key] = { bestTime: t.bestTime, delayMins: t.delayMins, liveArr: t.liveArr, liveDep: t.liveDep, at: nowMs };
+      continue;
+    }
+    // timeSource === 'scheduled' — the feed is telling us nothing. Prefer what it told us
+    // last, while that is still recent enough to be about this run of this service.
+    if (held && (nowMs - held.at) <= ESTIMATE_MEMORY_TTL_MS) {
+      t.bestTime = held.bestTime;
+      t.delayMins = held.delayMins;
+      t.liveArr = held.liveArr;
+      t.liveDep = held.liveDep;
+      t.timeSource = 'forecast';
+      t.estimateHeld = true;
+      memory[key] = Object.assign({}, held, { at: nowMs });
+    }
+  }
+  for (const k of Object.keys(memory)) {
+    if (nowMs - memory[k].at > ESTIMATE_MEMORY_TTL_MS) delete memory[k];
+  }
+  return trains;
 }
 
 // ---- RDM REST JSON parsing ----
@@ -199,14 +315,16 @@ function parseRdmJson(body) {
     const dest = svc.destination?.location?.[0]?.locationName ||
                  svc.destination?.[0]?.locationName || '?';
 
-    const train = extractTrain(
-      svc.sta, svc.eta, svc.std, svc.etd,
+    const train = extractTrain({
+      sta: svc.sta, eta: svc.eta, ata: svc.ata,
+      std: svc.std, etd: svc.etd, atd: svc.atd,
+      arrivalType: svc.arrivalType, departureType: svc.departureType,
       origin, dest,
-      svc.operator || '?',
-      svc.trainid || svc.rid || svc.serviceID || null,
-      'ldbsv',
-      svc.uid || null
-    );
+      operator: svc.operator || '?',
+      trainid: svc.trainid || svc.rid || svc.serviceID || null,
+      source: 'ldbsv',
+      uid: svc.uid || null
+    });
     if (train) results.push(train);
   }
 
@@ -243,15 +361,16 @@ function parseSoapXml(xml, source = 'ldbsv') {
     const destBlock = sv.match(/destination>[\s\S]*?<\/.*?destination>/i);
     if (destBlock) dest = getVal(destBlock[0], 'locationName') || '?';
 
-    const train = extractTrain(
-      getVal(sv, 'sta'), getVal(sv, 'eta'),
-      getVal(sv, 'std'), getVal(sv, 'etd'),
+    const train = extractTrain({
+      sta: getVal(sv, 'sta'), eta: getVal(sv, 'eta'), ata: getVal(sv, 'ata'),
+      std: getVal(sv, 'std'), etd: getVal(sv, 'etd'), atd: getVal(sv, 'atd'),
+      arrivalType: getVal(sv, 'arrivalType'), departureType: getVal(sv, 'departureType'),
       origin, dest,
-      getVal(sv, 'operator') || '?',
-      getVal(sv, 'trainid') || getVal(sv, 'rid') || null,
+      operator: getVal(sv, 'operator') || '?',
+      trainid: getVal(sv, 'trainid') || getVal(sv, 'rid') || null,
       source,
-      getVal(sv, 'uid') || null
-    );
+      uid: getVal(sv, 'uid') || null
+    });
     if (train) results.push(train);
   }
 
@@ -280,11 +399,26 @@ function buildSoapRequest(station, token, staffVersion) {
 
 // ---- Deduplication ----
 
+// Same destination within 120s ⇒ assume one service reported twice. That was safe while
+// a late train's time only ever moved BACKWARDS to its timetable slot; now that it moves
+// forward to the truth it can land inside 120s of the genuinely-next service to the same
+// destination, and the heuristic would silently discard a real upcoming train. Losing a
+// closure is the one failure this project ranks above every other, so: a different
+// identifier is positive proof of two different trains and settles it outright. RDM
+// supplies uid on every service, which leaves the heuristic for identifier-less services
+// only — exactly the case it was written for.
+function sameService(a, b) {
+  if (a.uid && b.uid) return a.uid === b.uid;
+  if (a.headcode && b.headcode) return a.headcode === b.headcode;
+  return true;   // nothing to tell them apart — fall through to destination + time
+}
+
 function deduplicateTrains(trains) {
   const sorted = trains.slice().sort((a, b) => new Date(a.bestTime) - new Date(b.bestTime));
   const results = [];
   for (const t of sorted) {
     const isDupe = results.some(r =>
+      sameService(r, t) &&
       r.destination === t.destination &&
       Math.abs(new Date(r.bestTime) - new Date(t.bestTime)) <= 120000
     );
@@ -330,6 +464,10 @@ async function pollStationSoap(station, token, staffVersion = false) {
 
 // ---- Main polling function ----
 
+// crossingId -> { <serviceKey>: heldEstimate }. Module-scoped because the memory has to
+// outlive a poll; keyed by crossing because two crossings can see the same service.
+const estimateMemory = new Map();
+
 /**
  * Poll for a crossing. Returns deduplicated train list.
  *
@@ -361,9 +499,17 @@ async function pollCrossing(crossingId, config, auth) {
     console.error(`  LDB poll failed for ${station}:`, err.message);
   }
 
+  // Held estimates are per crossing and persist across polls — that is the point of them.
+  // Applied BEFORE dedup, so the 120s window compares the times we mean to serve.
+  if (!estimateMemory.has(crossingId)) estimateMemory.set(crossingId, {});
+  applyEstimateMemory(allTrains, estimateMemory.get(crossingId));
+
   const deduped = deduplicateTrains(allTrains);
   logger.logLdb(crossingId, deduped);
   return deduped;
 }
 
-module.exports = { pollCrossing, pollStationRdm, pollStationSoap, parseRdmJson, parseSoapXml };
+module.exports = {
+  pollCrossing, pollStationRdm, pollStationSoap, parseRdmJson, parseSoapXml,
+  applyEstimateMemory, deduplicateTrains
+};

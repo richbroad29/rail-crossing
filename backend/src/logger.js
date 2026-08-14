@@ -36,7 +36,16 @@ function logLdb(crossingId, trains) {
       origin: t.origin,
       dest: t.destination,
       delay: t.delayMins,
-      headcode: t.headcode || null
+      headcode: t.headcode || null,
+      // WHY we hold that time, not just what it is. Without these, a snapshot showing
+      // `best === sch, delay 0` is ambiguous between a punctual train, a train whose
+      // forecast the feed withdrew, and a train that has already been past — three
+      // different faults with byte-identical output. Diagnosing 1S30 on 2026-08-13 from
+      // three days of these logs was impossible for exactly that reason.
+      src: t.timeSource || null,
+      held: t.estimateHeld ? true : undefined,
+      arrType: t.arrivalType || undefined,
+      depType: t.departureType || undefined
     }))
   });
 }
