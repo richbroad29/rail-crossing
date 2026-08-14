@@ -8,8 +8,34 @@
   route to calibrating *Portslade* — Rich's call, and it stands: Portslade is the priority and
   Yapton's numbers are Yapton's. This data comes into play when the app expands to other
   crossings, which is what it was collected for.
+- **A held closure's OPEN is shown as a firm time (the "C20" that was never opened).** Diagnosed
+  2026-08-14 from Rich's 17:32 observer screenshot, barriers UP: `NEXT CLOSE` correctly read
+  `≥ 43s · train held short`, while `NEXT OPEN` read `2m 25s / 17:34` and `DOWN FOR` read
+  `1m 40s / 17:32–17:34` — both firm. That closure held one train, so its open is the *same held
+  closure's own end driven by the same held train*: 43 s (the bound) + 1m 40s ≈ the 2m 25s shown.
+  It therefore slides with the bound while being printed as a fact, which is the ticking-then-
+  jumping behaviour the held treatment (register #14) exists to prevent.
+  **Cause, verified against current code:** `derive()` in `shared/predict.js` sets `openHeld` only
+  from the *current* period in the barriers-DOWN branch (`:271`). The barriers-UP branch sets
+  `nextOpenTime = upcoming.end` and `closeHeld` (`:292`) but never `openHeld`, so it keeps the
+  `false` default from `:261`. One cell of a four-cell table: barriers UP, next-but-one event is
+  an open. Fixing `derive()` would fix both apps at once, which is what that file is for.
+  **Rich's decision, 2026-08-14: leave the behaviour as it is.** Not a backlog item — do not raise
+  it as outstanding. Recorded so a later audit recognises it instead of rediscovering it cold.
+  **Two things it left unresolved, and the first is worse than the label:**
+  (a) whether the backend's period end genuinely tracks the held close or falls through to the
+  timetable rung of `_openPred`. If the latter, the end stays put while the close bound slides,
+  `downForMs` shrinks, and once the end passes, `getApiState`'s `p.holdingOpen || end > now`
+  filter **drops the closure entirely** — a held train deletes its own closure from the app.
+  Unverified in either direction; settle it by replaying a payload, not by reading.
+  (b) `getApiState` publishes `nextCloseTime` off `p.start` (`crossing-state.js:1900`) while every
+  countdown targets `predictedStart` — confirmed present, consequence unmeasured.
+  Also noted, structural and **unobserved**: nothing sorts `closurePeriods` by time. Order follows
+  the first train's `bestTime`, and the readers at `crossing-state.js:1749/1757` take array order,
+  so "next" is not guaranteed to be the earliest. Whether that inversion ever actually occurs has
+  not been measured.
 
-Neither is urgent and neither blocks anything. Leave them out of "what's outstanding".
+None of these is urgent and none blocks anything. Leave them out of "what's outstanding".
 
 **Read `DATA-SOURCES.md` (beside this file) before any analysis.** Observation and log data spans
 the Mac, the VPS and the Google Sheet; on 2026-07-31 an analysis used one export, concluded n=3
