@@ -109,13 +109,21 @@
         html += '<div class="closure-time-group"><span class="closure-time closure-held">Train held</span></div>';
         html += '<span class="closure-pill">Closed ' + duration + ' · not before ' + P.fmtCountdown(Math.max(0, secsUntil)) + '</span>';
       } else if (w.imminent) {
-        html += '<div class="closure-time-group"><span class="closure-time closure-imminent">Any moment now</span></div>';
-        html += '<span class="closure-pill">Closed ' + duration + ' · any moment now</span>';
+        // The end is a real prediction here: `imminent` means the trigger HAS fired and the
+        // state is catching up (register #14), so only the start is too close to put a clock
+        // time on. Same range as below, with the phrase standing in for the start.
+        //
+        // The pill drops its own "· any moment now": it repeated the header word for word,
+        // and at 390px the two together overflowed the row — measured, the end truncated to
+        // "17:4" and the pill ellipsised to "any momen…". A half-printed clock time is worse
+        // than no clock time. Losing the duplicate is what buys the range its room.
+        html += '<div class="closure-time-group"><span class="closure-time closure-imminent">Any moment now — ' + P.fmtShort(p.end) + '</span></div>';
+        html += '<span class="closure-pill">Closed ' + duration + '</span>';
       } else {
         var band = w.halfWidthSecs > 0
           ? '<span class="closure-uncertainty">±' + P.fmtUncertainty(w.halfWidthSecs) + '</span>'
           : '';
-        html += '<div class="closure-time-group"><span class="closure-time">' + P.fmtShort(pStart) + '</span>' + band + '</div>';
+        html += '<div class="closure-time-group"><span class="closure-time">' + P.fmtShort(pStart) + ' — ' + P.fmtShort(p.end) + '</span>' + band + '</div>';
         html += '<span class="closure-pill">Closed ' + duration + ' · ' + P.fmtWhen(secsUntil, w.halfWidthSecs >= 60) + '</span>';
       }
     }
