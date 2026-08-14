@@ -41,8 +41,11 @@
   }
   // The "when" half of a closure pill, as a phrase rather than a bare value — the
   // template used to prefix "in " unconditionally, so a countdown sitting at or past
-  // zero rendered "in now". Past zero it is "any moment now", not a time. `rough`
-  // mirrors the ± band: when the band is a minute or wider, second precision is a lie.
+  // zero rendered "in now". Past zero it is "any moment now", not a time. `rough` is
+  // driven by the confidence window: when the window is a minute or wider, second
+  // precision is a lie. The window is no longer DRAWN as a ± band (2026-08-14) — this is
+  // now the only place it reaches the user, as the difference between "in 3m 20s" and
+  // "in ~3 min", which is the honest way to spend it.
   function fmtWhen(ms, rough) {
     if (ms <= 0) return 'any moment now';
     if (!rough) return 'in ' + fmtCountdown(ms);
@@ -76,8 +79,9 @@
   }
   // The "Down For" card version of the same duration. Two differences from the pill
   // above, both because this one is read on its own rather than inside a sentence:
-  // no leading "~" (the uncertainty is expressed by the ± band on the closure row,
-  // and a tilde against a bare number just read as noise), and a whole-minute value
+  // no leading "~" (a tilde against a bare number just read as noise; the uncertainty
+  // used to be carried by the ± band on the closure row, which no longer exists — see
+  // fmtWhen for where the window goes now), and a whole-minute value
   // spells its unit out — "3m" alone was easy to scan as seconds. Mixed values stay
   // compact ("2m 40s"); spelling those out overflows the card. Same 10 s rounding, so
   // the card and the pill can never disagree.

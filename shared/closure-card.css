@@ -21,7 +21,6 @@
 .closure-train{font-size:11px;color:#CBD5E1;padding:2px 0;display:flex;align-items:center;gap:4px}
 .closure-train-route{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
 .closure-time-group{display:flex;align-items:baseline;gap:2px}
-.closure-uncertainty{font-size:13px;color:#94A3B8;margin-left:5px;font-variant-numeric:tabular-nums}
 .closure-imminent{color:#F59E0B}
 /* A close whose trigger has not fired: the time shown is a lower bound, not a prediction
    (register #14). Deliberately NOT the amber of .closure-imminent — that means "about to

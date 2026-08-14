@@ -56,7 +56,9 @@
   // source in the backend, but the column it was displayed in was not worth keeping either.
   //
   // Timing doubt still gets said, once per closure rather than once per train: the
-  // .closure-warn line above, and the ± / held / "any moment now" treatments in the header.
+  // .closure-warn line above, and the held / "any moment now" treatments in the header.
+  // (The ± band was part of that set until 2026-08-14; the window it came from now reaches
+  // the user only as the precision of the pill's countdown — see fmtWhen in predict.js.)
   function trainRow(t) {
     var dirColor = t.direction === 'east' ? '#38BDF8' : '#FB923C';
     var arrow = t.direction === 'east' ? '→' : '←';
@@ -90,11 +92,22 @@
 
     if (isCurrent) {
       html += '<span class="closure-time" style="color:#FCA5A5">NOW — ' + P.fmtShort(p.end) + '</span>';
-      // A held open has no time to count down to, so don't print one — the train has not
-      // cleared and we do not know when it will.
-      html += p.holdingOpen
-        ? '<span class="closure-pill closure-pill-active">Closed ' + duration + ' · held</span>'
-        : '<span class="closure-pill closure-pill-active">Closed ' + duration + ' · opens in ' + P.fmtCountdown(p.end.getTime() - t) + '</span>';
+      // How much longer it stays shut, counting down — the SAME value and the same
+      // formatter as the Next Open card above, deliberately. derive() sets that card from
+      // `current.end` and `current.holdingOpen` (predict.js), which is exactly the pair
+      // passed here, so the two cannot drift apart: a user glancing between them sees one
+      // number, not two that agree by luck.
+      //
+      // fmtEta carries the held case with it — "≥ 9s" while the train has not cleared,
+      // "held" once even that bound has passed, "Soon" when a live countdown reaches zero
+      // before the state catches up. Each is the token the card above is showing at that
+      // moment, so the mirror holds in the awkward states too, not just the tidy one.
+      //
+      // The closure's TOTAL length is no longer printed here. It was a static number
+      // sitting where a moving one belongs, and "Closed 2m 20s · opens in 1m 16s" made the
+      // reader work out which of the two was the answer to "how long until I can cross".
+      html += '<span class="closure-pill closure-pill-active">Closed '
+        + P.fmtEta(p.end.getTime() - t, p.holdingOpen) + '</span>';
     } else {
       var w = p.window || { imminent: false, halfWidthSecs: 120 };
       // Show the PREDICTED close time/countdown (matches the header countdown);
@@ -120,10 +133,11 @@
         html += '<div class="closure-time-group"><span class="closure-time closure-imminent">Any moment now — ' + P.fmtShort(p.end) + '</span></div>';
         html += '<span class="closure-pill">Closed ' + duration + '</span>';
       } else {
-        var band = w.halfWidthSecs > 0
-          ? '<span class="closure-uncertainty">±' + P.fmtUncertainty(w.halfWidthSecs) + '</span>'
-          : '';
-        html += '<div class="closure-time-group"><span class="closure-time">' + P.fmtShort(pStart) + ' — ' + P.fmtShort(p.end) + '</span>' + band + '</div>';
+        // No ± band (2026-08-14). The window is still computed and still used — it decides
+        // whether the pill's countdown is spelled to the second or rounded (`fmtWhen`
+        // below) — it is just no longer drawn. Confidence is expressed by improving the
+        // prediction, not by printing an error bar beside it.
+        html += '<div class="closure-time-group"><span class="closure-time">' + P.fmtShort(pStart) + ' — ' + P.fmtShort(p.end) + '</span></div>';
         html += '<span class="closure-pill">Closed ' + duration + ' · ' + P.fmtWhen(secsUntil, w.halfWidthSecs >= 60) + '</span>';
       }
     }

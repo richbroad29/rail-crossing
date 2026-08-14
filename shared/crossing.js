@@ -33,7 +33,7 @@ function $(id) { return document.getElementById(id); }
 // local copy of any of these: a second implementation is exactly the failure this file
 // was split to prevent.
 var fmtTime = PREDICT.fmtTime, fmtShort = PREDICT.fmtShort, fmtCountdown = PREDICT.fmtCountdown,
-    fmtUncertainty = PREDICT.fmtUncertainty, fmtWhen = PREDICT.fmtWhen, fmtSoon = PREDICT.fmtSoon,
+    fmtWhen = PREDICT.fmtWhen, fmtSoon = PREDICT.fmtSoon,
     fmtDuration = PREDICT.fmtDuration, fmtDownFor = PREDICT.fmtDownFor;
 // How long the crossing stays clear from `time`: the gap to the first predicted close after
 // it. Walks the period list rather than reading derive(), which surfaces only the FIRST
