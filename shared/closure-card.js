@@ -38,22 +38,31 @@
     return ' (freight)';
   }
 
+  // Which trains this closure is for — direction, route, and how much to trust a freight.
+  // No time and no punctuality label, deliberately (2026-08-14).
+  //
+  // The card header already answers the only question the app exists to answer: when the
+  // barrier moves, and for how long. A train's own time answered a different question and
+  // answered it ambiguously — it was the Portslade STATION time for a train off the live
+  // departure board (westbound departure, eastbound arrival) but an estimate of the time at
+  // the CROSSING for one off the timetable (freight, ECS, anything beyond the ~2h board
+  // horizon). Same column, two meanings, no way to tell which from looking.
+  //
+  // It was also the one thing on the card that could be confidently wrong. The feed swaps a
+  // forecast for a published actual once a train has been past, and we were not reading the
+  // actual: so ~180 services a day spent about 90s each showing their timetabled time beside
+  // the words "On time" — 1H42 on 2026-08-14 read "17:29 On time" while it was physically on
+  // the crossing 9 minutes late, which is what got this looked at. That fault is fixed at
+  // source in the backend, but the column it was displayed in was not worth keeping either.
+  //
+  // Timing doubt still gets said, once per closure rather than once per train: the
+  // .closure-warn line above, and the ± / held / "any moment now" treatments in the header.
   function trainRow(t) {
     var dirColor = t.direction === 'east' ? '#38BDF8' : '#FB923C';
     var arrow = t.direction === 'east' ? '→' : '←';
-    var statusHtml;
-    if (t.isUncertain) {
-      statusHtml = '<span class="train-status train-status-delayed">Delayed</span>';
-    } else if (t.isDelayed && t.delayMins > 0) {
-      statusHtml = '<span class="train-status train-status-delayed">+' + t.delayMins + 'm</span>';
-    } else {
-      statusHtml = '<span class="train-status train-status-ontime">On time</span>';
-    }
     return '<div class="closure-train">'
       + '<span style="color:' + dirColor + ';font-weight:700;flex-shrink:0">' + arrow + '</span>'
       + '<span class="closure-train-route">' + esc(t.origin) + ' → ' + esc(t.destination) + esc(typeLabel(t)) + '</span>'
-      + '<span class="closure-train-time">' + P.fmtShort(t.bestTime) + '</span>'
-      + statusHtml
       + '</div>';
   }
 

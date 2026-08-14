@@ -3,8 +3,8 @@
  *
  * Split out of shared/crossing.css so the observer can load the closure card WITHOUT the
  * public app's whole stylesheet, which redefines body/.wrap/.hdr/.section/.empty/.info-text
- * and would restyle the observer wholesale. Every selector here is .closure-* or
- * .train-status*, so the two apps' own stylesheets can't collide with it.
+ * and would restyle the observer wholesale. Every selector here is .closure-*, so the two
+ * apps' own stylesheets can't collide with it.
  *
  * Both apps link this file. Keep it self-contained: no dependency on anything in
  * crossing.css or observe.css, in either direction.
@@ -20,7 +20,6 @@
 .closure-pill-active{color:#FCA5A5;background:#7F1D1D}
 .closure-train{font-size:11px;color:#CBD5E1;padding:2px 0;display:flex;align-items:center;gap:4px}
 .closure-train-route{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
-.closure-train-time{margin-left:auto;flex-shrink:0;padding-left:6px;display:flex;align-items:center;gap:4px;font-variant-numeric:tabular-nums}
 .closure-time-group{display:flex;align-items:baseline;gap:2px}
 .closure-uncertainty{font-size:13px;color:#94A3B8;margin-left:5px;font-variant-numeric:tabular-nums}
 .closure-imminent{color:#F59E0B}
@@ -29,6 +28,3 @@
    happen" and this means the opposite, a train stopped short with the barrier still up. */
 .closure-held{color:#94A3B8}
 .closure-warn{font-size:9px;color:#F59E0B;margin-bottom:4px}
-.train-status{font-size:9px;font-weight:600;width:42px;text-align:right;flex-shrink:0}
-.train-status-ontime{color:#6EE7B7}
-.train-status-delayed{color:#F59E0B}
