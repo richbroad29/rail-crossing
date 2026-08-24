@@ -263,9 +263,10 @@
     $('predState').textContent = PREDICT.stateLabel(st) || 'no prediction';
     $('predState').className = 'pred-state' + (st ? ' is-' + st.toLowerCase() : '');
     var t = Date.now();
-    setPredCard('predClose', 'predCloseAt', pred && pred.nextCloseTime, t,
+    var heldT = pred ? pred.heldRef : t;
+    setPredCard('predClose', 'predCloseAt', pred && pred.nextCloseTime, t, heldT,
       pred && pred.closeHeld, 'train held short');
-    setPredCard('predOpen', 'predOpenAt', pred && pred.nextOpenTime, t,
+    setPredCard('predOpen', 'predOpenAt', pred && pred.nextOpenTime, t, heldT,
       pred && pred.openHeld, 'until train clears');
     var dfm = pred && pred.downForMs;
     $('predDown').textContent = (dfm != null && dfm > 0) ? PREDICT.fmtDownFor(dfm) : '--';
@@ -278,10 +279,12 @@
     warn.textContent = ws.length ? ('⚠ inconsistent: ' + ws.join('; ')) : '';
     renderPredClosures(t);
   }
-  // `held` values are lower bounds recomputed against now, so they don't tick — rendering
-  // one as a bare countdown would read as a frozen clock. Prefixed and labelled instead.
-  function setPredCard(valId, subId, when, nowMs, held, heldNote) {
-    $(valId).textContent = when ? PREDICT.fmtEta(when.getTime() - nowMs, held) : '--';
+  // `held` values are lower bounds, so they don't tick — rendering one as a bare countdown
+  // would read as a frozen clock. Prefixed and labelled instead. A bound is measured from
+  // `heldMs` (PREDICT.heldRef, the moment the payload was built) rather than from now, or it
+  // loses a second a second between polls and stops being a bound at all.
+  function setPredCard(valId, subId, when, nowMs, heldMs, held, heldNote) {
+    $(valId).textContent = when ? PREDICT.fmtEta(when.getTime() - (held ? heldMs : nowMs), held) : '--';
     $(valId).classList.toggle('is-held', !!(when && held));
     $(subId).textContent = when ? (held ? heldNote : PREDICT.fmtShort(when)) : '';
   }
@@ -294,7 +297,11 @@
       box.innerHTML = '<div class="empty">' + (predOk ? 'No upcoming closures' : 'No prediction — feed offline') + '</div>';
       return;
     }
-    box.innerHTML = CLOSURE_CARD.listHtml(predPeriods, new Date(nowMs), 2);
+    // Same held reference as the public app (PREDICT.heldRef): a bound is measured from
+    // when the payload was built, not from now, or it ticks down between polls and this
+    // panel stops matching the app it exists to mirror.
+    box.innerHTML = CLOSURE_CARD.listHtml(predPeriods, new Date(nowMs), 2,
+      pred ? pred.heldRef : nowMs);
   }
   // The prediction as it stood at the instant of a capture, plus the number this whole
   // exercise exists to produce: observed minus predicted, in seconds. Positive = the

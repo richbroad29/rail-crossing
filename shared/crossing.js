@@ -66,14 +66,18 @@ function buildEventCard(kind, pr, closedForMs, openForMs) {
 
 // fmtEta renders a held value as "≥ 1m 40s" and a live one as the plain countdown; the
 // sub-line says so in words when held, because a bound has no duration to promise.
-function fillEventCard(slot, ev, t) {
+//
+// A live countdown is measured from `t` and a held one from `heldT` (PREDICT.heldRef): the
+// first targets a moment and must tick towards it, the second is a lower bound stamped when
+// the payload was built and must NOT tick, or it is not a bound.
+function fillEventCard(slot, ev, t, heldT) {
   $('c' + slot + 'label').textContent = ev ? (ev.kind === 'open' ? 'Next Open' : 'Next Close') : '';
   var v = $('c' + slot + 'value');
   if (!ev || !ev.at) {
     v.textContent = ev ? '--' : ''; v.style.color = '#475569';
     $('c' + slot + 'sub').textContent = ''; return;
   }
-  v.textContent = PREDICT.fmtEta(ev.at.getTime() - t, ev.held);
+  v.textContent = PREDICT.fmtEta(ev.at.getTime() - (ev.held ? heldT : t), ev.held);
   v.style.color = ev.held ? '#94A3B8' : (ev.kind === 'open' ? '#16A34A' : '#F59E0B');
   $('c' + slot + 'sub').textContent = ev.sub;
 }
@@ -88,6 +92,7 @@ function fillEventCard(slot, ev, t) {
 // CROSSING CLEAR -> CLOSING SOON leaves it alone (nothing has happened yet), CLOSING SOON ->
 // BARRIERS DOWN flips it. Nothing here reads the status directly for that reason.
 function renderEventCards(pr, t, closedForMs, openForMs) {
+  var heldT = pr.heldRef;
   var kinds = pr.status === 'CLOSED' ? ['open', 'close'] : ['close', 'open'];
   var evs = [buildEventCard(kinds[0], pr, closedForMs, openForMs),
              buildEventCard(kinds[1], pr, closedForMs, openForMs)];
@@ -108,12 +113,13 @@ function renderEventCards(pr, t, closedForMs, openForMs) {
   var shift = canAnimate && cardLeftKind !== null && cardLeftKind !== kinds[0];
   cardLeftKind = kinds[0];
   if (!shift) {
-    fillEventCard(0, evs[0], t); fillEventCard(1, evs[1], t); fillEventCard(2, null, t);
+    fillEventCard(0, evs[0], t, heldT); fillEventCard(1, evs[1], t, heldT);
+    fillEventCard(2, null, t, heldT);
     return;
   }
   // Stage the arriving card off-screen, then push. Slot 1 already holds evs[0] — it is the
   // same event, one position along — so the strip stays continuous through the move.
-  fillEventCard(2, evs[1], t);
+  fillEventCard(2, evs[1], t, heldT);
   cardShiftEnd = t + CARD_SHIFT_MS;
   window.requestAnimationFrame(function () { track.classList.add('shifted'); });
 }
@@ -249,7 +255,8 @@ function renderClosures() {
     $('showMoreBtn').classList.add('hidden');
     return;
   }
-  $('closureList').innerHTML = CLOSURE_CARD.listHtml(closurePeriods, now, closuresVisible);
+  $('closureList').innerHTML = CLOSURE_CARD.listHtml(closurePeriods, now, closuresVisible,
+    PREDICT.heldRef(now.getTime(), payloadAgeMs));
   // "Are there more?" is now the BACKEND's count, not the length of what it sent — the
   // response is capped at what we asked for, so `relevant.length` can no longer answer it
   // and Show More would have hidden itself the moment the cap bound.
@@ -310,7 +317,11 @@ function updateStatus() {
       // tool, does name it. "≥" carries the floor in the space of one line: the long form
       // wrapped on a phone, and a line that sometimes wraps is a card that changes size.
       // Past the bound, fmtHeld reads "held", so drop the number rather than print "for held".
-      if (pr.closeHeld) { msg = ms > 0 ? 'Train held — no closure for ' + PREDICT.fmtHeld(ms) : 'Train held on approach'; }
+      // Measured from the payload stamp rather than from now (pr.heldRef), so the bound
+      // does not tick down between polls — the same reference the Next Close card and the
+      // closure row use, so the three cannot show three different numbers.
+      var heldMs = nextCloseTime.getTime() - pr.heldRef;
+      if (pr.closeHeld) { msg = heldMs > 0 ? 'Train held — no closure for ' + PREDICT.fmtHeld(heldMs) : 'Train held on approach'; }
       else if (status === 'CLOSING_SOON') { msg = ms <= 0 ? 'Closing soon' : 'Closing in ~' + fmtCountdown(ms); }
       else { msg = 'Next closure in ~' + fmtCountdown(ms); }
     } else { msg = 'No more closures expected today'; }

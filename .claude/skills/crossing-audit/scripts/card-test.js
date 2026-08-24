@@ -79,6 +79,42 @@ check('a distinct value at each tick', new Set(ticking).size, ticking.length);
 check('starts at the full remaining time', ticking[0], '2m 16s');
 check('and has counted down by t+120s', ticking[3], '16s');
 
+console.log('\nA held value is a bound, so it must NOT tick between polls\n');
+// 2026-08-24: "Next Open >= 1s" under BARRIERS DOWN. The backend had stamped an 18s bound
+// and then nothing re-stamped it for 17 seconds, so the client counted it down. Backend side
+// that is HOLD_TICK_MS; client side it is PREDICT.heldRef — a held value is measured from the
+// moment the payload was BUILT, so it survives the gap between two 10s polls unchanged.
+{
+  const held = periods(18, true);                     // bound: 18s, the west open lag
+  const at = (secs, ageMs) => {
+    const now = new Date(T0 + secs * 1000);
+    const pr = P.derive(held, now, ageMs);
+    return { pill: pillOf(C.cardHtml(held[0], now, pr.heldRef)),
+             box: P.fmtEta(pr.nextOpenTime.getTime() - pr.heldRef, pr.openHeld) };
+  };
+  // Across one poll cycle the payload ages but the bound does not move.
+  const fresh = [0, 4, 8, 10].map(secs => at(secs, secs * 1000).pill);
+  console.log('  age 0/4/8/10s ->', fresh.join('  ->  '));
+  check('the bound holds across a whole poll cycle', new Set(fresh).size, 1);
+  check('...at the value the backend stamped', fresh[0], '\u2265 18s');
+  // The mirror has to survive the new reference too: the pill and the Next Open card are
+  // fed the same instant, or they drift apart in exactly the state this file exists for.
+  const mid = at(8, 8000);
+  check('pill and Next Open card still agree while held', mid.pill, mid.box);
+  // Pinned, not frozen. Past HELD_FRESH_MS (15s) the app has lost touch and the bound ages.
+  const stale = at(20, 20000);
+  check('a stale payload lets it decay again', stale.pill, '\u2265 13s');
+  check('...and eventually says so outright', at(40, 40000).pill, 'held');
+  // The non-regression: a LIVE countdown is a prediction of a moment and must still tick,
+  // payload age or not. Only bounds are pinned.
+  const live = [0, 30].map(secs => {
+    const ps = periods(136, false);
+    const now = new Date(T0 + secs * 1000);
+    return pillOf(C.cardHtml(ps[0], now, P.derive(ps, now, secs * 1000).heldRef));
+  });
+  check('a live countdown is untouched by the payload age', live.join(' '), '2m 16s 1m 46s');
+}
+
 console.log('\nThe closure total is no longer printed beside it\n');
 check('no "opens in" phrasing', /opens in/.test(C.cardHtml(periods(136, false)[0], new Date(T0))), false);
 

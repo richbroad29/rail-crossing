@@ -69,8 +69,14 @@
   }
 
   // One closure period. `now` is a Date; the caller re-renders on its own tick.
-  function cardHtml(p, now) {
+  //
+  // `heldT` (PREDICT.heldRef) is where a HELD value is measured from: the moment the
+  // payload was built, not now. A bound that loses a second a second between polls is a
+  // countdown, not a bound. Defaults to `now` so a caller that has no payload age still
+  // renders — the observer passes it, the public app passes it.
+  function cardHtml(p, now, heldT) {
     var t = now.getTime();
+    if (typeof heldT !== 'number') heldT = t;
     // A period holding open has not finished when its end passes — the train has not
     // performed its clear step (register #14) — so "are we in it" cannot be the clock
     // alone. Same test as PREDICT.derive, for the same reason.
@@ -107,7 +113,7 @@
       // sitting where a moving one belongs, and "Closed 2m 20s · opens in 1m 16s" made the
       // reader work out which of the two was the answer to "how long until I can cross".
       html += '<span class="closure-pill closure-pill-active">Closed '
-        + P.fmtEta(p.end.getTime() - t, p.holdingOpen) + '</span>';
+        + P.fmtEta(p.end.getTime() - (p.holdingOpen ? heldT : t), p.holdingOpen) + '</span>';
     } else {
       var w = p.window || { imminent: false, halfWidthSecs: 120 };
       // Show the PREDICTED close time/countdown (matches the header countdown);
@@ -120,7 +126,8 @@
         // actually happening instead — a train stopped short of the crossing means the
         // barrier is NOT about to drop, which is the opposite of what the old "Soon" said.
         html += '<div class="closure-time-group"><span class="closure-time closure-held">Train held</span></div>';
-        html += '<span class="closure-pill">Closed ' + duration + ' · not before ' + P.fmtCountdown(Math.max(0, secsUntil)) + '</span>';
+        html += '<span class="closure-pill">Closed ' + duration + ' · not before '
+          + P.fmtCountdown(Math.max(0, pStart.getTime() - heldT)) + '</span>';
       } else if (w.imminent) {
         // The end is a real prediction here: `imminent` means the trigger HAS fired and the
         // state is catching up (register #14), so only the start is too close to put a clock
@@ -164,10 +171,10 @@
     return out;
   }
 
-  function listHtml(periods, now, limit) {
+  function listHtml(periods, now, limit, heldT) {
     var rel = relevant(periods, now, limit);
     if (!rel.length) return '<div class="empty">No upcoming closures</div>';
-    return rel.map(function (p) { return cardHtml(p, now); }).join('');
+    return rel.map(function (p) { return cardHtml(p, now, heldT); }).join('');
   }
 
   root.CLOSURE_CARD = { cardHtml: cardHtml, listHtml: listHtml, relevant: relevant, typeLabel: typeLabel };

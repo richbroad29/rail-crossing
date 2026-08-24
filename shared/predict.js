@@ -235,6 +235,23 @@
   // clock. 90s matches the threshold the observer already marks its own feed bad at.
   var HOLD_TRUST_MS = 90000;
 
+  // WHERE A HELD COUNTDOWN IS MEASURED FROM.
+  //
+  // A bound is "no sooner than the class lag from the moment the backend last looked". Held
+  // against `now` it is not a bound at all — it loses a second a second between polls, so
+  // an 18s open bound reads 18, 17 … 9, 8 across one 10s poll cycle and then jumps back.
+  // That is a countdown wearing a "≥", which is the exact thing the ≥ exists to deny. The
+  // backend re-stamps its bounds on the clock now (HOLD_TICK_MS there); this is the same
+  // fix one layer up, for the gap between two polls.
+  //
+  // Pinned, not frozen. Past HELD_FRESH_MS we have genuinely lost touch with the backend,
+  // the stamp really is ageing, and the value goes back to decaying — down to "held", as it
+  // always did. 15s is one 10s poll plus margin, so a healthy app never reaches it.
+  var HELD_FRESH_MS = 15000;
+  function heldRef(t, payloadAgeMs) {
+    return t - Math.min(payloadAgeMs > 0 ? payloadAgeMs : 0, HELD_FRESH_MS);
+  }
+
   function derive(periods, now, payloadAgeMs) {
     var t = (now || new Date()).getTime();
     var trustHold = !(payloadAgeMs > HOLD_TRUST_MS);
@@ -259,6 +276,10 @@
                 // Is the corresponding countdown a held lower bound rather than a live
                 // prediction? Presentation reads these; the numbers are unchanged.
                 closeHeld: false, openHeld: false,
+                // The instant a held countdown must be measured from — see heldRef. Every
+                // renderer of a ≥ value uses this in place of `now`, so the four places a
+                // bound can appear cannot disagree about how old it is.
+                heldRef: heldRef(t, payloadAgeMs),
                 // Invariants the backend is supposed to guarantee. Populated rather than
                 // silently repaired: the observer exists to surface a disagreement between
                 // the two apps and the backend, and quietly clamping here would hide
@@ -647,7 +668,7 @@
     CHAIN: CHAIN, CHAININ: CHAININ,
     fmtTime: fmtTime, fmtShort: fmtShort, fmtCountdown: fmtCountdown, fmtUncertainty: fmtUncertainty,
     fmtCountdownRough: fmtCountdownRough, fmtWhen: fmtWhen, fmtSoon: fmtSoon,
-    fmtHeld: fmtHeld, fmtEta: fmtEta,
+    fmtHeld: fmtHeld, fmtEta: fmtEta, heldRef: heldRef,
     fmtDuration: fmtDuration, fmtDownFor: fmtDownFor,
     buildClosures: buildClosures, getWindowTier: getWindowTier, parseTrains: parseTrains,
     derive: derive, stateLabel: stateLabel,
