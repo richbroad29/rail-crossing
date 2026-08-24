@@ -104,6 +104,22 @@ const DEFAULT_CLOSURE_LIMIT = 6;
 // whose `end` slipped into the past stopped being current in three separate places and
 // the app declared the crossing clear with a train still on it. That is now gated on the
 // clear step rather than on the clock — see the holdingOpen flag and its three readers.
+//
+// A bound is "no sooner than the class lag from NOW", and it is only true at the instant
+// it is stamped. Stored and served unchanged it stops being a bound and becomes a clock:
+// it counts down a second a second, past zero, until something recomputes. Observed live
+// 2026-08-24 — a westbound open bound of 18s served as "≥ 1s" seventeen seconds after the
+// LDB poll that stamped it, then "held", then back to 18s on the next poll. The events
+// that trigger a recompute are all PHYSICAL (a berth strike, an LDB poll), and a held
+// train is by definition producing none of them, so nothing re-stamps it.
+//
+// HOLD_TICK_MS is the missing trigger: while any bound is live, time itself is an input,
+// so recompute on the clock at the rate the client renders. Doing it here rather than
+// re-deriving each bound from a stored lag is deliberate — the same code evaluated later
+// cannot drift from itself, whereas shadow arithmetic in the serializer would have to be
+// kept in step with three separate min/max compositions (predicted close, gated close,
+// period end) every time one of them changes.
+const HOLD_TICK_MS = 1000;
 
 class CrossingState {
   constructor(crossingId, config) {
@@ -171,6 +187,9 @@ class CrossingState {
     // Set when a TD event has changed something a prediction depends on, cleared when the
     // coalesced recompute runs. See _markDirty.
     this._dirtyScheduled = false;
+
+    // Pending clock-driven recompute while a bound is live. See _scheduleHoldTick.
+    this._holdTimer = null;
   }
 
   // Request a recompute, coalescing everything that arrives in the same tick into one.
@@ -1734,6 +1753,45 @@ class CrossingState {
       this.lastStateChange = now;
       logger.logState(this.id, oldState, this.state, 'recompute');
     }
+
+    this._scheduleHoldTick();
+  }
+
+  // Keep recomputing on the clock for as long as the passage of time alone can change the
+  // answer, and stop as soon as it cannot.
+  //
+  // WHEN. Three conditions, all of them "a number on screen is now-relative":
+  //   holdingOpen   the reopen time is a bound of one open lag from now  (register #14)
+  //   closePending  the close countdown is a bound of one class lag from now
+  //   state != OPEN CLOSED / CLOSING_SOON — the gated close can itself be a held bound
+  //                 (see _confirmedCloseTime's upstream / never-sighted holds), and that
+  //                 one decides BARRIERS DOWN rather than a countdown, so a stale copy
+  //                 fires the gate early rather than merely reading wrong.
+  //
+  // WHY NOT ALWAYS. A quiet crossing has nothing now-relative in its payload, so ticking
+  // would be pure cost. Measured 10.3 ms per recompute against a full CIF day (900
+  // services, of which _mergeTrains is 9.3 ms), so 1 Hz is ~1% of one core while it runs
+  // — and it runs only around a closure, not all day.
+  //
+  // WHY NOT PER REQUEST. Tempting (zero cost when nobody is looking) and rejected:
+  // getApiState is a pure reader by design — the comment on its derived fields says so —
+  // and making an HTTP request trigger a 10 ms recompute puts that work on a public
+  // endpoint. This also keeps `state` and the state log honest during a hold, which a
+  // request-driven refresh would only do while someone happened to be polling.
+  _scheduleHoldTick() {
+    const nowRelative = this.state !== 'OPEN' ||
+      this.closurePeriods.some(p => p.holdingOpen || p.closePending);
+    if (!nowRelative) {
+      if (this._holdTimer) { clearTimeout(this._holdTimer); this._holdTimer = null; }
+      return;
+    }
+    if (this._holdTimer) return;                 // already ticking; don't stack timers
+    this._holdTimer = setTimeout(() => {
+      this._holdTimer = null;
+      this._markDirty();                         // coalesces with any TD event in the same tick
+    }, HOLD_TICK_MS);
+    // Never hold the process open for this: it is a refresh of something already computed.
+    if (typeof this._holdTimer.unref === 'function') this._holdTimer.unref();
   }
 
   // Derive the live state from the computed closure periods at `now`.

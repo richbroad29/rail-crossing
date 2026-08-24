@@ -1501,6 +1501,138 @@ console.log('  -- #14 held countdowns: no trigger, no zero --');
   }
 }
 
+// ---- Register #19: a bound must be re-stamped, or it is only a countdown --------------
+//
+// Field report 2026-08-24, 08:24. BARRIERS DOWN, "Next Open >= 1s", and the closure row
+// agreeing with it at "Closed >= 1s". The bound was right when it was made — one west open
+// lag, 18s — and then nothing touched it for seventeen seconds.
+//
+// #14 made the bound honest; what it did not give it is a heartbeat. Every recompute
+// trigger is a PHYSICAL event (a berth strike, an anchor step, the 30s LDB poll), and a
+// train stopped short of its trigger is producing none of them — that is what "held"
+// MEANS. So the stored ISO time sat there while the client subtracted a moving `now` from
+// it: 18, 17, ... 1, then "held", then back to 18 when the poll landed. A lower bound that
+// counts down is not a lower bound.
+//
+// The fix is a clock-driven recompute while anything in the payload is now-relative, so
+// the two halves under test are (a) the arithmetic of the decay, and (b) when that tick is
+// armed — and, just as important, when it is disarmed, because a tick that never stops is
+// a 1 Hz recompute on an idle crossing.
+console.log('  -- #19 held bounds are re-stamped on the clock, not left to decay --');
+{
+  const SHIPPED = JSON.parse(require('fs').readFileSync(
+    require('path').join(__dirname, '..', 'config', 'crossings.json'), 'utf8')).portslade;
+  const T = BASE;
+  const STAMP = T + 600000;                    // long past any projection from 0005
+  const WEST_OPEN_LAG = 18000;                 // openLagSecs.west.passenger
+  const EAST_OFFSET = 100000;                  // closeTrigger.east.classes.stoppingLocal
+
+  // The screenshot's shape: westbound, struck 0003, stepped on to 0005, never cleared.
+  const heldOpen = () => {
+    const st = new CrossingState('portslade', SHIPPED);
+    const t = mkT({ dir: 'west', headcode: '1W09', bestTimeMs: T + 60000 });
+    setStrike(st, '1W09', T, 'west', '0003');
+    st.recordTdBerth({ headcode: '1W09', to: '0005', from: '0003', ts: iso(T + 30000), event: 'CA' });
+    st.recordTdSighting('1W09', new Date(T));
+    return { st, t };
+  };
+
+  // (a) The decay, as arithmetic. Nothing here is broken code — it is the same value read
+  //     at two different `now`s, which is exactly what the backend was serving.
+  {
+    const { st, t } = heldOpen();
+    const p = st._computeClosures([t], new Date(STAMP))[0];
+    check('#19: stamped, the bound is one west open lag away',
+      Date.parse(p.end) - STAMP, WEST_OPEN_LAG);
+    check('#19: the SAME stored value, read 17s later, is the screenshot',
+      Date.parse(p.end) - (STAMP + 17000), 1000);
+    const q = st._computeClosures([t], new Date(STAMP + 17000))[0];
+    check('#19: recomputed at that later now, it is a bound again',
+      Date.parse(q.end) - (STAMP + 17000), WEST_OPEN_LAG);
+  }
+
+  // (b) OPEN side: a held open arms the tick, and clearing the train disarms it.
+  {
+    const { st, t } = heldOpen();
+    const now = new Date(STAMP);
+    st.closurePeriods = st._computeClosures([t], now);
+    st.state = st._deriveState(now);
+    check('#19: the premise — the period is holding open', st.closurePeriods[0].holdingOpen, true);
+    st._scheduleHoldTick();
+    checkTruthy('#19: a held open arms the clock tick', !!st._holdTimer);
+
+    st.clearStepSeen.set('1W09', { ts: now.getTime(), direction: 'west' });
+    st.closurePeriods = st._computeClosures([t], now);
+    check('#19: cleared => no longer holding', st.closurePeriods[0].holdingOpen, false);
+    st.state = 'OPEN';                         // and the crossing behind it is clear
+    st._scheduleHoldTick();
+    check('#19: nothing now-relative => the tick is disarmed', st._holdTimer, null);
+    if (st._holdTimer) clearTimeout(st._holdTimer);
+  }
+
+  // (c) CLOSE side, the equivalent guarantee. A train sitting in 0008 that has not struck
+  //     0006: the crossing is OPEN, so `state` alone would not arm anything — the held
+  //     countdown has to arm it on its own.
+  {
+    const st = new CrossingState('portslade', SHIPPED);
+    const t = { ...mkT({ dir: 'east', headcode: '1N01', bestTimeMs: T + 200000 }),
+                callsAtStation: true, callsAtApproach: true };   // stoppingLocal, 0006 +100s
+    st.recordTdBerth({ headcode: '1N01', to: '0008', from: '0010', ts: iso(T), event: 'CA' });
+    st.recordTdSighting('1N01', new Date(T));
+    const now = new Date(T + 180000);          // 0008>0006 is a median 71s: long expired
+    const p = st._computeClosures([t], now)[0];
+    check('#19: the premise — the close is a bound', p.closePending, true);
+    check('#19: and it is stamped at now + the class offset',
+      Date.parse(p.predictedStart) - now.getTime(), EAST_OFFSET);
+    check('#19: the same value 60s on has decayed by 60s',
+      Date.parse(p.predictedStart) - (now.getTime() + 60000), EAST_OFFSET - 60000);
+
+    st.closurePeriods = [p];
+    st.state = 'OPEN';                         // not CLOSED, not CLOSING_SOON
+    st._scheduleHoldTick();
+    checkTruthy('#19: a held close arms the tick even on an OPEN crossing', !!st._holdTimer);
+    if (st._holdTimer) clearTimeout(st._holdTimer);
+
+    st.closurePeriods = [{ ...p, closePending: false }];
+    st._holdTimer = null;
+    st._scheduleHoldTick();
+    check('#19: ...and a close that is a real prediction does not', st._holdTimer, null);
+  }
+
+  // (d) The gated close can be a held bound of its own (the upstream / never-sighted holds
+  //     in _confirmedCloseTime), and that one decides BARRIERS DOWN rather than a
+  //     countdown — a stale copy fires the gate EARLY. It has no flag on the period, so
+  //     the tick keys off the state instead: anything other than plain OPEN keeps ticking.
+  {
+    const st = new CrossingState('portslade', SHIPPED);
+    st.closurePeriods = [];
+    for (const state of ['CLOSED', 'CLOSING_SOON']) {
+      st.state = state;
+      st._holdTimer = null;
+      st._scheduleHoldTick();
+      checkTruthy(`#19: ${state} keeps the tick armed with no held period`, !!st._holdTimer);
+      clearTimeout(st._holdTimer);
+    }
+    st.state = 'OPEN';
+    st._holdTimer = null;
+    st._scheduleHoldTick();
+    check('#19: a quiet OPEN crossing does not tick at all', st._holdTimer, null);
+  }
+
+  // (e) One tick must not stack on another: the timer is armed once and re-armed by the
+  //     recompute it triggers, not by every caller that notices the hold.
+  {
+    const { st, t } = heldOpen();
+    st.closurePeriods = st._computeClosures([t], new Date(STAMP));
+    st.state = 'CLOSED';
+    st._scheduleHoldTick();
+    const first = st._holdTimer;
+    st._scheduleHoldTick();
+    check('#19: a second call reuses the pending timer', st._holdTimer, first);
+    clearTimeout(st._holdTimer);
+  }
+}
+
 // ---- Register #15: a closure may not open after the next one closes -------------------
 //
 // The screenshot: BARRIERS DOWN, next close +28s, next open +40s. The barrier cannot drop
@@ -1822,6 +1954,40 @@ console.log('  -- #13 recompute on berth steps (coalesced) --');
     checkTruthy(`berth step reaches the prediction without an LDB poll (projected +197s, got +${got}s)`,
       got !== null && Math.abs(got - 197) <= 2);
     checkTruthy('…and it is the projection, not the bestTime fallback (+220s)', got !== null && Math.abs(got - 220) > 2);
+
+    // #19 end to end — the clock tick has to actually fire. Everything else about #19 is
+    // unit-tested above against a stamped `now`; what only a real timer can show is that the
+    // loop CLOSES: a recompute arms it, it fires with no physical event behind it, and the
+    // recompute it triggers arms the next one. Break any link and the bound decays again.
+    {
+      const SHIPPED = JSON.parse(require('fs').readFileSync(
+        require('path').join(__dirname, '..', 'config', 'crossings.json'), 'utf8')).portslade;
+      const st = spy(new CrossingState('portslade', SHIPPED));
+      const t0 = Date.now();
+      // Stopped in 0008 with 0006 unstruck. 0008>0006 is a median 71s, so the projected
+      // strike is ~110s gone and the close is a bound. bestTime stays ahead of now so
+      // _mergeTrains keeps the train: this runs the real entry point, not _computeClosures.
+      st.ldbTrains = [{ ...mkT({ dir: 'east', headcode: '1N01', bestTimeMs: t0 + 200000 }),
+                        callsAtStation: true, callsAtApproach: true }];
+      st.recordTdSighting('1N01', new Date(t0 - 180000));
+      st.recordTdBerth({ headcode: '1N01', to: '0008', from: '0010', ts: iso(t0 - 180000), event: 'CA' });
+      await tick();
+      const before = st.closurePeriods[0];
+      checkTruthy('#19 e2e: the premise — the close is a bound', !!before && before.closePending);
+      checkTruthy('#19 e2e: _recompute armed the tick', !!st._holdTimer);
+      const n0 = st._recomputes;
+
+      await new Promise(r => setTimeout(r, 1200));
+      await tick();
+      const after = st.closurePeriods[0];
+      checkTruthy('#19 e2e: the tick fired with no physical event behind it', st._recomputes > n0);
+      checkTruthy('#19 e2e: ...and armed the next one', !!st._holdTimer);
+      const moved = after && before
+        ? Date.parse(after.predictedStart) - Date.parse(before.predictedStart) : null;
+      checkTruthy(`#19 e2e: the bound moved forward with the clock (+${moved}ms)`,
+        moved !== null && moved >= 900 && moved <= 2500);
+      if (st._holdTimer) clearTimeout(st._holdTimer);
+    }
 
     console.log();
     if (fail > 0) { console.error(`${fail} FAILED, ${pass} passed`); process.exit(1); }
