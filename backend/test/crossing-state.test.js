@@ -1843,6 +1843,184 @@ console.log('  -- #18 a merged period ends on the last train to CLEAR, not the l
   }
 }
 
+// ---- Register #20: a train queued behind another is not on a clear run -----------------
+//
+// FIELD CASE, 2026-08-23 (Rich's observer session, episodes 43/44). Two eastbound trains
+// three minutes apart. The app showed ONE closure, BARRIERS DOWN 09:50:54 -> 09:58:24Z.
+// The barrier really lifted for 96 seconds in the middle of it:
+//
+//     1S15 (stoppingLocal)  observed close 09:49:02   crossed 09:54:16   observed open 09:55:04
+//     1H23 (stopping)       observed close 09:56:40   crossed 09:57:22   observed open 09:58:06
+//
+// 1H23 was queued behind 1S15 the whole way in: it stood at Southwick, then at the signal
+// protecting the crossing, and did not reach the road until 1S15 had vacated it. Its close
+// anchor (0008 + 55s) fired at 09:52:36 — 286 SECONDS before it actually crossed, and 140s
+// before the barrier was even due to rise for 1S15. Two closures were therefore predicted to
+// overlap in time, which is the one condition under which the same-direction branch merges.
+//
+// The offset is not mis-tuned. Measured over 108 days of TD, 0008 -> crossing for this class:
+//     clear run   n=2759  median 188s   (the config assumes 189)
+//     queued      n= 462  median 265s
+// It is right to the second on the population it was measured on, and applied to one it
+// was not. Of 9,939 consecutive eastbound pairs, 682 merged on this branch; 675 of those
+// (99.0%) had a train ahead still short of the crossing, against 7 of the 9,029 pairs that
+// did not (0.1%). So "merged" and "queued behind" are very nearly the same set.
+//
+// A queued train's close is therefore a LOWER BOUND, not a prediction — we cannot know when
+// the signaller will lower for a train that is standing still. A bound may not be used to
+// justify a MERGE, because merging asserts a positive fact (these two overlap) that a bound
+// cannot support. It may still SPLIT: that is the direction that costs nothing if wrong.
+{
+  const SHIPPED = JSON.parse(require('fs').readFileSync(
+    require('path').join(__dirname, '..', 'config', 'crossings.json'), 'utf8')).portslade;
+
+  // T = 1S15's clear step (0004->0002), 09:54:16Z on 2026-08-23. Every other instant below is
+  // that day's real TD offset from it, so this is the field case, not a constructed one.
+  const T = BASE;
+  const S15_0006  = T - 322000;   // 09:48:54  1S15 strikes its anchor berth
+  const S15_0004  = T - 160000;   // 09:51:36
+  const S15_T686  = T + 131000;   // 09:56:27  1S15 finally vacates the crossing berth
+  const H23_0008  = T - 155000;   // 09:51:41  1H23 strikes ITS anchor berth (0008)
+  const H23_0006  = T -  46000;   // 09:53:30
+  const H23_0004  = T +  71000;   // 09:55:27
+  const OBS_CLOSE = T + 144000;   // 09:56:40  observed barrier-down for 1H23
+
+  // Rebuilt per instant so each assertion sees only the TD the app had by then.
+  const build = (nowMs) => {
+    const st = new CrossingState('portslade', SHIPPED);
+    const step = (hc, to, from, ts) => {
+      if (ts > nowMs) return;
+      st.recordTdSighting(hc, new Date(ts));
+      st.recordTdBerth({ headcode: hc, to, from, ts: iso(ts), event: 'CA' });
+      st.recordTdClearStep({ headcode: hc, to, from, ts: iso(ts) });
+      st.recordTdCloseStrike({ headcode: hc, to, from, ts: iso(ts) });
+    };
+    step('1S15', '0006', '0008', S15_0006);
+    step('1S15', '0004', '0006', S15_0004);
+    step('1S15', '0002', '0004', T);
+    step('1S15', 'T686', '0002', S15_T686);
+    step('1H23', '0008', '0010', H23_0008);
+    step('1H23', '0006', '0008', H23_0006);
+    step('1H23', '0004', '0006', H23_0004);
+    // callsAtApproach is the class discriminator: 1S15 calls at Southwick, 1H23 does not.
+    // Confirmed against the CIF for 2026-08-23 (STHWICK present / absent respectively).
+    const L = { ...mkT({ dir: 'east', headcode: '1S15', bestTimeMs: T + 90000 }),
+                callsAtStation: true, callsAtApproach: true };
+    const F = { ...mkT({ dir: 'east', headcode: '1H23', bestTimeMs: T + 74000 }),
+                callsAtStation: true, callsAtApproach: false };
+    return { st, L, F };
+  };
+
+  // --- the premise, so a drift in classification cannot silently pass this test ----------
+  {
+    const { st, L, F } = build(T - 140000);           // 09:51:56Z
+    check('#20 premise: leader is stoppingLocal (0006+100)', st._classOf(L), 'stoppingLocal');
+    check('#20 premise: follower is stopping (0008+55)', st._classOf(F), 'stopping');
+    check('#20 premise: the follower\'s anchor HAS struck', !!st._freshStrike(F, new Date(T - 140000), '0008'), true);
+  }
+
+  // --- 1. the blocked test itself --------------------------------------------------------
+  {
+    const now = new Date(T - 140000);                 // 09:51:56Z: 1S15 in 0004, 1H23 in 0008
+    const { st, L, F } = build(T - 140000);
+    checkTruthy('#20: the follower is seen as queued behind the leader',
+      !!st._blockedByAhead(F, now));
+    check('#20: …and names the train in front', (st._blockedByAhead(F, now) || {}).headcode, '1S15');
+    checkTruthy('#20: the LEADER is not queued behind anything', !st._blockedByAhead(L, now));
+  }
+
+  // --- 2. a queued train\'s close is a bound, not a prediction ---------------------------
+  {
+    const now = new Date(T - 140000);
+    const { st, F } = build(T - 140000);
+    const ci = st._closeTimeInfo(F, now);
+    checkTruthy('#20: the queued train\'s close is flagged HELD', ci.held);
+    checkTruthy('#20: …and is never stamped in the past', ci.at.getTime() >= now.getTime());
+  }
+
+  // --- 3. THE BUG: the merge that produced the field symptom ----------------------------
+  {
+    const now = new Date(T + 14000);                  // 09:54:30Z, mid-closure
+    const { st, L, F } = build(T + 14000);
+    const ps = st._computeClosures([L, F], now);
+    check('#20: the pair is TWO closures, not one', ps.length, 2);
+    check('#20: …the first is the leader alone', ps[0].trains.map(t => t.headcode).join('+'), '1S15');
+    check('#20: …the second is the follower alone', ps[1].trains.map(t => t.headcode).join('+'), '1H23');
+    checkTruthy('#20: …and the follower\'s close is presented as held',
+      !!ps[1].closePending);
+    // The leader's own period is untouched: clear step + 40s = 09:54:56Z, 8s from the
+    // observed booms-up at 09:55:04. The open rule was never the problem.
+    check('#20: the leader\'s closure still ends on its own clear step + 40s',
+      ps[0].end, iso(T + 40000));
+  }
+
+  // --- 4. the release: once the road is clear, the real gap keeps them apart -------------
+  {
+    const now = new Date(OBS_CLOSE);                  // 09:56:40Z, the observed close
+    const { st, L, F } = build(OBS_CLOSE);
+    checkTruthy('#20: the follower is no longer queued once the leader has vacated',
+      !st._blockedByAhead(F, now));
+    const ps = st._computeClosures([L, F], now);
+    check('#20: …and they are still two closures', ps.length, 2);
+  }
+
+  // --- 5. the hold outlives the block --------------------------------------------------
+  // The leader vacates at 09:56:27 and `_blockedByAhead` goes quiet, but the follower's
+  // anchor was READ while it was queued, so the arithmetic behind it (0008 + 55s =
+  // 09:52:36) is stale and already four minutes in the past. It must stay a bound.
+  {
+    const now = new Date(OBS_CLOSE);
+    const { st, F } = build(OBS_CLOSE);
+    checkTruthy('#20: nothing is in front of it any more (the premise)',
+      !st._blockedByAhead(F, now));
+    checkTruthy('#20: …but it is still known to have been queued at its strike',
+      !!st._crossedAheadSinceStrike(F, now));
+    const ci = st._closeTimeInfo(F, now);
+    checkTruthy('#20: …so its close is STILL held, not the stale 09:52:36', ci.held);
+    // By now it has reached the protecting berth (09:55:27), so the bound has stopped
+    // receding and sits on that strike. It may therefore be in the past — that is the
+    // point: a stable time, not one that follows the clock past the train's own crossing.
+    check('#20: …and is pinned to the protecting-berth strike, not the clock',
+      ci.at.toISOString(), iso(H23_0004));
+  }
+
+  // --- 5b. the BARRIERS DOWN gate is deferred, not just the countdown -------------------
+  // The bug was not only a wrong countdown: the merged period asserted the barrier was
+  // ALREADY DOWN across the 96s it was really up. The confirmed close is what gates that,
+  // so it must not fire off an anchor read while the train was queued. It releases on the
+  // protecting-berth strike (0004 at 09:55:27), which is physical evidence with no new
+  // constant behind it.
+  {
+    const midGap = T + 48000;                        // 09:55:04Z — the observed booms-up
+    const { st, F } = build(midGap);
+    const now = new Date(midGap);
+    checkTruthy('#20 premise: the follower has NOT reached the protecting berth yet',
+      !st._freshStrike(F, now, '0004'));
+    checkTruthy('#20: BARRIERS DOWN is not asserted from a queued train\'s anchor',
+      st._confirmedCloseTime(F, now).getTime() > now.getTime());
+
+    // …and it releases once the train is in the last berth before the road.
+    const after = T + 71000;                         // 09:55:27Z — 1H23 strikes 0004
+    const { st: st2, F: F2 } = build(after);
+    const now2 = new Date(after);
+    checkTruthy('#20 premise: it has now struck the protecting berth',
+      !!st2._freshStrike(F2, now2, '0004'));
+    checkTruthy('#20: …and the gate is released',
+      st2._confirmedCloseTime(F2, now2).getTime() <= after + 1000);
+  }
+
+  // --- 6. the clear-run path is BYTE-IDENTICAL ------------------------------------------
+  // The leader has a clear run, so nothing about it may change. This is the 93% of traffic.
+  {
+    const now = new Date(T - 140000);
+    const { st, L } = build(T - 140000);
+    const solo = st._computeClosures([L], now);
+    check('#20: a clear-run train still closes on 0006 + 100s',
+      solo[0].predictedStart, iso(S15_0006 + 100000));
+    checkTruthy('#20: …and is NOT flagged held', !solo[0].closePending);
+  }
+}
+
 // ---- Trigger map (GET /crossing/:id/triggers) ------------------------------------------
 // Feeds the observer's approach map. The assertions that matter are the PLACEMENTS: they
 // come from the per-class transit table, so if the classification silently collapses (as it
