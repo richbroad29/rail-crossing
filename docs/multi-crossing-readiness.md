@@ -289,9 +289,16 @@ Worth stating plainly, because it's most of the system:
   `crossingStates`. No changes needed.
 - **`closure-card.js` and the `derive`/formatter half of `predict.js`.** Genuinely crossing-independent
   already.
-- **Derivation scripts.** `derive-chain.js`, `derive-transits.js`, `derive-ttc.js` all take
-  `--crossing`. `derive-chain.js`'s header note — *"Method (no geography needed)"* — is precisely the
-  property a remote launch needs.
+- **`derive-chain.js`.** Takes `--crossing` and reads its anchors from `crossings.json`. Its header
+  note — *"Method (no geography needed)"* — is precisely the property a remote launch needs.
+
+**Correction to an earlier draft of this review:** the other two derivation scripts are *not*
+parameterised. `derive-transits.js` hard-codes `CHAIN` and `CLEAR` as literals at the top of the file
+(lines 37-41) and takes only `--days` / `--out`; `derive-ttc.js` hard-codes `PLAN` and takes only a log
+directory. Both also classify trains by Portslade-specific proxies — platform dwell for "calls at
+Portslade", berth-0006 occupancy for "calls at Southwick". So of the three, only `derive-chain.js` runs
+against a new crossing today. Parameterising the other two is a prerequisite for Phase C, and it is the
+cheap half: the logic is sound and general, the constants just need to come from config.
 - **The audit skill.** `SKILL.md` already says "Covers Portslade and any future crossing", and
   `record.sh` takes a crossing argument.
 
@@ -299,49 +306,68 @@ Worth stating plainly, because it's most of the system:
 
 ## Recommended sequence
 
-Ordered so that each step is independently useful and nothing is built speculatively.
+**Revised 2026-09-19 after Rich's decisions** (see *Decisions* below). The original ordering assumed a
+same-area crossing #2 was plausible. It isn't: every LXG-positive describer is outside area LA, so
+"S-Class sites only" means crossing #2 is in a different TD area by construction. Multi-area ingest
+moves from Phase D to Phase A, and the area-keying bug stops being latent.
 
-**Phase A — make single-crossing code honest (do this regardless of whether crossing #2 happens)**
-1. Area-filter the TD sighting fan-out and key strikes by `area|berth`. Latent, invisible, and severe
-   the day a second area exists. *(small)*
-2. Delete `berths` from `shared/crossings.json`; demote the other dead fields or move them to
-   documentation. *(trivial)*
-3. Fix or remove the stale `isEastOrigin()` claim in CLAUDE.md. *(trivial)*
+**Phase A — multi-area correctness (now the critical path, not a precaution)**
+1. Area-filter the TD sighting fan-out; key `closeStrikeSeen` / `liveTrains` by `area|berth` rather than
+   bare berth. **Ship this before any second crossing exists.** With two areas, a bare `0006` collision
+   lets a distant train anchor a real closure. *(small)*
+2. Derive the TD C-Class area set from `crossings.json` instead of `TARGET_AREA`; partition
+   `data/logs/td/` by area; follow through in `run-rate.js`, `derive-chain.js`, `derive-transits.js`.
+   *(medium)*
+3. Delete `berths` from `shared/crossings.json`; demote the other dead fields. Fix the stale
+   `isEastOrigin()` claim in CLAUDE.md. *(trivial)*
 
-**Phase B — remove the Portslade constants from shared code**
-4. Extend `/crossing/:id/triggers` to carry the full chain with `gap`/`ttc`/`tac` from `transits.json`;
-   make `PREDICT.proximity`/`eta`/`etaToCrossing` take a chain. Delete `CHAIN` and `BERTH_ETA`. *(medium)*
-5. Add `anchor: arrival|departure|interpolated` per direction to backend config; branch `_computeCloseTime`
-   and `extractTrain` on it rather than on the direction name. *(medium — the highest-value change here)*
-6. Replace `isEastOrigin()` with a CIF-join-first, config-fallback, never-default direction resolver.
+**Phase B — remove Portslade constants from shared code**
+4. Extend `/crossing/:id/triggers` with the full chain (`gap`/`ttc`/`tac` from `transits.json`); make
+   `PREDICT.proximity`/`eta`/`etaToCrossing` take a chain. Delete `CHAIN` and `BERTH_ETA`. *(medium)*
+5. Add `anchor: arrival|departure|interpolated` per direction; branch `_computeCloseTime` and
+   `extractTrain` on it rather than on the direction name. *(medium — highest value per hour)*
+6. Replace `isEastOrigin()` with CIF-join-first, config-fallback, never-default direction resolution.
    *(medium)*
 
-**Phase C — de-duplicate the shell**
-7. One parameterised app shell + per-crossing stub. Update `bump-assets.sh` accordingly. *(medium)*
-8. Parameterise `CROSSING_ID` in the observer from the URL. *(small, do with 7)*
+**Phase C — S-Class promoted from side-project to primary ground truth**
+7. Generalise the Yapton derivation (`yapton-episodes.csv`) into a repeatable script: S-Class barrier
+   episodes joined to C-Class berth steps, emitting per-class `strikeInBerth` / `closeLeadS` /
+   `openLagS`. This is the instrument that replaces the observer PWA at remote sites, and it already
+   exists as a one-off. *(medium — see the launch playbook)*
+8. Byte-hunt tooling: scan a banked area's raw S-Class for candidate bytes whose transitions correlate
+   with berth steps, so a new crossing's byte:bit can be found offline. *(medium)*
 
-**Phase D — multi-area ingest**
-9. Derive the TD C-Class area set from config; partition `data/logs/td/` by area; follow through in
-   `run-rate.js` and the derive scripts. *(medium)*
+**Phase D — de-duplicate the shell**
+9. One parameterised app shell + per-crossing stub; update `bump-assets.sh`. *(medium)*
+10. Parameterise `CROSSING_ID` in the observer from the URL. *(small, do with 9)*
 
-**Phase E — the launch playbook** (the second half of what you asked for)
-Written against the above, with S-Class screening as step 1.
-
-Phases A and B are worth doing even if no second crossing is ever launched: A closes a latent
-correctness hole, and B removes three copies of a topology that only needs one.
+Phases A and B are worth doing even if no second crossing launches: A closes a correctness hole, B
+removes three copies of a topology that needs one.
 
 ---
 
-## Open questions for Rich
+## Decisions (Rich, 2026-09-19)
 
-These change the shape of the work and I'd rather ask than assume:
+- **Site selection is demand-led**, so the playbook must cover both S-Class and non-S-Class sites —
+  but **only sites with barrier data will be looked at initially**.
+- **S-Class availability is a preferred screening criterion.** Launch where barrier state is in the
+  feed; accuracy then starts near where Portslade ended rather than where it began.
 
-1. **Is crossing #2 likely to be in area LA** (another West Coastway crossing — Fishersgate, Southwick,
-   Lancing) **or somewhere else entirely?** Same-area is a day; different-area pulls in all of Phase D.
-   It also decides whether Phase A step 1 is urgent or merely prudent.
-2. **Is S-Class-first site selection acceptable as a constraint?** It means the next crossings are
-   chosen partly by what the signalling feed publishes rather than purely by demand. That's a product
-   decision, not a technical one, and the "Request Your Local Crossing" form implies demand-led.
-3. **One backend instance or one per region?** Currently one VPS process holds every crossing's state in
-   memory and one TD connection. That scales to tens of crossings comfortably; it's worth knowing if the
-   ambition is hundreds.
+Consequences for the work above: Phase A step 2 is required, not optional. Phase C stops being
+exploratory. The non-S-Class path still needs writing into the playbook (demand may point there) but
+is not the near-term build target.
+
+---
+
+## Still open
+
+**One backend instance or one per region?** Currently one VPS process holds every crossing's state in
+memory and one TD/STOMP connection. That scales to tens of crossings comfortably. Worth knowing if the
+ambition is hundreds — and note that a single STOMP subscription already receives every area, so the
+cost of more areas is CPU and disk, not connections.
+
+---
+
+## See also
+
+`.claude/skills/crossing-launch/` — the launch playbook this review feeds into.
