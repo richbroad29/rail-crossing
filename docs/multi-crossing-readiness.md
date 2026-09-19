@@ -102,9 +102,13 @@ unrecognised origin is silently assigned a direction rather than marked unknown;
 aren't meaningful labels on a north-south line.
 
 Worth noting the inconsistency: CIF direction is *fully* config-driven (`tiplocs_west` / `tiplocs_east`
-in `analyseRoute`, `schedule-parser.js:55`). And CLAUDE.md states the `isEastOrigin()` heuristic "has
-been removed" — true of the frontend, not of the backend. The backend copy is live and is the direction
-source for every LDB-sourced train.
+in `analyseRoute`, `schedule-parser.js:55`), while LDB direction is not config-driven at all.
+
+**Correction to an earlier draft of this review:** that draft said CLAUDE.md's claim about
+`isEastOrigin()` was stale. It isn't — CLAUDE.md says the *client-side* copy has been removed, which is
+accurate. The real gap is narrower: CLAUDE.md points at "the LDB poller" as where to change direction
+logic without recording that, unlike the CIF side, it is a hard-coded gazetteer rather than
+configuration. Worth a sentence there when Phase B step 6 lands; nothing to fix today.
 
 **Fix:** direction for an LDB train should come from the CIF join that already exists (LDB and CIF are
 deduped UID-first), falling back to a configured origin/destination CRS set, never to a default.
@@ -318,8 +322,7 @@ moves from Phase D to Phase A, and the area-keying bug stops being latent.
 2. Derive the TD C-Class area set from `crossings.json` instead of `TARGET_AREA`; partition
    `data/logs/td/` by area; follow through in `run-rate.js`, `derive-chain.js`, `derive-transits.js`.
    *(medium)*
-3. Delete `berths` from `shared/crossings.json`; demote the other dead fields. Fix the stale
-   `isEastOrigin()` claim in CLAUDE.md. *(trivial)*
+3. Delete `berths` from `shared/crossings.json`; demote the other dead fields. *(trivial)*
 
 **Phase B — remove Portslade constants from shared code**
 4. Extend `/crossing/:id/triggers` with the full chain (`gap`/`ttc`/`tac` from `transits.json`); make
