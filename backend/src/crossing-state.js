@@ -121,6 +121,26 @@ const DEFAULT_CLOSURE_LIMIT = 6;
 // period end) every time one of them changes.
 const HOLD_TICK_MS = 1000;
 
+// WHICH rule raised a bound, as a '+'-joined sorted set: 'unstruck' (the anchor projection
+// expired), 'queued' (a train ahead has not vacated), 'upstream' (TD still places it short
+// of its anchor but cannot project), or a combination.
+//
+// A SET, not a precedence, and that is the whole point of the field. The rules overlap —
+// a queued train's own anchor projection expires too, so it is 'queued+unstruck' — and a
+// value that reported only the winner could not answer the question this exists for:
+// how much held time would a given rule's threshold actually remove, given that another
+// rule may be holding the same train up anyway. A precedence would have to be un-picked
+// afterwards by re-deriving the other rules from the recording, which is exactly the
+// re-implementation this project keeps a single source of truth to avoid.
+//
+// Diagnostic only. Nothing in the pipeline branches on it and neither front-end reads it:
+// the bound itself is unchanged, and it is the same bound whichever rule raised it.
+function heldReasons(info, reason) {
+  const set = new Set(String((info && info.heldReason) || '').split('+').filter(Boolean));
+  set.add(reason);
+  return [...set].sort().join('+');
+}
+
 class CrossingState {
   constructor(crossingId, config) {
     this.id = crossingId;
@@ -178,6 +198,11 @@ class CrossingState {
     // until the barrier is KNOWN to have lifted between them, so the grouping cannot flap
     // as the two moving estimates either side of it drift past each other. TTL-pruned on
     // write. See _coalesceOverlapping for why a physical event, not a threshold.
+
+    // headcode → ms at which this train's close FIRST became a held bound, carried across
+    // recomputes so the payload can say how long a hold has been up (closePendingSince).
+    // Rebuilt wholesale on each pass rather than mutated — see _computeClosuresDirectional.
+    this.closeHeldSince = new Map();
 
     // Computed state
     this.closurePeriods = [];
@@ -983,10 +1008,12 @@ class CrossingState {
     const anchored = (struck, offsetSecs, floorSecs) => {
       const held = !!(struck && struck.expired);
       const base = held ? now.getTime() : struck.ts;
-      return {
+      const out = {
         at: new Date(Math.max(base + offsetSecs * 1000, base + (floorSecs || 0) * 1000)),
         held
       };
+      if (held) out.heldReason = 'unstruck';
+      return out;
     };
 
     // Final guard on every UNSTRUCK fall-back path below, and the last hole in #14.
@@ -1004,7 +1031,9 @@ class CrossingState {
       if (this._freshStrike(t, now, spec.berth)) return info;
       if (!this._upstreamOfAnchor(t, now)) return info;   // can't place it ⇒ no claim to make
       const floor = now.getTime() + spec.offsetSecs * 1000;
-      return info.at.getTime() >= floor ? info : { at: new Date(floor), held: true };
+      return info.at.getTime() >= floor
+        ? info
+        : { at: new Date(floor), held: true, heldReason: heldReasons(info, 'upstream') };
     };
 
     // Register #20 — a train queued behind another cannot be timed off its own berth
@@ -1031,14 +1060,16 @@ class CrossingState {
       const prot = dirCfg && dirCfg.clear && dirCfg.clear.from;
       const protStrike = prot ? this._freshStrike(t, now, prot) : null;
       if (protStrike) {
-        return { at: new Date(Math.max(info.at.getTime(), protStrike.ts)), held: true };
+        return { at: new Date(Math.max(info.at.getTime(), protStrike.ts)), held: true,
+                 heldReason: heldReasons(info, 'queued') };
       }
       // Still short of the protecting berth: the barrier cannot come DOWN for this train
       // before it has come UP for the one in front, so floor there too. Not circular — it
       // reads the blocker's open, not the grouping — and max() can only ever defer.
       const blocker = this._trainByHeadcode(ahead.headcode);
       const floor = blocker ? this._openPred(blocker, now).getTime() : 0;
-      return { at: new Date(Math.max(info.at.getTime(), now.getTime(), floor)), held: true };
+      return { at: new Date(Math.max(info.at.getTime(), now.getTime(), floor)), held: true,
+               heldReason: heldReasons(info, 'queued') };
     };
 
     if (t.direction === 'east') {
@@ -1519,11 +1550,33 @@ class CrossingState {
         train: t,
         predClose: ci.at,
         closeHeld: ci.held,
+        heldReason: ci.heldReason || null,
         confClose: this._confirmedCloseTime(t, now),
         openPred: this._openPred(t, now),
         struck: !!this._freshStrike(t, now, this._anchorBerthFor(t))
       };
     });
+
+    // How long each held close has been a bound, for the payload's closePendingSince.
+    // Rebuilt from `ann` on every pass rather than updated in place: a train that stops
+    // being held — or drops off the merged list entirely — falls out on its own, so there
+    // is no pruning rule to get wrong and no map that can grow across a day.
+    //
+    // It deliberately does NOT restart when the REASON changes. A train that was 'unstruck'
+    // and is now 'queued+unstruck' has been held continuously, and the question this field
+    // answers is how long ONE episode of "Train held" has been on screen — which is what a
+    // threshold on the wording would be set against.
+    //
+    // Written here and nowhere else, because _computeClosures has exactly one caller
+    // (_recompute). A stamp taken on a READ would put it back in the class of bug register
+    // #14 was about — the CLOSED gate's own evidence being destroyed by serving /live.
+    const prevHeldSince = this.closeHeldSince || new Map();
+    this.closeHeldSince = new Map();
+    for (const a of ann) {
+      if (!a.closeHeld || !a.train.headcode) continue;
+      this.closeHeldSince.set(a.train.headcode,
+        prevHeldSince.get(a.train.headcode) || now.getTime());
+    }
 
     const groups = [];
     let cur = null;
@@ -1560,7 +1613,10 @@ class CrossingState {
       // prediction — the client renders it as held rather than counting it down.
       const closer = g.reduce((m, a) => (a.predClose < m.predClose ? a : m), g[0]);
       return this._makePeriod(confStart, endInfo.at, groupTrains, predStart, driver.struck,
-        { closePending: !!closer.closeHeld, holdingOpen: endInfo.holdingOpen });
+        { closePending: !!closer.closeHeld, holdingOpen: endInfo.holdingOpen,
+          closePendingReason: closer.heldReason,
+          closePendingSince: closer.train.headcode
+            ? this.closeHeldSince.get(closer.train.headcode) : null });
     });
   }
 
@@ -1689,7 +1745,7 @@ class CrossingState {
     const hasFreight = trains.some(t => t.trainType === 'freight');
     const hasEcs = trains.some(t => t.trainType === 'ecs');
 
-    return {
+    const period = {
       start: start.toISOString(),
       predictedStart: (predictedStart || start).toISOString(),
       closeConfirmed: !!closeConfirmed,
@@ -1724,6 +1780,17 @@ class CrossingState {
         tdSeenAt: t.tdSeenAt || null
       }))
     };
+
+    // Diagnostics for the held close, present ONLY while it is held. Carrying two null keys
+    // on every closure instead would cost ~50 bytes x 6 closures on every 10s poll of every
+    // open tab to say nothing at all, and the byte figures in CLAUDE.md have had to be
+    // retracted once already. Absent rather than null is also the honest shape: a period
+    // with no bound has no reason, and no moment at which one started.
+    if (period.closePending) {
+      if (held.closePendingReason) period.closePendingReason = held.closePendingReason;
+      if (held.closePendingSince) period.closePendingSince = new Date(held.closePendingSince).toISOString();
+    }
+    return period;
   }
 
   _getCloseBefore(direction) {

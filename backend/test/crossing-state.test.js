@@ -2077,6 +2077,184 @@ console.log('  -- trigger map --');
   check(`east open = 0002 strike + ${eastLag}s`, `${eop.clearBerth}+${eop.lagSecs}`, `0002+${eastLag}`);
 }
 
+// ---- Step 0 for "show Train held less often": say WHICH rule raised the bound ----------
+//
+// The payload carries `closePending` but not what put it up, and the three rules that can
+// are not interchangeable:
+//
+//   unstruck  the anchor projection expired          — a tolerance on `expired` would remove it
+//   queued    a train ahead has not vacated (#20)    — a tolerance would NOT; nothing is late
+//   upstream  placed short of the anchor, unprojectable
+//
+// So "how much of the held time would rule X's threshold actually remove" cannot be answered
+// from a recording today, and any threshold set now would be another unprovenanced constant
+// in a config that has been careful not to accumulate them. closePendingReason +
+// closePendingSince make the recorder's raw payloads answer it — no recorder change needed,
+// record-vps.js already stores /crossing/:id verbatim.
+//
+// Instrumentation only: the bound itself, the flag, the state and the grouping are untouched,
+// which is what the "byte-identical" assertions at the end of this block are for.
+console.log('  -- step 0: closePendingReason / closePendingSince --');
+{
+  const SHIPPED = JSON.parse(require('fs').readFileSync(
+    require('path').join(__dirname, '..', 'config', 'crossings.json'), 'utf8')).portslade;
+  const T = BASE;
+  const eastLocal = (hc, bestMs) => ({
+    ...mkT({ dir: 'east', headcode: hc, bestTimeMs: bestMs }),
+    callsAtStation: true, callsAtApproach: true      // => stoppingLocal, anchor 0006 +100s
+  });
+
+  // The #14 scenario: stopped in 0008, 0006 never struck, so the 0008>0006 projection
+  // (median 71s) is long expired.
+  const stuck = (dwellSecs, { leaderAt = null } = {}) => {
+    const st = new CrossingState('portslade', SHIPPED);
+    const now = new Date(T + dwellSecs * 1000);
+    const t = eastLocal('1N01', T + 200000);
+    st.recordTdBerth({ headcode: '1N01', to: '0008', from: '0010', ts: iso(T), event: 'CA' });
+    st.recordTdSighting('1N01', new Date(T));
+    // A leader standing ON the crossing berth (0002 east) — _blockedByAhead counts that as
+    // in the way regardless of chain position, which is the point of its onXing branch.
+    if (leaderAt !== null) {
+      st.recordTdSighting('1S99', new Date(leaderAt));
+      st.recordTdBerth({ headcode: '1S99', to: '0002', from: '0004', ts: iso(leaderAt), event: 'CA' });
+    }
+    return { st, now, t, p: st._computeClosures([t], now)[0] };
+  };
+
+  // --- 1. 'unstruck': the expired projection, on its own --------------------------------
+  //
+  // 180s: 0008>0006 (median 71s) is long gone, but the train's last berth step is still
+  // inside the live TTL, so there IS a projection and it has expired. That is the window
+  // the 'unstruck' rule owns, and it is the one a tolerance on `expired` would act on.
+  {
+    const { p, now } = stuck(180);
+    check('step 0 premise: a stopped train is held', p.closePending, true);
+    check('step 0: the expired projection is named', p.closePendingReason, 'unstruck');
+    check('step 0: …and the hold is stamped at the first pass that raised it',
+      p.closePendingSince, iso(now.getTime()));
+  }
+
+  // --- 1b. 'upstream': the same train once its position outlives the live TTL ------------
+  //
+  // Past the live TTL _projectBerth returns null rather than an expired projection, so the
+  // bound comes from the #14 final guard instead — same number, different rule. Worth its
+  // own name in the data: a tolerance on `expired` would not touch this one either.
+  {
+    const { p } = stuck(300);
+    check('step 0 premise: still held once the position is stale', p.closePending, true);
+    check('step 0: the final-guard hold is named separately', p.closePendingReason, 'upstream');
+  }
+
+  // --- 2. 'queued': the C20 field case, where the anchor HAS struck ----------------------
+  //
+  // 1H23 struck its own anchor (0008 + 55s) at 09:51:41 and is held only because 1S15 is
+  // still in front of it. Nothing about it is late, so a tolerance on `expired` would not
+  // touch this hold — which is exactly the distinction the field exists to expose.
+  {
+    const S15_0006 = T - 322000, S15_0004 = T - 160000, H23_0008 = T - 155000;
+    const st = new CrossingState('portslade', SHIPPED);
+    const step = (hc, to, from, ts) => {
+      st.recordTdSighting(hc, new Date(ts));
+      st.recordTdBerth({ headcode: hc, to, from, ts: iso(ts), event: 'CA' });
+      st.recordTdCloseStrike({ headcode: hc, to, from, ts: iso(ts) });
+    };
+    step('1S15', '0006', '0008', S15_0006);
+    step('1S15', '0004', '0006', S15_0004);
+    step('1H23', '0008', '0010', H23_0008);
+    const now = new Date(T - 140000);
+    const L = { ...mkT({ dir: 'east', headcode: '1S15', bestTimeMs: T + 90000 }),
+                callsAtStation: true, callsAtApproach: true };
+    const F = { ...mkT({ dir: 'east', headcode: '1H23', bestTimeMs: T + 74000 }),
+                callsAtStation: true, callsAtApproach: false };
+    check('step 0 premise: the follower\'s own anchor has struck',
+      !!st._freshStrike(F, now, '0008'), true);
+    const ps = st._computeClosures([L, F], now);
+    const follower = ps.find(x => x.trains.some(t => t.headcode === '1H23'));
+    check('step 0 premise: the follower is held', follower.closePending, true);
+    check('step 0: a queued train is named as queued, not as a late one',
+      follower.closePendingReason, 'queued');
+    check('step 0: the leader, which is on a clear run, carries no reason',
+      'closePendingReason' in ps.find(x => x.trains.some(t => t.headcode === '1S15')), false);
+  }
+
+  // --- 3. the overlap: both rules at once, which is why this is a set and not a winner ---
+  //
+  // Same stopped train, with a leader standing on the crossing berth. Its projection has
+  // expired AND it is queued. A precedence would report one and hide the other, and the
+  // hidden one is the reason a tolerance on `expired` would leave this hold exactly where
+  // it is — which is the mistake this field exists to prevent anyone making.
+  {
+    const { p } = stuck(180, { leaderAt: T + 100000 });
+    check('step 0: two rules holding one train are BOTH reported',
+      p.closePendingReason, 'queued+unstruck');
+  }
+
+  // --- 4. `since` measures one continuous episode, across a change of rule ---------------
+  //
+  // The same train at 180s and at 300s is held by 'unstruck' and then by 'upstream' — one
+  // unbroken episode of "Train held" on screen, two different rules holding it up. The
+  // stamp must not restart at the handover, or a duration histogram built from a recording
+  // would count one five-minute hold as several short ones and understate the thing being
+  // measured.
+  {
+    const st = new CrossingState('portslade', SHIPPED);
+    const t = eastLocal('1N02', T + 200000);
+    st.recordTdBerth({ headcode: '1N02', to: '0008', from: '0010', ts: iso(T), event: 'CA' });
+    st.recordTdSighting('1N02', new Date(T));
+    const first = st._computeClosures([t], new Date(T + 180000))[0];
+    const later = st._computeClosures([t], new Date(T + 300000))[0];
+    check('step 0: the premise — held at both instants',
+      !!(first.closePending && later.closePending), true);
+    check('step 0: …by different rules',
+      first.closePendingReason + ' -> ' + later.closePendingReason, 'unstruck -> upstream');
+    check('step 0: `since` does not move with the clock',
+      later.closePendingSince, first.closePendingSince);
+    check('step 0: …nor restart when the rule changes', later.closePendingSince, iso(T + 180000));
+    check('step 0: …so the episode reads 120s old, not 0s',
+      (T + 300000 - Date.parse(later.closePendingSince)) / 1000, 120);
+  }
+
+  // --- 5. release: the fields go, and so does the map entry -------------------------------
+  //
+  // `tracked` reads the map defensively so that this block still RUNS against a build that
+  // has no map at all. That is not politeness: reverting the source to falsify these tests
+  // otherwise throws here and every assertion below it is silently never evaluated, which
+  // is the failure mode where a test suite reports what it did not check.
+  {
+    const tracked = (s) => (s.closeHeldSince ? s.closeHeldSince.size : -1);
+    const strikeAt = T + 400000;
+    const st = new CrossingState('portslade', SHIPPED);
+    const t = eastLocal('1N03', T + 200000);
+    st.recordTdBerth({ headcode: '1N03', to: '0008', from: '0010', ts: iso(T), event: 'CA' });
+    const before = st._computeClosures([t], new Date(strikeAt - 1000))[0];
+    check('step 0 premise: held before the strike', before.closePending, true);
+    check('step 0 premise: …and tracked', tracked(st), 1);
+    setStrike(st, '1N03', strikeAt, 'east', '0006');
+    st.recordTdBerth({ headcode: '1N03', to: '0006', from: '0008', ts: iso(strikeAt), event: 'CA' });
+    const after = st._computeClosures([t], new Date(strikeAt))[0];
+    check('step 0: struck ⇒ no longer held', after.closePending, false);
+    check('step 0: …no reason key at all', 'closePendingReason' in after, false);
+    check('step 0: …no since key at all', 'closePendingSince' in after, false);
+    check('step 0: …and the train drops out of the map, so it cannot grow across a day',
+      tracked(st), 0);
+  }
+
+  // --- 6. instrumentation only: an unheld closure is byte-identical ----------------------
+  //
+  // The cost note in CLAUDE.md was measured and once retracted, so this asserts the quiet
+  // case is unchanged on the wire rather than assuming two null keys are free: 6 closures
+  // x every 10s x every open tab is not nothing, and a period with no bound has no reason
+  // and no start time for one — absent is the honest shape as well as the cheap one.
+  {
+    const st = new CrossingState('portslade', SHIPPED);
+    const t = eastLocal('1N04', T + 600000);
+    const p = st._computeClosures([t], new Date(T))[0];
+    check('step 0 premise: nothing held here', p.closePending, false);
+    check('step 0: an ordinary closure gains no keys',
+      Object.keys(p).some(k => k.startsWith('closePending') && k !== 'closePending'), false);
+  }
+}
+
 console.log('  -- #13 recompute on berth steps (coalesced) --');
 {
   const tick = () => new Promise(r => setImmediate(r));
