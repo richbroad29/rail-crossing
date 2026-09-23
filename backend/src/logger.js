@@ -76,6 +76,18 @@ function logState(crossingId, oldState, newState, reason) {
   });
 }
 
+// One line per HELD-CLOSE TRANSITION — the "Train held" episode starting and ending.
+//
+// Transitions, never ticks. A hold recomputes at 1 Hz (HOLD_TICK_MS) and `log` above
+// appends SYNCHRONOUSLY, so a per-tick line would put a blocking write on the recompute
+// path for the whole length of every hold. Two lines an episode is a few dozen a day.
+//
+// A start with no end is a hold that was still up when the process stopped, and is meant
+// to read that way rather than be back-filled with a guess.
+function logHeld(crossingId, phase, data) {
+  log('held', { crossing: crossingId, phase, ...data });
+}
+
 // Log startup info
 function logStartup(crossingIds, config) {
   log('startup', {
@@ -85,4 +97,4 @@ function logStartup(crossingIds, config) {
   });
 }
 
-module.exports = { log, logLdb, logSchedule, logState, logStartup };
+module.exports = { log, logLdb, logSchedule, logState, logStartup, logHeld };

@@ -2255,6 +2255,140 @@ console.log('  -- step 0: closePendingReason / closePendingSince --');
   }
 }
 
+// ---- the held-episode log: the record that survives without a recorder ------------------
+//
+// closePendingReason / closePendingSince are SERVED, not stored — they ride the payload for
+// the length of the hold and are gone afterwards. So the question "how often does Train held
+// happen, for how long, and under which rule" could only be answered from a window someone
+// had thought to record. Two lines per episode in the daily log answer it for ordinary days.
+//
+// The properties that matter are TRANSITIONS not ticks (a hold recomputes at 1 Hz and the
+// logger appends synchronously), the reason set ACCUMULATED across the episode, and the two
+// different ways an episode can end.
+console.log('  -- step 0: the held-episode log --');
+{
+  const logger = require('../src/logger');
+  const SHIPPED = JSON.parse(require('fs').readFileSync(
+    require('path').join(__dirname, '..', 'config', 'crossings.json'), 'utf8')).portslade;
+  const T = BASE;
+  const realLogHeld = logger.logHeld;
+  const lines = [];
+  // Indexing is via `row` so that reverting the source to falsify these tests FAILS them
+  // rather than throwing on the first missing line and abandoning every assertion below it.
+  const row = (arr, i) => arr[i] || {};
+  logger.logHeld = (crossing, phase, data) => { lines.push({ crossing, phase, ...data }); };
+
+  const eastLocal = (hc, bestMs) => ({
+    ...mkT({ dir: 'east', headcode: hc, bestTimeMs: bestMs }),
+    callsAtStation: true, callsAtApproach: true
+  });
+  const held = (hc) => {
+    const st = new CrossingState('portslade', SHIPPED);
+    const t = eastLocal(hc, T + 200000);
+    st.recordTdBerth({ headcode: hc, to: '0008', from: '0010', ts: iso(T), event: 'CA' });
+    st.recordTdSighting(hc, new Date(T));
+    return { st, t };
+  };
+
+  try {
+    // --- 1. one start line, and it does NOT repeat while the hold continues -------------
+    {
+      lines.length = 0;
+      const { st, t } = held('1N01');
+      st._computeClosures([t], new Date(T + 180000));      // hold opens here: 'unstruck'
+      const opened = lines.filter(l => l.phase === 'start');
+      check('log: a hold writes one start line', opened.length, 1);
+      check('log: …naming the rule that opened it', row(opened, 0).reason, 'unstruck');
+      check('log: …the train', row(opened, 0).headcode + '/' + row(opened, 0).direction + '/' + row(opened, 0).trainClass,
+        '1N01/east/stoppingLocal');
+      check('log: …and when the episode began', row(opened, 0).since, iso(T + 180000));
+
+      // Four more passes, including one where the RULE changes (past the live TTL the bound
+      // comes from the #14 final guard instead). Still one episode, still one line: this is
+      // the assertion that keeps a 1 Hz hold from writing 1 Hz to disk.
+      st._computeClosures([t], new Date(T + 185000));
+      st._computeClosures([t], new Date(T + 240000));
+      st._computeClosures([t], new Date(T + 300000));
+      st._computeClosures([t], new Date(T + 360000));
+      check('log: a continuing hold writes nothing further', lines.length, 1);
+      check('log: …not even when the rule holding it changes',
+        (st.closeHeldSince.get('1N01') || {}).reasons, 'unstruck+upstream');
+    }
+
+    // --- 2. released: the train moves, and the episode closes with what held it ----------
+    {
+      lines.length = 0;
+      const { st, t } = held('1N02');
+      st._computeClosures([t], new Date(T + 180000));
+      st._computeClosures([t], new Date(T + 300000));      // rule moves to 'upstream'
+      setStrike(st, '1N02', T + 400000, 'east', '0006');
+      st.recordTdBerth({ headcode: '1N02', to: '0006', from: '0008', ts: iso(T + 400000), event: 'CA' });
+      st._computeClosures([t], new Date(T + 400000));      // anchor struck ⇒ released
+      const ended = lines.filter(l => l.phase === 'end');
+      check('log: the release writes one end line', ended.length, 1);
+      check('log: …how it ended', row(ended, 0).how, 'released');
+      check('log: …how long it lasted', row(ended, 0).durationSecs, 220);
+      check('log: …and EVERY rule that held it, not just the last',
+        row(ended, 0).reasons, 'unstruck+upstream');
+      check('log: …keyed to the same episode the payload carried', row(ended, 0).since, iso(T + 180000));
+    }
+
+    // --- 3. gone: the hold outlived our knowledge of the train ---------------------------
+    //
+    // _mergeTrains drops a sighted train 3 min past its projected crossing, so a held train
+    // can leave the list rather than be released. Separating the two matters for the
+    // durations: mixing them would put the drop grace's own 3 minutes into the tail and read
+    // it as how long trains actually stand.
+    {
+      lines.length = 0;
+      const { st, t } = held('1N03');
+      st._computeClosures([t], new Date(T + 180000));
+      st._computeClosures([], new Date(T + 200000));        // train no longer on the list
+      const ended = lines.filter(l => l.phase === 'end');
+      check('log: a train leaving the list also ends the episode', ended.length, 1);
+      check('log: …and is recorded as a different ending', row(ended, 0).how, 'gone');
+      check('log: …with no episode left open', st.closeHeldSince.size, 0);
+    }
+
+    // --- 4. the leak that hole would have caused ------------------------------------------
+    //
+    // _computeClosures returns early on an empty list, so without the explicit close-out the
+    // episode above survives it — unlogged, and then INHERITED by the next hold on the same
+    // headcode, which in the data reads as one implausibly long hold instead of two.
+    {
+      lines.length = 0;
+      const { st, t } = held('1N04');
+      st._computeClosures([t], new Date(T + 180000));
+      st._computeClosures([], new Date(T + 200000));
+      st._computeClosures([t], new Date(T + 240000));       // same headcode holds again
+      const opened = lines.filter(l => l.phase === 'start');
+      check('log: a later hold on the same train is a NEW episode', opened.length, 2);
+      check('log: …starting when it actually started', row(opened, 1).since, iso(T + 240000));
+      check('log: …and not inheriting the old reasons', row(opened, 1).reason, 'unstruck');
+    }
+
+    // --- 5. an episode still up when the process stops has no end line --------------------
+    {
+      lines.length = 0;
+      const { st, t } = held('1N05');
+      st._computeClosures([t], new Date(T + 180000));
+      check('log: a hold still up is one start and no end',
+        lines.map(l => l.phase).join(','), 'start');
+      check('log: …and is still open in memory', st.closeHeldSince.has('1N05'), true);
+    }
+
+    // --- 6. a crossing with nothing held writes nothing ------------------------------------
+    {
+      lines.length = 0;
+      const st = new CrossingState('portslade', SHIPPED);
+      st._computeClosures([eastLocal('1N06', T + 600000)], new Date(T));
+      check('log: an ordinary closure writes no held lines', lines.length, 0);
+    }
+  } finally {
+    logger.logHeld = realLogHeld;
+  }
+}
+
 console.log('  -- #13 recompute on berth steps (coalesced) --');
 {
   const tick = () => new Promise(r => setImmediate(r));

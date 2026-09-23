@@ -137,7 +137,11 @@ const HOLD_TICK_MS = 1000;
 // the bound itself is unchanged, and it is the same bound whichever rule raised it.
 function heldReasons(info, reason) {
   const set = new Set(String((info && info.heldReason) || '').split('+').filter(Boolean));
-  set.add(reason);
+  // Split the incoming side too: an episode folds one ALREADY-COMPOUND reason into another
+  // ('queued' arriving on top of 'queued+unstruck'), and adding that whole string as a
+  // single token would produce 'queued+queued+unstruck' — a value that groups as its own
+  // category in the analysis and quietly splits the counts it exists to total.
+  for (const r of String(reason || '').split('+')) if (r) set.add(r);
   return [...set].sort().join('+');
 }
 
@@ -199,9 +203,12 @@ class CrossingState {
     // as the two moving estimates either side of it drift past each other. TTL-pruned on
     // write. See _coalesceOverlapping for why a physical event, not a threshold.
 
-    // headcode → ms at which this train's close FIRST became a held bound, carried across
-    // recomputes so the payload can say how long a hold has been up (closePendingSince).
-    // Rebuilt wholesale on each pass rather than mutated — see _computeClosuresDirectional.
+    // headcode → the OPEN "Train held" episode for that train:
+    //   { ts, reasons, direction, trainClass }
+    // ts is when the close FIRST became a bound (the payload's closePendingSince); reasons
+    // accumulates every rule that has held it since. Rebuilt wholesale on each pass rather
+    // than mutated — see _computeClosuresDirectional, which also logs the episode's two
+    // ends so the record survives without a recorder running.
     this.closeHeldSince = new Map();
 
     // Computed state
@@ -1489,7 +1496,14 @@ class CrossingState {
   // direction-aware grouping when timing.mergeOppositeMaxGapSecs is configured; else
   // the legacy single-window grouping (unchanged for other crossings / rollback).
   _computeClosures(trains, now = new Date()) {
-    if (!trains.length) return [];
+    if (!trains.length) {
+      // Every train has left the merged list, so every open hold has left with it. Without
+      // this the early return leaks the episode: never logged as ended, and then INHERITED
+      // — stale start time and stale reasons — by the next hold on the same headcode, which
+      // would read in the data as one implausibly long hold instead of two.
+      this._trackHeldEpisodes([], now);
+      return [];
+    }
     if (this.timing && typeof this.timing.mergeOppositeMaxGapSecs === 'number') {
       return this._computeClosuresDirectional(trains, now);
     }
@@ -1532,6 +1546,72 @@ class CrossingState {
     return periods;
   }
 
+  // Open / extend / close the "Train held" episodes implied by this pass's annotated trains,
+  // and log each episode's two ends. `ann` is [] when the merged list is empty, which is a
+  // real end: every open hold has gone with the trains.
+  //
+  // The map is rebuilt from `ann` on every pass rather than updated in place, so a train
+  // that stops being held — or drops off the merged list — falls out on its own: no pruning
+  // rule to get wrong, and no map that can grow across a day.
+  //
+  // An episode deliberately does NOT restart when the REASON changes. A train that was
+  // 'unstruck' and is now 'queued+unstruck' has been held continuously, and the question
+  // both the payload's closePendingSince and the log's durationSecs answer is how long ONE
+  // episode of "Train held" has been on screen — which is what a threshold on the wording
+  // would be set against.
+  //
+  // Called from _computeClosures and nowhere else, which has exactly one caller
+  // (_recompute). Stamping or logging from a READ would put this back in the class of bug
+  // register #14 was about — the CLOSED gate's own evidence destroyed by serving /live.
+  _trackHeldEpisodes(ann, now) {
+    // Each episode's two ends also go to the daily log (logger.logHeld), because
+    // closePendingReason / closePendingSince are SERVED, not stored: they ride the payload
+    // while the hold is up and are gone when it releases. Without this, answering "how
+    // often, for how long, and under which rule" would mean having had record-vps.js
+    // running at the time, and the question is about ordinary days, not audit windows.
+    const prevHeldSince = this.closeHeldSince || new Map();
+    const onList = new Set();
+    this.closeHeldSince = new Map();
+    for (const a of ann) {
+      const hc = a.train.headcode;
+      if (!hc) continue;
+      onList.add(hc);
+      if (!a.closeHeld) continue;
+      const open = prevHeldSince.get(hc);
+      if (open) {
+        // Same unbroken episode: fold in whatever is holding it NOW. `reasons` is therefore
+        // every rule that has held this train, not just the current one — which is the form
+        // the question needs, since relaxing one rule only shortens a hold the others were
+        // not also keeping up.
+        open.reasons = heldReasons({ heldReason: open.reasons }, a.heldReason);
+        this.closeHeldSince.set(hc, open);
+        continue;
+      }
+      const started = { ts: now.getTime(), reasons: a.heldReason || '',
+                        direction: a.train.direction, trainClass: this._classOf(a.train) };
+      this.closeHeldSince.set(hc, started);
+      logger.logHeld(this.id, 'start', {
+        headcode: hc, direction: started.direction, trainClass: started.trainClass,
+        reason: started.reasons, since: new Date(started.ts).toISOString()
+      });
+    }
+    for (const [hc, open] of prevHeldSince) {
+      if (this.closeHeldSince.has(hc)) continue;
+      // HOW it ended, and the two are not the same finding. 'released' is the train moving —
+      // the anchor struck, or the road in front cleared. 'gone' is the train leaving the
+      // merged list entirely (_mergeTrains drops a sighted train SIGHTING_DROP_GRACE_MS past
+      // its projected crossing), i.e. the hold outlived our knowledge of the train rather
+      // than the train outlived the hold. A duration histogram that mixed them would put the
+      // drop grace's own 3 minutes into the tail and read it as how long trains stand.
+      logger.logHeld(this.id, 'end', {
+        headcode: hc, direction: open.direction, trainClass: open.trainClass,
+        reasons: open.reasons, since: new Date(open.ts).toISOString(),
+        durationSecs: Math.round((now.getTime() - open.ts) / 1000),
+        how: onList.has(hc) ? 'released' : 'gone'
+      });
+    }
+  }
+
   // Direction-aware grouping (Change 3). Walk trains sorted by bestTime; for each
   // boundary compare this train's predicted close against the previous train's raw
   // predicted open:
@@ -1557,26 +1637,8 @@ class CrossingState {
       };
     });
 
-    // How long each held close has been a bound, for the payload's closePendingSince.
-    // Rebuilt from `ann` on every pass rather than updated in place: a train that stops
-    // being held — or drops off the merged list entirely — falls out on its own, so there
-    // is no pruning rule to get wrong and no map that can grow across a day.
-    //
-    // It deliberately does NOT restart when the REASON changes. A train that was 'unstruck'
-    // and is now 'queued+unstruck' has been held continuously, and the question this field
-    // answers is how long ONE episode of "Train held" has been on screen — which is what a
-    // threshold on the wording would be set against.
-    //
-    // Written here and nowhere else, because _computeClosures has exactly one caller
-    // (_recompute). A stamp taken on a READ would put it back in the class of bug register
-    // #14 was about — the CLOSED gate's own evidence being destroyed by serving /live.
-    const prevHeldSince = this.closeHeldSince || new Map();
-    this.closeHeldSince = new Map();
-    for (const a of ann) {
-      if (!a.closeHeld || !a.train.headcode) continue;
-      this.closeHeldSince.set(a.train.headcode,
-        prevHeldSince.get(a.train.headcode) || now.getTime());
-    }
+    // Episode bookkeeping for the held close, plus the log lines that outlive the payload.
+    this._trackHeldEpisodes(ann, now);
 
     const groups = [];
     let cur = null;
@@ -1616,7 +1678,7 @@ class CrossingState {
         { closePending: !!closer.closeHeld, holdingOpen: endInfo.holdingOpen,
           closePendingReason: closer.heldReason,
           closePendingSince: closer.train.headcode
-            ? this.closeHeldSince.get(closer.train.headcode) : null });
+            ? (this.closeHeldSince.get(closer.train.headcode) || {}).ts : null });
     });
   }
 
