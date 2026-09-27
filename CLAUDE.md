@@ -70,6 +70,23 @@ or the app reports the crossing clear with a train on it: `_deriveState`, the `g
 filter, and `PREDICT.derive`. The client stops trusting the flag once the payload is >90 s old,
 so a device that has lost the backend can't sit on BARRIERS DOWN.
 
+**Which rule raised a held close, and for how long (live 2026-09-27, `740d4fc`).** A held period
+carries `closePendingReason` and `closePendingSince` **only while held** (an ordinary closure is
+byte-identical on the wire). The reason is a `+`-joined **set**, not a precedence — `unstruck` (the
+anchor projection expired), `queued` (a train ahead has not vacated, #20), `upstream` (the #14 final
+guard), or e.g. `queued+unstruck`. A set because the rules overlap, and reporting only the winner
+could not answer the question they exist for: how much held time a given rule's threshold would
+actually remove, when another rule is holding the same train anyway.
+
+Those two fields are **served, not stored**. The durable record is `logger.logHeld`, two lines per
+episode in `backend/data/logs/<date>.jsonl` (`cat: "held"`) — `start` with the opening rule, `end`
+with every rule that held it, `durationSecs`, and `how`: `released` (the train moved) vs `gone` (it
+left the merged list at the 3-min sighting grace). **Transitions, never ticks** — a hold recomputes
+at 1 Hz and `logger.log` appends synchronously. A `start` with no `end` is a hold that was still up
+when the process stopped, and is meant to read that way. Closure periods are not logged anywhere
+else, and a held close *suppresses* CLOSING_SOON, so before this a hold's main trace in the state
+log was a transition that never happened.
+
 The **frontend has no build step** — edit files, push to `main`, GitHub Pages deploys within ~1 minute.
 
 ### Run `sh scripts/bump-assets.sh` before pushing a frontend change
@@ -172,6 +189,15 @@ Dedup: UID-first (CIF `CIF_train_uid` vs LDBSVWS `svc.uid`), then headcode + tim
 **Midnight-crossing CIF times — FIXED, don't re-fix.** This section used to describe a live bug: CIF times past 24:00 (e.g. `2510` = 01:10 next morning) mapped modulo-24, placing the train at 01:10 *today* instead of *tomorrow*. It was fixed in `1315934` and the description here was left stale, contradicting "Recently shipped" below. `londonMinsToDate` now takes `dayOffset = Math.floor(total / 1440)` and shifts the date stamp by it, and `analyseRoute` unwraps a route's times across 00:00 — so `2510` resolves to 01:10 tomorrow. Verified in `time-utils.js:80-93`.
 
 *TD* — STOMP listener active, writing JSONL to `~/rail-crossing/backend/data/logs/td/`. **Partially joined into predictions:** every CA/CB event emits a `sighting` event (`td-listener.js`); `crossing-state` records the first sighting per headcode per day in `tdSeenToday`, surfaces `tdSeen`/`tdSeenAt` on the API, and uses the sighting as the late-minute lock signal for CIF predictions (see Q-freight handling below). Still pending: confidence-tier narrowing via `tdBerth` (approach/protecting/clear).
+
+**TD can stop silently — check the logs are growing, 2026-09-27.** `td-listener` reconnects on a
+failed connect (exponential backoff to 60 s) and on a client `error` event, but nothing watches
+whether events are still *arriving*. On 2026-09-22 writing stopped at 22:24 UTC and did not resume
+until a restart on 09-27 — **4½ days with no berth data**, while systemd showed `active (running)`,
+LDB polled normally every 30 s and the API served predictions throughout. Everything that depends on
+TD degraded to timetable-only in that window: strike-anchored closes, clear-step-anchored opens, the
+Q-freight late-minute lock, and `run-rate`'s 14-day scan (which now has a four-day hole in it). See
+register #21. The cheap check is that today's file in `backend/data/logs/td/` exists and is growing.
 
 **Q-freight handling — false-positive control for CIF.** Freight scheduled in CIF often carries `Q` in `CIF_operating_characteristics` = "runs as required" (path booked, train only runs on demand — ~50% of Portslade-area freight). The pipeline addresses this in three layers:
 - `schedule-parser.js` sets `runsAsRequired=true` when the entry has the `Q` flag.
@@ -327,6 +353,14 @@ starting a watch; the ordering of its first phase matters (start recording befor
 - **Add a new crossing**: append entry to `shared/crossings.json`, create `<crossing-name>/index.html` mirroring `portslade/index.html`, call `initCrossing('<id>')`.
 - **Test changes**: open `portslade/index.html` directly in a browser (`open portslade/index.html` on macOS) — the VPS API URL is hard-coded (`API_BASE` in `shared/crossing.js`) so it works against live data.
 
+## Recently shipped (backend-v2, live 2026-09-27 — `740d4fc`)
+
+- **Held-close instrumentation** — `closePendingReason` / `closePendingSince` on a held period, plus
+  a two-line-per-episode `cat: "held"` record in the daily log. Step 0 of "show *Train held* less
+  often": the rules that raise a hold are not interchangeable, so the threshold has to be set from
+  measured shares rather than guessed. See the held-countdowns section above. No frontend change —
+  neither app reads the fields.
+
 ## Recently shipped (backend-v2, live 2026-05-31)
 
 - **Late-running CIF freight re-attachment** — a TD-sighted train whose scheduled crossing has passed (or is inside T−60s) now has `bestTime` re-projected from the sighting + `timing.areaEntryLeadSecs`, floored to the future, so it shows as imminent instead of expiring/vanishing. The lead values are a deliberate stopgap pending position-based triggering — **do not tune them** (see "Confidence-tier narrowing" below).
@@ -337,6 +371,28 @@ starting a watch; the ordering of its first phase matters (start recording befor
 ## Active work / pending items
 
 - **Confidence-tier narrowing via TD berth state** — TD sightings now flow into predictions (`tdSeen`/`tdSeenAt` on each CIF train) and drive the late-minute lock for Q-freight, but the per-berth `tdBerth` field (approach/protecting/clear) is still not populated. Setting it would unlock the ±90s → ±60s → ±30s → "imminent" confidence-window narrowing. This **position-based triggering** is intended to replace the `areaEntryLeadSecs` projection wholesale, which is why those lead values are not worth tuning.
+- **Show "Train held" less often — measuring, then one rule.** Rich's ask, 2026-09-23: it appears
+  often and the fix must be a set rule that scales to other crossings. Step 0 shipped 09-27 (above);
+  **next step is to read a few days of it**:
+  ```
+  jq -r 'select(.cat=="held" and .phase=="end") | [.reasons, .durationSecs] | @tsv' \
+    ~/rail-crossing/backend/data/logs/*.jsonl |
+    awk -F'\t' '{n[$1]++; s[$1]+=$2} END {for (r in n) printf "%-22s %4d episodes  %6ds total  %5.0fs mean\n", r, n[r], s[r], s[r]/n[r]}' | sort -k2 -rn
+  ```
+  Then pick from the options already worked through, in this order of preference:
+  **(A)** a noise margin on `expired` — `ts + k x sdSecs < now`, capped, where `sdSecs` is the
+  transit spread `_projectBerth` already has, so every crossing derives its own grace and a new
+  crossing needs no calibration. This is the one that deserves to be *the* rule.
+  **(D)** stop calling a *queued* train "held" — it is normal operation, not a stopped train, and
+  needs no constant at all. **(E)** fewer surfaces (a hold currently prints in up to five places at
+  once) — free, no logic change. **(B)**, a dwell before the wording escalates, is the reserve if A+D
+  is not enough; express it as a multiple of the class offset, not a flat number of seconds.
+  Note the whole question is the CLOSE side (`closePending`) — the open side's hold is a state gate
+  that stops the app reporting CLEAR with a train on the crossing, and is not a display choice.
+- **TD liveness is unmonitored** — see the note in the pipeline section above and register #21. Next
+  step is to root-cause the 09-22 stop (the journal around 22:24 UTC that day) and add a staleness
+  watchdog on last-event time, surfaced on `/health` so it is visible without reading the log
+  directory. Separate piece of work from the held question; don't bolt it onto that.
 - Ongoing calibration of `closeBefore` / `openAfter` / `closeTrigger` offsets from feedback data
 - `consecutiveWindow` was REMOVED from the Portslade config on 2026-08-01: it is the legacy
   grouping window and has been dead since `mergeOppositeMaxGapSecs` shipped, but it sat in both
