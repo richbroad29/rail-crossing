@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<!--
+  PROTOTYPE: throwaway, not production. It lives on the prototype/departures-arrivals branch only.
+
+  Question: what should the Portslade departures & arrivals board look like?
+  Three structurally different variants on this one page, switched with ?variant=A|B|C or the
+  floating bar at the bottom (the left/right arrow keys work too):
+    A  Concourse board    two full boards side by side, one scrolling line along each
+    B  Platform displays  the three-line units that hang over each platform
+    C  Modern screen      one screen that alternates Departures/Arrivals, next train expanded
+  ?scenario=every|normal|none|down swaps the SAMPLE data. Nothing here talks to National Rail.
+
+  The winner gets rebuilt properly, on live data, at portslade/departures-arrivals/.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PROTOTYPE · Portslade departures &amp; arrivals</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Doto:wght@700..900&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { min-height: 100vh; padding-bottom: 104px; font-family: system-ui, -apple-system, "Segoe UI", Arial, sans-serif; }
+
+  /* ---- shared: dot-matrix text and scrolling lines ---- */
+  .led {
+    font-family: 'Doto', ui-monospace, Menlo, Consolas, monospace; font-weight: 900;
+    color: var(--amber); text-shadow: 0 0 5px var(--glow);
+  }
+  .matrix {
+    background-color: #030303;
+    /* the unlit LEDs behind the text */
+    background-image: radial-gradient(circle, rgba(255,176,0,.075) 0 1px, transparent 1.4px);
+    background-size: 4px 4px;
+  }
+  .ticker { overflow: hidden; white-space: nowrap; }
+  .ticker > span { display: inline-block; will-change: transform; transform: translateX(110%); }
+  .r { text-align: right; }
+  .cut { overflow: hidden; text-overflow: clip; }
+
+  /* =========================== A: concourse board =========================== */
+  body.vA { background: #151515; color: #ddd; --amber: #ffb000; --glow: rgba(255,160,0,.55); }
+  .a-wrap { max-width: 1320px; margin: 0 auto; padding: 22px 16px 0; }
+  .a-station { font: 600 14px/1 system-ui, sans-serif; letter-spacing: .18em; text-transform: uppercase; color: #8d8d8d; margin-bottom: 14px; }
+  .a-boards { display: grid; gap: 22px; grid-template-columns: minmax(0, 1fr); }
+  @media (min-width: 1000px) { .a-boards { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+  .a-board {
+    container-type: inline-size; padding: 10px; border-radius: 6px;
+    background: linear-gradient(#2e2e2e, #1b1b1b);
+    box-shadow: 0 12px 30px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.07);
+  }
+  .a-screen { border-radius: 3px; padding: 12px 14px 10px; font-size: clamp(13px, 3.55cqi, 24px); line-height: 1.55; }
+  .a-title { text-transform: uppercase; letter-spacing: .06em; margin-bottom: 2px; }
+  .a-row { display: grid; grid-template-columns: 5ch minmax(0, 1fr) 4ch 9ch; gap: 0 1ch; white-space: nowrap; }
+  .a-colhead { opacity: .7; }
+  .a-rows { height: calc(8 * 1.55em); }
+  .a-msg { height: 100%; display: flex; align-items: center; justify-content: center; text-align: center; white-space: normal; padding: 0 1ch; }
+  .a-ticker { margin-top: 6px; padding-top: 4px; border-top: 1px solid rgba(255,176,0,.14); }
+  .a-clock { text-align: center; font-size: clamp(34px, 7vw, 64px); margin: 26px 0 0; letter-spacing: .05em; }
+
+  /* =========================== B: platform displays =========================== */
+  body.vB { background: #d7dade; color: #15181c; --amber: #ffa200; --glow: rgba(255,150,0,.5); }
+  .b-wrap { max-width: 1120px; margin: 0 auto; padding: 22px 16px 0; }
+  .b-station {
+    display: inline-block; font: 700 22px/1 system-ui, sans-serif; letter-spacing: .02em;
+    background: #fff; color: #15181c; padding: 10px 16px; border-radius: 4px; box-shadow: 0 2px 0 #b9bdc2;
+  }
+  .b-sec { font: 700 12px/1 system-ui, sans-serif; letter-spacing: .18em; text-transform: uppercase; color: #5b6168; margin: 26px 0 10px; }
+  .b-units { display: grid; gap: 18px; grid-template-columns: minmax(0, 1fr); }
+  @media (min-width: 880px) { .b-units { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+  .b-unit { container-type: inline-size; background: #23262a; border-radius: 10px; padding: 0 10px 10px; box-shadow: 0 10px 22px rgba(0,0,0,.28); }
+  .b-sign { font: 700 13px/1 system-ui, sans-serif; color: #fff; padding: 10px 4px; letter-spacing: .06em; text-transform: uppercase; }
+  .b-sign b { display: inline-block; background: #fff; color: #23262a; border-radius: 3px; padding: 2px 6px; margin-left: 6px; }
+  .b-screen { border-radius: 4px; padding: 10px 14px; font-size: clamp(13px, 4.2cqi, 24px); line-height: 1.5; }
+  .b-line { display: grid; grid-template-columns: 3ch 5ch minmax(0, 1fr) 9ch; gap: 0 1ch; white-space: nowrap; height: 1.5em; }
+  .b-line.ticker, .b-line.b-clock, .b-line.b-note { display: block; }
+  .b-clock { text-align: center; }
+  .b-note { text-align: center; overflow: hidden; }
+
+  /* =========================== C: modern screen =========================== */
+  body.vC { background: #061631; color: #fff; }
+  .c-screen { max-width: 1320px; margin: 0 auto; min-height: calc(100vh - 104px); display: flex; flex-direction: column; font-family: "Helvetica Neue", Helvetica, Arial, system-ui, sans-serif; }
+  .c-top { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px 16px; padding: 16px 20px 14px; background: #0b2449; }
+  .c-tabs { display: flex; gap: 22px; }
+  .c-tabs button { font-family: inherit; font-weight: 700; font-size: clamp(22px, 3.2vw, 34px); line-height: 1.1; color: rgba(255,255,255,.42); background: none; border: 0; padding: 2px 0 6px; cursor: pointer; }
+  .c-tabs button[aria-selected="true"] { color: #fff; box-shadow: inset 0 -4px 0 #ffd500; }
+  .c-meta { display: flex; gap: 14px; align-items: baseline; }
+  .c-stn { font-weight: 600; font-size: 17px; color: rgba(255,255,255,.75); }
+  .c-clock { font-weight: 700; font-size: clamp(24px, 3.2vw, 36px); font-variant-numeric: tabular-nums; color: #ffd500; }
+  .c-progress { height: 3px; background: rgba(255,255,255,.08); }
+  .c-progress i { display: block; height: 100%; width: 0; background: #ffd500; transition: width 1s linear; }
+  .c-hero { margin: 18px 20px 6px; background: #0f2d5a; border-radius: 12px; padding: 18px 20px 16px; }
+  .c-hero-top { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 18px; align-items: end; }
+  .c-hero small { display: block; font-size: 12px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: rgba(255,255,255,.6); margin-bottom: 6px; }
+  .c-hero-time { font-weight: 700; font-size: clamp(34px, 5.2vw, 60px); line-height: 1; font-variant-numeric: tabular-nums; }
+  .c-hero-place { font-weight: 700; font-size: clamp(26px, 4.4vw, 50px); line-height: 1.02; overflow-wrap: anywhere; }
+  .c-hero-plat { text-align: center; background: #fff; color: #061631; border-radius: 10px; padding: 8px 14px; font-weight: 800; font-size: clamp(28px, 4.4vw, 46px); line-height: 1; }
+  .c-hero-plat small { color: #3c4f6e; margin-bottom: 4px; font-size: 11px; }
+  .c-hero-status { margin-top: 14px; font-size: 22px; font-weight: 700; }
+  .c-label { margin-top: 16px; font-size: 12px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: rgba(255,255,255,.6); }
+  .c-stops { list-style: none; display: flex; flex-wrap: wrap; row-gap: 8px; margin-top: 8px; }
+  .c-stops li { display: flex; align-items: center; font-size: 17px; font-weight: 600; }
+  .c-stops li + li::before { content: ""; width: 16px; height: 2px; background: rgba(255,255,255,.3); margin: 0 9px; }
+  .c-stops time { margin-left: 6px; font-weight: 400; color: rgba(255,255,255,.65); font-variant-numeric: tabular-nums; }
+  .c-foot { margin-top: 14px; color: rgba(255,255,255,.72); font-size: 15px; }
+  .c-row { display: grid; grid-template-columns: 4.4em minmax(0, 1fr) 3.4em 11em; grid-template-areas: "time place plat status"; gap: 4px 14px; align-items: center; padding: 0 20px; }
+  .c-row > .t { grid-area: time; font-variant-numeric: tabular-nums; font-weight: 700; }
+  .c-row > .p { grid-area: place; min-width: 0; }
+  .c-row > .pl { grid-area: plat; text-align: center; }
+  .c-row > .s { grid-area: status; }
+  .c-listhead { margin-top: 12px; padding-bottom: 8px; font-size: 12px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: rgba(255,255,255,.5); }
+  .c-list { list-style: none; }
+  .c-list li { padding-top: 13px; padding-bottom: 13px; border-top: 1px solid rgba(255,255,255,.09); font-size: 20px; }
+  .c-list .p b { display: block; }
+  .c-list .p span { display: block; font-size: 14px; color: rgba(255,255,255,.55); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .c-list .pl b { display: inline-block; min-width: 1.9em; padding: 3px 6px; border-radius: 6px; background: rgba(255,255,255,.12); font-size: 18px; }
+  .c-list .s { font-weight: 700; font-size: 18px; }
+  .c-empty { margin: 18px 20px; padding: 40px 20px; border-radius: 12px; background: #0f2d5a; text-align: center; font-size: 22px; font-weight: 700; line-height: 1.4; }
+  .c-empty span { display: block; margin-top: 8px; font-size: 16px; font-weight: 400; color: rgba(255,255,255,.7); }
+  .c-ticker { margin-top: auto; background: #ffd500; color: #061631; font-weight: 700; font-size: 18px; padding: 11px 0; }
+  .pill { display: inline-block; font-size: .78em; line-height: 1.3; padding: 2px 10px; border-radius: 99px; margin-left: 8px; vertical-align: 2px; white-space: nowrap; }
+  .st-late { color: #ffd500; } .st-late .pill { background: #ffd500; color: #061631; }
+  .st-delayed { color: #ffb020; } .st-delayed .pill { background: rgba(255,176,32,.18); color: #ffcf7a; }
+  .st-cancelled { color: #ff8080; } .st-cancelled .pill { background: #e5484d; color: #fff; }
+  .st-arrived { color: #86e3ae; }
+  @media (max-width: 640px) {
+    .c-row { grid-template-columns: 3.6em minmax(0, 1fr) 2.8em; grid-template-areas: "time place plat" "time status plat"; padding: 0 16px; }
+    .c-listhead .s { display: none; }
+    .c-hero { margin: 14px 12px 6px; padding: 16px 14px 14px; }
+    .c-hero-top { grid-template-columns: minmax(0, 1fr) auto; }
+    .c-hero-time { grid-column: 1 / -1; }
+    .c-empty { margin: 14px 12px; }
+  }
+
+  /* =========================== prototype switcher =========================== */
+  /* Deliberately NOT part of any design: loud, rounded, magenta ring. */
+  .proto-bar {
+    position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 50;
+    display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 6px;
+    width: max-content; max-width: calc(100vw - 16px); padding: 6px 8px; border-radius: 22px;
+    background: #fff; color: #111; box-shadow: 0 0 0 2px #ff2d78, 0 8px 28px rgba(0,0,0,.5);
+    font: 600 13px/1.2 system-ui, -apple-system, Arial, sans-serif;
+  }
+  .proto-tag { background: #ff2d78; color: #fff; border-radius: 99px; padding: 5px 9px; font-size: 11px; letter-spacing: .08em; }
+  .proto-bar button { border: 0; border-radius: 99px; background: #eef0f3; color: #111; font: inherit; padding: 6px 11px; cursor: pointer; }
+  .proto-bar button:hover { background: #dfe3e8; }
+  .proto-label { min-width: 11.5em; text-align: center; }
+  @media (max-width: 560px) { .proto-tag { flex-basis: 100%; text-align: center; } }
+  .proto-scn::before { content: "Data: "; font-weight: 400; color: #666; }
+</style>
+</head>
+<body>
+<main id="app"></main>
+
+<nav class="proto-bar" aria-label="Prototype controls">
+  <span class="proto-tag">PROTOTYPE · SAMPLE TRAINS</span>
+  <button type="button" data-prev aria-label="Previous design">◀</button>
+  <span class="proto-label" data-vlabel></span>
+  <button type="button" data-next aria-label="Next design">▶</button>
+  <button type="button" class="proto-scn" data-scn title="Swap the sample data (S)"></button>
+</nav>
+
+<script>
+'use strict';
+
+// ---------------------------------------------------------------------------------------
+// Sample data. Shaped like what the National Rail board feed gives per service (scheduled
+// time, estimate or "Delayed", cancelled flag, platform, calling points, reason), but made
+// up, and timed relative to when the page opens so the board is always "live".
+// ---------------------------------------------------------------------------------------
+const TZ = 'Europe/London';
+const MIN = 60000;
+const fmt = (d, secs) => d.toLocaleTimeString('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit', ...(secs ? { second: '2-digit' } : {}) });
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+// Westbound stops after Portslade, minutes after leaving it. Eastbound runs are the reverse.
+const WEST = {
+  'West Worthing': [['Fishersgate', 2], ['Southwick', 4], ['Shoreham-by-Sea', 7], ['Lancing', 11], ['East Worthing', 14], ['Worthing', 17], ['West Worthing', 20]],
+  'Littlehampton': [['Fishersgate', 2], ['Southwick', 4], ['Shoreham-by-Sea', 7], ['Lancing', 11], ['East Worthing', 14], ['Worthing', 17], ['West Worthing', 20], ['Durrington-on-Sea', 23], ['Goring-by-Sea', 25], ['Angmering', 29], ['Littlehampton', 36]],
+  'Southampton Central': [['Shoreham-by-Sea', 6], ['Lancing', 10], ['Worthing', 15], ['West Worthing', 18], ['Goring-by-Sea', 21], ['Angmering', 25], ['Barnham', 33], ['Chichester', 41], ['Havant', 53], ['Fareham', 68], ['Southampton Central', 89]],
+  'Portsmouth Harbour': [['Shoreham-by-Sea', 6], ['Lancing', 10], ['Worthing', 15], ['West Worthing', 18], ['Goring-by-Sea', 21], ['Angmering', 25], ['Barnham', 33], ['Chichester', 41], ['Havant', 53], ['Fratton', 61], ['Portsmouth & Southsea', 64], ['Portsmouth Harbour', 68]],
+};
+const TO_BRIGHTON = [['Aldrington', 2], ['Hove', 5], ['Brighton', 10]];
+const FROM_BRIGHTON = [['Brighton', -10], ['Hove', -5], ['Aldrington', -2]];
+
+// [minutes from now, direction, far end, coaches]
+const TIMETABLE = [
+  [1, 'E', 'West Worthing', 4], [5, 'W', 'Littlehampton', 8], [9, 'E', 'Southampton Central', 4],
+  [13, 'W', 'West Worthing', 4], [19, 'E', 'Littlehampton', 8], [24, 'W', 'West Worthing', 4],
+  [28, 'E', 'West Worthing', 4], [34, 'W', 'Southampton Central', 4], [39, 'E', 'Portsmouth Harbour', 4],
+  [43, 'W', 'West Worthing', 4], [49, 'E', 'Littlehampton', 8], [54, 'W', 'Littlehampton', 8],
+  [58, 'E', 'West Worthing', 4], [64, 'W', 'Portsmouth Harbour', 4], [69, 'E', 'Southampton Central', 4],
+  [73, 'W', 'West Worthing', 4], [79, 'E', 'Littlehampton', 8], [84, 'W', 'Littlehampton', 8],
+  [88, 'E', 'West Worthing', 4], [94, 'W', 'Southampton Central', 4], [99, 'E', 'Portsmouth Harbour', 4],
+  [103, 'W', 'West Worthing', 4], [109, 'E', 'Littlehampton', 8], [114, 'W', 'Littlehampton', 8],
+];
+// What goes wrong in each scenario, by timetable row. Row 0 sits at the platform for a few
+// minutes so "Arrived" stays on screen long enough to look at.
+const TROUBLE = {
+  every: {
+    0: { dwell: 4 },
+    1: { late: 7, reason: 'a signalling problem' },
+    2: { late: null, reason: 'a fault on this train' },
+    3: { cancelled: true, reason: 'a shortage of train crew' },
+    4: { late: 2, reason: 'a late-running train in front of this one' },
+    5: { bus: true },
+  },
+  normal: { 0: { dwell: 4 }, 4: { late: 2, reason: 'a late-running train in front of this one' } },
+};
+const MESSAGE = 'Sample station message: engineering works may affect journeys this weekend. Please check before you travel.';
+const SCENARIOS = { every: 'Every state', normal: 'Normal day', none: 'No trains', down: 'Feed down' };
+
+function buildServices(scenario, now) {
+  if (scenario === 'none' || scenario === 'down') return [];
+  const base = Math.ceil(now / MIN) * MIN;
+  const trouble = TROUBLE[scenario] || {};
+  return TIMETABLE.map(([off, dir, far, coaches], i) => {
+    const t = trouble[i] || {};
+    const std = new Date(base + off * MIN);
+    const west = dir === 'W';
+    return {
+      dir, coaches, operator: 'Southern',
+      origin: west ? 'Brighton' : far,
+      destination: west ? far : 'Brighton',
+      before: west ? FROM_BRIGHTON : WEST[far].map(([n, o]) => [n, -o]).reverse(),
+      after: west ? WEST[far] : TO_BRIGHTON,
+      std, sta: new Date(+std - (t.dwell || 1) * MIN),
+      side: west ? '2' : '1',
+      platform: t.bus ? 'BUS' : (west ? '2' : '1'),
+      late: 'late' in t ? t.late : 0,           // minutes; null = "Delayed", no estimate
+      cancelled: !!t.cancelled, bus: !!t.bus, reason: t.reason || null,
+    };
+  });
+}
+
+// One row of a board. Everything a design needs to draw it, decided once, here.
+function entriesFor(services, kind, now) {
+  const out = [];
+  for (const s of services) {
+    const known = s.late !== null;
+    const expDep = known ? new Date(+s.std + s.late * MIN) : null;
+    const expArr = known ? new Date(+s.sta + s.late * MIN) : null;
+    if (s.cancelled ? s.std < now : (expDep && expDep <= now)) continue;   // gone
+    const sched = kind === 'dep' ? s.std : s.sta;
+    const expected = kind === 'dep' ? expDep : expArr;
+    let status;
+    if (s.cancelled) status = { kind: 'cancelled', text: 'Cancelled' };
+    else if (!known) status = { kind: 'delayed', text: 'Delayed' };
+    else if (kind === 'arr' && expected <= now) status = { kind: 'arrived', text: 'Arrived' };
+    else if (s.late >= 1) status = { kind: 'late', text: 'Exp ' + fmt(expected), mins: s.late };
+    else status = { kind: 'ontime', text: 'On time' };
+    const at = off => known ? fmt(new Date(+s.std + (off + s.late) * MIN)) : null;
+    const stops = kind === 'dep'
+      ? s.after.map(([name, off]) => ({ name, time: at(off) }))
+      : s.before.slice(1).map(([name]) => ({ name }));
+    out.push({ s, kind, time: fmt(sched), place: kind === 'dep' ? s.destination : s.origin, plat: s.platform, status, stops });
+  }
+  return out;
+}
+
+function model(now) {
+  const sc = state.scenario;
+  return {
+    down: sc === 'down',
+    none: sc === 'none',
+    dep: entriesFor(state.services, 'dep', now),
+    arr: entriesFor(state.services, 'arr', now),
+    message: sc === 'every' ? MESSAGE : null,
+  };
+}
+
+const joinNames = a => a.length === 1 ? a[0] + ' only' : a.slice(0, -1).join(', ') + ' and ' + a[a.length - 1];
+
+// The words for the scrolling line. Same sentences in every design.
+function describe(e, prefix) {
+  const s = e.s, p = [];
+  if (prefix) p.push(`${e.time} ${e.kind === 'dep' ? 'to' : 'from'} ${e.place}:`);
+  if (s.cancelled) p.push('This train has been cancelled.');
+  else if (e.kind === 'dep') {
+    const names = e.stops.map(x => x.time ? `${x.name} (${x.time})` : x.name);
+    p.push(`${s.bus ? 'Replacement bus calling at' : 'Calling at'}: ${joinNames(names)}.`);
+  } else {
+    const via = e.stops.map(x => x.name);
+    p.push(via.length ? `From ${s.origin}, calling at ${joinNames(via).replace(/ only$/, '')}.` : `From ${s.origin}.`);
+  }
+  if (!s.cancelled && !s.bus) p.push(`A ${s.operator} service formed of ${s.coaches} coaches.`);
+  if (s.bus) p.push('Rail replacement bus. It leaves from the station forecourt.');
+  if (e.status.kind === 'late') p.push(`Running about ${s.late} minute${s.late === 1 ? '' : 's'} late.`);
+  if (e.status.kind === 'delayed') p.push('This train is delayed. There is no estimated time yet.');
+  if (s.reason) p.push(`This is due to ${s.reason}.`);
+  return p.join('  ');
+}
+
+const NO_FEED = 'Live train information is unavailable. Please check timetables before you travel.';
+const NO_TRAINS = 'No trains are due in the next 2 hours. Please check timetables.';
+
+// ---------------------------------------------------------------------------------------
+// Scrolling line: shows each item in turn, right to left, at a steady speed.
+// ---------------------------------------------------------------------------------------
+let tickers = [];
+function ticker(el, items, speed = 85) {
+  const span = el.querySelector('span');
+  let i = 0, anim = null, timer = null, stopped = false;
+  function next() {
+    if (stopped) return;
+    const list = items();
+    if (!list.length) { span.textContent = ''; timer = setTimeout(next, 2000); return; }
+    span.textContent = list[i++ % list.length];
+    const w = el.clientWidth, tw = span.scrollWidth;
+    anim = span.animate([{ transform: `translateX(${w}px)` }, { transform: `translateX(${-tw}px)` }],
+      { duration: (w + tw) / speed * 1000, easing: 'linear', fill: 'forwards' });
+    anim.onfinish = () => { timer = setTimeout(next, 300); };
+  }
+  next();
+  tickers.push({ stop() { stopped = true; if (anim) anim.cancel(); clearTimeout(timer); } });
+}
+
+// =======================================================================================
+// A: Concourse board. Two full boards side by side; each scrolls every train in turn.
+// =======================================================================================
+function mountA(root) {
+  const ROWS = 8;
+  const board = (k, title, placeHead) => `
+    <section class="a-board" aria-label="${title}">
+      <div class="a-screen matrix led">
+        <div class="a-title">${title}</div>
+        <div class="a-row a-colhead"><span>Time</span><span>${placeHead}</span><span class="r">Plat</span><span class="r">Expected</span></div>
+        <div class="a-rows" data-rows="${k}"></div>
+        <div class="a-ticker ticker" data-ticker="${k}"><span></span></div>
+      </div>
+    </section>`;
+  root.innerHTML = `
+    <div class="a-wrap">
+      <h1 class="a-station">Portslade</h1>
+      <div class="a-boards">${board('dep', 'Departures', 'Destination')}${board('arr', 'Arrivals', 'From')}</div>
+      <div class="a-clock led" data-clock></div>
+    </div>`;
+  let m = null;
+  for (const k of ['dep', 'arr']) {
+    ticker(root.querySelector(`[data-ticker="${k}"]`), () => {
+      if (!m) return [];
+      if (m.down) return [NO_FEED];
+      const list = m[k].slice(0, ROWS).map(e => describe(e, true));
+      if (!list.length) return [NO_TRAINS];
+      if (m.message) list.push(m.message);
+      return list;
+    });
+  }
+  return {
+    update(nm) {
+      m = nm;
+      for (const k of ['dep', 'arr']) {
+        const el = root.querySelector(`[data-rows="${k}"]`);
+        if (m.down) { el.innerHTML = `<div class="a-msg">Please check timetables<br>Live information unavailable</div>`; continue; }
+        if (!m[k].length) { el.innerHTML = `<div class="a-msg">No trains due<br>Please check timetables</div>`; continue; }
+        el.innerHTML = m[k].slice(0, ROWS).map(e => `
+          <div class="a-row"><span>${e.time}</span><span class="cut">${esc(e.place)}</span><span class="r">${e.plat}</span><span class="r">${e.status.text}</span></div>`).join('');
+      }
+    },
+  };
+}
+
+// =======================================================================================
+// B: Platform displays. The small units over each platform: 1st train with its calling
+// points scrolling underneath, 2nd/3rd taking turns on line 3, clock on line 4.
+// =======================================================================================
+function mountB(root) {
+  const unit = (id, sign) => `
+    <figure class="b-unit" data-unit="${id}">
+      <figcaption class="b-sign">${sign}</figcaption>
+      <div class="b-screen matrix led">
+        <div class="b-line" data-l1></div>
+        <div class="b-line ticker" data-l2><span></span></div>
+        <div class="b-line" data-l3></div>
+        <div class="b-line b-clock" data-clock></div>
+      </div>
+    </figure>`;
+  root.innerHTML = `
+    <div class="b-wrap">
+      <div class="b-station">Portslade</div>
+      <h2 class="b-sec">Departures</h2>
+      <div class="b-units">${unit('p1', 'Platform <b>1</b>')}${unit('p2', 'Platform <b>2</b>')}</div>
+      <h2 class="b-sec">Arrivals</h2>
+      <div class="b-units">${unit('arr', 'Arriving from')}</div>
+    </div>`;
+  let m = null;
+  const listFor = id => !m ? [] : id === 'arr' ? m.arr : m.dep.filter(e => e.s.side === (id === 'p1' ? '1' : '2'));
+  const ords = ['1st', '2nd', '3rd'];
+  const line = (e, n) => {
+    // No room for "(bus)" after a long name: an on-time bus says Bus where the status goes.
+    const status = e.s.bus && e.status.kind === 'ontime' ? 'Bus' : e.status.text;
+    return `<span>${ords[n]}</span><span>${e.time}</span><span class="cut">${esc(e.place)}</span><span class="r">${status}</span>`;
+  };
+  for (const id of ['p1', 'p2', 'arr']) {
+    ticker(root.querySelector(`[data-unit="${id}"] [data-l2]`), () => {
+      if (!m) return [];
+      if (m.down) return [NO_FEED];
+      const first = listFor(id)[0];
+      return [first ? describe(first, false) : NO_TRAINS];
+    }, 75);
+  }
+  function draw(now) {
+    if (!m) return;
+    const flip = Math.floor(now / 4000) % 2;     // line 3 alternates 2nd / 3rd every 4 s
+    for (const id of ['p1', 'p2', 'arr']) {
+      const u = root.querySelector(`[data-unit="${id}"]`);
+      const l1 = u.querySelector('[data-l1]'), l3 = u.querySelector('[data-l3]');
+      const list = listFor(id);
+      l1.classList.toggle('b-note', m.down || !list.length);
+      l3.classList.toggle('b-note', m.down || !list.length);
+      if (m.down) { l1.textContent = 'Please check timetables'; l3.textContent = ''; continue; }
+      if (!list.length) { l1.textContent = 'No trains due'; l3.textContent = ''; continue; }
+      l1.innerHTML = line(list[0], 0);
+      const n = list.length > 2 ? 1 + flip : 1;
+      l3.innerHTML = list[n] ? line(list[n], n) : '';
+    }
+  }
+  return { update(nm) { m = nm; draw(Date.now()); }, tick: draw };
+}
+
+// =======================================================================================
+// C: Modern screen. One board at a time, alternating every 20 s (tap a tab to hold it).
+// Next train expanded with every stop; minutes late spelled out on every row.
+// =======================================================================================
+function mountC(root) {
+  const ROTATE = 20000, HOLD = 60000;
+  root.innerHTML = `
+    <div class="c-screen">
+      <header class="c-top">
+        <div class="c-tabs" role="tablist">
+          <button type="button" role="tab" data-tab="dep">Departures</button>
+          <button type="button" role="tab" data-tab="arr">Arrivals</button>
+        </div>
+        <div class="c-meta"><span class="c-stn">Portslade</span><span class="c-clock" data-clock></span></div>
+      </header>
+      <div class="c-progress"><i data-progress></i></div>
+      <div data-body></div>
+      <div class="c-ticker ticker"><span></span></div>
+    </div>`;
+  let m = null, tab = 'dep', shownAt = Date.now(), heldUntil = 0;
+  const statusHtml = e => {
+    const st = e.status;
+    const pill = st.kind === 'late' ? `<span class="pill">${st.mins} min${st.mins === 1 ? '' : 's'} late</span>`
+      : st.kind === 'delayed' ? '<span class="pill">No estimate</span>' : '';
+    return `<span class="st-${st.kind}">${st.text}${pill}</span>`;
+  };
+  function draw() {
+    root.querySelectorAll('[data-tab]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
+    const body = root.querySelector('[data-body]');
+    if (!m) return;
+    if (m.down) { body.innerHTML = `<div class="c-empty">Live train information is unavailable<span>Please check timetables before you travel.</span></div>`; return; }
+    const list = m[tab];
+    if (!list.length) { body.innerHTML = `<div class="c-empty">No trains are due in the next 2 hours<span>Please check timetables.</span></div>`; return; }
+    const [h, ...rest] = list;
+    const dep = tab === 'dep';
+    const stops = h.s.cancelled ? '' : `
+      <div class="c-label">${dep ? (h.s.bus ? 'Replacement bus calling at' : 'Calling at') : 'Travelling from ' + esc(h.s.origin) + ' via'}</div>
+      <ol class="c-stops">${h.stops.map(x => `<li>${esc(x.name)}${x.time ? `<time>${x.time}</time>` : ''}</li>`).join('')}</ol>`;
+    const foot = [h.s.bus ? 'Rail replacement bus' : `${h.s.operator} · ${h.s.coaches} coaches`];
+    if (h.s.reason) foot.push(`${h.s.cancelled ? 'Cancelled' : 'Delayed'} because of ${h.s.reason}`);
+    body.innerHTML = `
+      <section class="c-hero">
+        <div class="c-hero-top">
+          <div class="c-hero-time"><small>${dep ? 'Next departure' : 'Next arrival'}</small>${h.time}</div>
+          <div class="c-hero-place"><small>${dep ? 'To' : 'From'}</small>${esc(h.place)}</div>
+          <div class="c-hero-plat"><small>Platform</small>${h.plat === 'BUS' ? 'Bus' : h.plat}</div>
+        </div>
+        <div class="c-hero-status">${statusHtml(h)}</div>
+        ${stops}
+        <p class="c-foot">${esc(foot.join(' · '))}</p>
+      </section>
+      <div class="c-row c-listhead"><span class="t">Time</span><span class="p">${dep ? 'Destination' : 'From'}</span><span class="pl">Plat</span><span class="s">Expected</span></div>
+      <ol class="c-list">${rest.slice(0, 6).map(e => `
+        <li class="c-row">
+          <span class="t">${e.time}</span>
+          <span class="p"><b>${esc(e.place)}</b><span>${e.s.cancelled ? 'Cancelled' : (dep ? 'Calling at ' : 'Via ') + esc(e.stops.map(x => x.name).join(', ') || e.place)}</span></span>
+          <span class="pl"><b>${e.plat}</b></span>
+          <span class="s">${statusHtml(e)}</span>
+        </li>`).join('')}</ol>`;
+  }
+  root.querySelectorAll('[data-tab]').forEach(b => b.addEventListener('click', () => {
+    tab = b.dataset.tab; shownAt = Date.now(); heldUntil = Date.now() + HOLD; draw(); tick(Date.now());
+  }));
+  ticker(root.querySelector('.c-ticker'), () => {
+    if (!m) return [];
+    if (m.down) return [NO_FEED];
+    const list = m[tab].slice(1, 7).map(e => describe(e, true));
+    if (m.message) list.unshift(m.message);
+    return list.length ? list : [NO_TRAINS];
+  }, 95);
+  function tick(now) {
+    if (now >= heldUntil && now - shownAt >= ROTATE) { tab = tab === 'dep' ? 'arr' : 'dep'; shownAt = now; draw(); }
+    const frac = now < heldUntil ? 1 : Math.min(1, (now - shownAt) / ROTATE);
+    root.querySelector('[data-progress]').style.width = (frac * 100) + '%';
+  }
+  return { update(nm) { m = nm; draw(); }, tick };
+}
+
+// ---------------------------------------------------------------------------------------
+// Prototype shell: variant + scenario from the URL, the floating bar, the 1 s loop.
+// The 15 s re-read stands in for polling the server.
+// ---------------------------------------------------------------------------------------
+const VARIANTS = {
+  A: { name: 'Concourse board', mount: mountA },
+  B: { name: 'Platform displays', mount: mountB },
+  C: { name: 'Modern screen', mount: mountC },
+};
+const KEYS = Object.keys(VARIANTS);
+const params = new URLSearchParams(location.search);
+const state = {
+  variant: KEYS.includes((params.get('variant') || '').toUpperCase()) ? params.get('variant').toUpperCase() : 'A',
+  scenario: SCENARIOS[params.get('scenario')] ? params.get('scenario') : 'every',
+  services: [],
+  view: null,
+};
+const app = document.getElementById('app');
+
+function writeUrl() {
+  try { history.replaceState(null, '', `?variant=${state.variant}&scenario=${state.scenario}`); } catch (e) { /* sandboxed viewer */ }
+}
+function clocks(now) {
+  const t = fmt(new Date(now), true);
+  document.querySelectorAll('[data-clock]').forEach(el => { el.textContent = t; });
+}
+function render() {
+  tickers.forEach(t => t.stop()); tickers = [];
+  document.body.className = 'v' + state.variant;
+  app.innerHTML = '';
+  state.view = VARIANTS[state.variant].mount(app);
+  state.view.update(model(new Date()));
+  clocks(Date.now());
+  document.querySelector('[data-vlabel]').textContent = `${state.variant} · ${VARIANTS[state.variant].name}`;
+  document.querySelector('[data-scn]').textContent = SCENARIOS[state.scenario];
+  writeUrl();
+}
+function step(dir) {
+  const i = KEYS.indexOf(state.variant);
+  state.variant = KEYS[(i + dir + KEYS.length) % KEYS.length];
+  render();
+}
+function nextScenario() {
+  const names = Object.keys(SCENARIOS);
+  state.scenario = names[(names.indexOf(state.scenario) + 1) % names.length];
+  state.services = buildServices(state.scenario, Date.now());
+  render();
+}
+
+document.querySelector('[data-prev]').addEventListener('click', () => step(-1));
+document.querySelector('[data-next]').addEventListener('click', () => step(1));
+document.querySelector('[data-scn]').addEventListener('click', nextScenario);
+document.addEventListener('keydown', e => {
+  if (e.target.closest('input, textarea, [contenteditable]')) return;
+  if (e.key === 'ArrowLeft') step(-1);
+  else if (e.key === 'ArrowRight') step(1);
+  else if (e.key === 's' || e.key === 'S') nextScenario();
+});
+
+state.services = buildServices(state.scenario, Date.now());
+render();
+let lastPoll = Date.now();
+setInterval(() => {
+  const now = Date.now();
+  clocks(now);
+  if (now - lastPoll >= 15000) { lastPoll = now; state.view.update(model(new Date(now))); }
+  if (state.view.tick) state.view.tick(now);
+}, 1000);
+// Fonts change the text width; restart the scrolling lines once the dot-matrix font is in.
+if (document.fonts) document.fonts.ready.then(render);
+</script>
+</body>
+</html>
