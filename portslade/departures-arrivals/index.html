@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<!--
+  Portslade departures board. Platform displays (design B of the prototype on the
+  prototype/departures-arrivals branch), departures only.
+
+  Everything is in this one file on purpose: with no separate .js/.css there is no old-script /
+  new-page pairing for the browser cache to get wrong (see "bump-assets" in CLAUDE.md).
+
+  The page only DRAWS. What each train's status says, the order, and the scrolling line all
+  arrive ready-made from /api/departures (boards-server/board-data.js), so they can't drift
+  from what the server decided.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#23262a">
+<link rel="icon" type="image/svg+xml" href="../../shared/icon.svg">
+<title>Portslade departures</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Doto:wght@700..900&display=swap" rel="stylesheet">
+<style>
+  :root { --amber: #ffa200; --glow: rgba(255,150,0,.5); }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { min-height: 100vh; background: #d7dade; color: #15181c; font-family: system-ui, -apple-system, "Segoe UI", Arial, sans-serif; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 22px 16px 32px; }
+
+  .station {
+    display: inline-block; font: 700 22px/1 system-ui, sans-serif; letter-spacing: .02em;
+    background: #fff; color: #15181c; padding: 10px 16px; border-radius: 4px; box-shadow: 0 2px 0 #b9bdc2;
+  }
+  .sec { font: 700 12px/1 system-ui, sans-serif; letter-spacing: .18em; text-transform: uppercase; color: #5b6168; margin: 26px 0 10px; }
+  .sample { display: none; margin-left: 10px; background: #ff2d78; color: #fff; border-radius: 99px; padding: 3px 8px; letter-spacing: .08em; }
+  body.is-sample .sample { display: inline-block; }
+
+  .units { display: grid; gap: 18px; grid-template-columns: minmax(0, 1fr); }
+  @media (min-width: 880px) { .units { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+  .unit { container-type: inline-size; background: #23262a; border-radius: 10px; padding: 0 10px 10px; box-shadow: 0 10px 22px rgba(0,0,0,.28); }
+  .unit[hidden] { display: none; }
+  .sign { font: 700 13px/1 system-ui, sans-serif; color: #fff; padding: 10px 4px; letter-spacing: .06em; text-transform: uppercase; }
+  .sign b { display: inline-block; background: #fff; color: #23262a; border-radius: 3px; padding: 2px 6px; margin-left: 6px; }
+
+  /* The dot-matrix screen: amber dot font over a faint grid of unlit LEDs. */
+  .screen {
+    border-radius: 4px; padding: 10px 14px; line-height: 1.5;
+    font-family: 'Doto', ui-monospace, Menlo, Consolas, monospace; font-weight: 900;
+    font-size: clamp(13px, 4.2cqi, 24px);
+    color: var(--amber); text-shadow: 0 0 5px var(--glow);
+    background-color: #030303;
+    background-image: radial-gradient(circle, rgba(255,176,0,.075) 0 1px, transparent 1.4px);
+    background-size: 4px 4px;
+  }
+  .line { display: grid; grid-template-columns: 3ch 5ch minmax(0, 1fr) 9ch; gap: 0 1ch; white-space: nowrap; height: 1.5em; overflow: hidden; }
+  .line.note, .line.ticker, .line.clock { display: block; text-align: center; }
+  .line.ticker { text-align: left; }
+  .line > span { overflow: hidden; }
+  .line > .r { text-align: right; }
+  .ticker > span { display: inline-block; will-change: transform; transform: translateX(110%); }
+
+  .foot { margin-top: 22px; font-size: 13px; color: #5b6168; }
+  .foot.stale { color: #b42318; font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="station">Portslade</div>
+  <h1 class="sec">Departures<span class="sample">SAMPLE TRAINS, NOT LIVE</span></h1>
+  <div class="units" id="units"></div>
+  <p class="foot" id="foot">Connecting…</p>
+</div>
+
+<script>
+'use strict';
+
+// Go-live: point this at the backend's endpoint instead of the local server.
+const API = '/api/departures';
+const POLL_MS = 20000;
+const STALE_MS = 120000;        // older than this and the board stops showing times as live
+const PLATFORMS = ['1', '2'];   // always shown, in this order; anything else goes in "Other departures"
+const ORD = ['1st', '2nd', '3rd'];
+const TZ = 'Europe/London';
+
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const clock = (d, secs) => d.toLocaleTimeString('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit', ...(secs ? { second: '2-digit' } : {}) });
+
+let board = null;      // last good payload from the server
+let gotAt = 0;         // when it arrived (this device's clock)
+let asked = false;     // the first poll has come back, good or bad
+const unitsEl = document.getElementById('units');
+const units = {};      // key -> { el, l1, l3 }
+
+function unit(key, sign) {
+  const el = document.createElement('figure');
+  el.className = 'unit';
+  el.innerHTML = `
+    <figcaption class="sign">${sign}</figcaption>
+    <div class="screen">
+      <div class="line" data-l1></div>
+      <div class="line ticker" data-l2><span></span></div>
+      <div class="line" data-l3></div>
+      <div class="line clock" data-clock></div>
+    </div>`;
+  unitsEl.appendChild(el);
+  units[key] = { el, l1: el.querySelector('[data-l1]'), l3: el.querySelector('[data-l3]') };
+  ticker(el.querySelector('[data-l2]'), () => tickerItems(key));
+}
+
+const live = () => board && Date.now() - gotAt < STALE_MS;
+
+function trainsFor(key) {
+  if (!board) return [];
+  return board.departures.filter(d => key === 'other' ? !PLATFORMS.includes(d.platform) : d.platform === key);
+}
+
+// The 1st train's scrolling line: its calling points, then, only when it is actually delayed
+// or cancelled and the feed says why, the reason. One after the other, round and round.
+function tickerItems(key) {
+  if (!asked) return [];
+  if (!live()) return ['Live train information is unavailable. Please check timetables before you travel.'];
+  const first = trainsFor(key)[0];
+  if (!first) return [];
+  return [first.callingAt, first.reason].filter(Boolean);
+}
+
+function row(d, n) {
+  return `<span>${ORD[n]}</span><span>${esc(d.time)}</span><span>${esc(d.destination)}</span><span class="r">${esc(d.status.text)}</span>`;
+}
+
+function draw(now) {
+  const ok = live();
+  units.other.el.hidden = !ok || trainsFor('other').length === 0;
+  const flip = Math.floor(now / 4000) % 2;     // line 3 takes turns: 2nd, then 3rd, every 4 s
+  for (const key of Object.keys(units)) {
+    const { l1, l3 } = units[key];
+    const list = trainsFor(key);
+    const note = !ok || list.length === 0;
+    l1.classList.toggle('note', note);
+    l3.classList.toggle('note', note);
+    if (!ok) { l1.textContent = asked ? 'Please check timetables' : ''; l3.textContent = ''; continue; }
+    if (!list.length) { l1.textContent = 'No trains due'; l3.textContent = ''; continue; }
+    l1.innerHTML = row(list[0], 0);
+    const n = list.length > 2 ? 1 + flip : 1;
+    l3.innerHTML = list[n] ? row(list[n], n) : '';
+  }
+  const t = clock(new Date(now), true);
+  document.querySelectorAll('[data-clock]').forEach(el => { el.textContent = t; });
+
+  const foot = document.getElementById('foot');
+  foot.classList.toggle('stale', asked && !ok);
+  foot.textContent = !asked ? 'Connecting…'
+    : ok ? `Powered by National Rail Enquiries · updated ${clock(new Date(gotAt), true)}`
+    : board ? `Live information unavailable since ${clock(new Date(gotAt), true)} · retrying`
+    : 'Live information unavailable · retrying';
+}
+
+// Scrolling line: each item in turn, right to left at a steady speed. Re-reads its items
+// at the start of every pass, so a new 1st train takes over after the current pass.
+function ticker(el, items, speed = 75) {
+  const span = el.querySelector('span');
+  let i = 0;
+  (function next() {
+    const list = items();
+    if (!list.length) { span.textContent = ''; setTimeout(next, 1000); return; }
+    span.textContent = list[i++ % list.length];
+    const w = el.clientWidth, tw = span.scrollWidth;
+    const anim = span.animate([{ transform: `translateX(${w}px)` }, { transform: `translateX(${-tw}px)` }],
+      { duration: (w + tw) / speed * 1000, easing: 'linear', fill: 'forwards' });
+    anim.onfinish = () => setTimeout(next, 300);
+  })();
+}
+
+async function poll() {
+  try {
+    const res = await fetch(API, { cache: 'no-store' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const b = await res.json();
+    if (!Array.isArray(b.departures)) throw new Error('unexpected reply');
+    board = b; gotAt = Date.now();
+    document.body.classList.toggle('is-sample', b.source === 'sample');
+  } catch (e) {
+    // Keep the last board; draw() stops showing it as live once it is STALE_MS old.
+  }
+  asked = true;
+  draw(Date.now());
+}
+
+PLATFORMS.forEach(p => unit(p, `Platform <b>${esc(p)}</b>`));
+unit('other', 'Other departures');
+draw(Date.now());
+poll();
+setInterval(poll, POLL_MS);
+setInterval(() => draw(Date.now()), 1000);
+</script>
+</body>
+</html>

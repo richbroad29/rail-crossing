@@ -5,3 +5,7 @@ backend/
 
 # Dependencies
 node_modules/
+
+# Departures board local server: the National Rail key, and the last raw feed reply
+boards-server/.env
+boards-server/last-response.json

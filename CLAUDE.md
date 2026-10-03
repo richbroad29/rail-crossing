@@ -30,6 +30,18 @@ README.md                        Almost empty
 portslade/observe/               Barrier-observation PWA — field data-collection tool (separate app, /portslade/observe/)
 ```
 
+### Departures board — `portslade/departures-arrivals/` (local proof of concept, 2026-10-03)
+
+A National-Rail-style departures board for Portslade, separate from the crossing app: platform
+displays (one dot-matrix unit per platform), departures only. Chosen from a three-way UI prototype
+that lives on the `prototype/departures-arrivals` branch. Not live yet — it runs locally:
+`node boards-server/server.js` (see `boards-server/README.md`). The server holds the key for the
+**public** Live Departure Board feed on Rail Data Marketplace (not the staff feed the crossing
+backend uses: the public one already hides passing and suppressed services and gives delay reasons
+as text). All board decisions are in `boards-server/board-data.js`; the page only draws.
+`boards-server/` must never be published to Pages: at go-live its `/api/departures` moves into
+backend-v2 and the page's `API` constant points there.
+
 ### `shared/predict.js` — read this before touching either front-end
 
 Anything the two apps must **agree** on lives here: the closure mapping and confidence

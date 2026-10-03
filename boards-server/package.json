@@ -1,0 +1,11 @@
+{
+  "name": "portslade-departures-local",
+  "private": true,
+  "description": "Local proof-of-concept server for the Portslade departures board. No dependencies.",
+  "scripts": {
+    "start": "node server.js",
+    "sample": "node server.js --sample",
+    "test": "node --test test/board-data.test.js"
+  },
+  "engines": { "node": ">=18" }
+}
