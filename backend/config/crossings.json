@@ -13,15 +13,18 @@
     "td": {
       "area": "LA",
       "_comment_chain": "approachChain is the berth order a train steps through on the way IN, nearest-last. It gives (a) the set of berths whose strike-in is recorded, and (b) an ordering so the CLOSED backstop can tell whether a train is still upstream of its close anchor. Derived from TD step order (see the berth-chain derivation) and verified against SMART.",
+      "_comment_queueMaxAhead": "How far ahead a same-direction train can be and still count as QUEUING this one, in berths along approachChain (the clear-step destination, 0002 east / 0007 west, is one step past the last chain berth). Applies to the COUNTDOWN's queued hold only (crossing-state queuedBound); the BARRIERS DOWN gate keeps the unlimited test. Absent = unlimited, the behaviour before 2026-10. SET FROM scripts/backtest-transits.js section 6a, 2026-10-05, training window to 2026-07-26: the delay on each class's anchor->crossing row, by distance to the train ahead at the anchor strike, against trains with nothing ahead. East stopping 0008>XING (none ahead 186s, n=1660): 1 ahead +73s (n=26), 2 ahead +41s (n=148), 3 ahead +5s (n=401) - the delay stops after 2. West stopping 0003>XING: 1 ahead +41s (n=51), 2 ahead +15s (n=136). The +73s matches C20's independent +77s. stoppingLocal shows NO penalty at any distance (-9s, -34s: the Southwick stop absorbs it). ECS is the exception, delayed at every distance (+219/+109/+70s) - about 3% of traffic, left to the queued/clear transit split. Validated: under 'any' the backtest reproduces the live held log's queued time (23,108 vs ~21,400 train-s/day, 2026-09-27..10-05); at N=2 it predicts 32% of that remains. For another crossing, re-run the backtest and read N off 6a: the furthest distance that still carries a material delay.",
       "eastbound": {
         "approach": { "from": "0006", "to": "0004" },
         "clear":    { "from": "0004", "to": "0002" },
-        "approachChain": ["0016", "0014", "0012", "0010", "0008", "0006", "0004"]
+        "approachChain": ["0016", "0014", "0012", "0010", "0008", "0006", "0004"],
+        "queueMaxAhead": 2
       },
       "westbound": {
         "approach": { "from": "0003", "to": "0005" },
         "clear":    { "from": "0005", "to": "0007" },
-        "approachChain": ["T682", "T677", "0001", "0003", "0005"]
+        "approachChain": ["T682", "T677", "0001", "0003", "0005"],
+        "queueMaxAhead": 2
       }
     },
 

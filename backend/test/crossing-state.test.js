@@ -2120,11 +2120,14 @@ console.log('  -- step 0: closePendingReason / closePendingSince --');
     const t = eastLocal('1N01', T + 200000);
     st.recordTdBerth({ headcode: '1N01', to: '0008', from: '0010', ts: iso(T), event: 'CA' });
     st.recordTdSighting('1N01', new Date(T));
-    // A leader standing ON the crossing berth (0002 east) — _blockedByAhead counts that as
-    // in the way regardless of chain position, which is the point of its onXing branch.
+    // A leader two berths ahead (in 0004, the follower being in 0008) — close enough to queue
+    // it under the shipped td.eastbound.queueMaxAhead of 2. This used to stand the leader on
+    // the crossing berth, 0002, which is THREE ahead of 0008 and so, since 2026-10, correctly
+    // not a queue at all: the backtest measured a +5s delay at that distance. The test is about
+    // two rules holding one train at once, not about distance, so the leader moved in.
     if (leaderAt !== null) {
       st.recordTdSighting('1S99', new Date(leaderAt));
-      st.recordTdBerth({ headcode: '1S99', to: '0002', from: '0004', ts: iso(leaderAt), event: 'CA' });
+      st.recordTdBerth({ headcode: '1S99', to: '0004', from: '0006', ts: iso(leaderAt), event: 'CA' });
     }
     return { st, now, t, p: st._computeClosures([t], now)[0] };
   };
@@ -2394,6 +2397,102 @@ console.log('  -- step 0: the held-episode log --');
     }
   } finally {
     logger.logHeld = realLogHeld;
+  }
+}
+
+// ---- 2026-10: queueMaxAhead — a train ahead only queues this one within N berths -----------
+//
+// The backtest (scripts/backtest-transits.js §6a, training to 2026-07-26) measured the delay on
+// east stopping's anchor->crossing row by distance to the train ahead at the anchor strike:
+// +73s at 1 berth, +41s at 2, +5s at 3. The unlimited test was holding the countdown for that
+// third group — 18% of stopping trains — for a five-second effect, and in all it held a third of
+// eastbound strikes. td.<dir>.queueMaxAhead = 2 limits the COUNTDOWN's queued hold to trains
+// that are actually slowed. The BARRIERS DOWN gate keeps the unlimited test, and a crossing
+// that does not configure the limit must behave exactly as before.
+console.log('  -- 2026-10 queueMaxAhead: a train ahead only queues this one within N berths --');
+{
+  const SHIPPED = JSON.parse(require('fs').readFileSync(
+    require('path').join(__dirname, '..', 'config', 'crossings.json'), 'utf8')).portslade;
+  const variant = (n) => { const c = JSON.parse(JSON.stringify(SHIPPED));
+    for (const d of ['eastbound', 'westbound']) { if (n === undefined) delete c.td[d].queueMaxAhead; else c.td[d].queueMaxAhead = n; }
+    return c; };
+  const UNLIMITED = variant(undefined), ONE = variant(1);
+  const T = BASE;
+  // 1H01 calls at Portslade but not Southwick: class stopping, close anchor 0008 + 55s.
+  const F = { ...mkT({ dir: 'east', headcode: '1H01', bestTimeMs: T + 200000 }), callsAtStation: true, callsAtApproach: false };
+  const build = (cfg, leaderTo, leaderFrom) => {
+    const st = new CrossingState('portslade', cfg);
+    const step = (hc, to, from, ts) => {
+      st.recordTdSighting(hc, new Date(ts));
+      st.recordTdBerth({ headcode: hc, to, from, ts: iso(ts), event: 'CA' });
+      st.recordTdClearStep({ headcode: hc, to, from, ts: iso(ts) });
+      st.recordTdCloseStrike({ headcode: hc, to, from, ts: iso(ts) });
+    };
+    step('1L01', leaderTo, leaderFrom, T - 5000);     // the leader, 5s before...
+    step('1H01', '0008', '0010', T);                   // ...the follower strikes its anchor
+    return st;
+  };
+  const now = new Date(T + 10000);
+  const queuedHold = ci => !!(ci.held && /queued/.test(ci.heldReason || ''));
+
+  check('premise: the follower is class stopping', new CrossingState('portslade', SHIPPED)._classOf(F), 'stopping');
+  check('premise: the shipped limit is 2 eastbound', new CrossingState('portslade', SHIPPED)._queueMaxAhead('east'), 2);
+  check('premise: …and 2 westbound', new CrossingState('portslade', SHIPPED)._queueMaxAhead('west'), 2);
+
+  // 1 and 2 berths ahead: measured +73s and +41s — still a queue.
+  for (const [to, from, n] of [['0006', '0008', 1], ['0004', '0006', 2]]) {
+    const st = build(SHIPPED, to, from);
+    check(`${n} ahead: seen at distance ${n}`, (st._blockedByAhead(F, now, 2) || {}).steps, n);
+    checkTruthy(`${n} ahead: the countdown is still held as queued`, queuedHold(st._closeTimeInfo(F, now)));
+  }
+
+  // 3 ahead — the leader standing in the platform, 0002. Measured +5s: not a queue.
+  {
+    const st = build(SHIPPED, '0002', '0004');
+    check('3 ahead: the unlimited test still sees it (the premise)', (st._blockedByAhead(F, now) || {}).steps, 3);
+    check('3 ahead: outside the shipped limit', st._blockedByAhead(F, now, 2), null);
+    const ci = st._closeTimeInfo(F, now);
+    check('3 ahead: the countdown is NOT held', ci.held, false);
+    check('3 ahead: …it counts down to the plain anchor close, 0008 + 55s', ci.at.toISOString(), iso(T + 55000));
+  }
+
+  // A crossing that does not set the limit behaves exactly as before.
+  {
+    const st = build(UNLIMITED, '0002', '0004');
+    check('unconfigured: the limit is unlimited', st._queueMaxAhead('east'), Infinity);
+    check('0 means no train ahead queues it — not unlimited', new CrossingState('portslade', variant(0))._queueMaxAhead('east'), 0);
+    checkTruthy('unconfigured: 3 ahead is still held as queued, as before 2026-10', queuedHold(st._closeTimeInfo(F, now)));
+  }
+
+  // The BARRIERS DOWN gate does not move — it keeps the unlimited test on purpose.
+  {
+    const a = build(SHIPPED, '0002', '0004'), b = build(UNLIMITED, '0002', '0004');
+    check('the BARRIERS DOWN gate is identical with and without the limit',
+      a._confirmedCloseTime(F, now).toISOString(), b._confirmedCloseTime(F, now).toISOString());
+    checkTruthy('…and is still deferred past the plain anchor close (the premise that it fired)',
+      a._confirmedCloseTime(F, now).getTime() > T + 55000);
+  }
+
+  // C20's second half — held until we cross once a leader clears after our anchor strike — is
+  // gated on where that leader was AT our anchor strike. Inert at Portslade with N=2 (no anchor
+  // here has more than two chain berths ahead of it), so it is exercised at N=1.
+  {
+    const mk = cfg => {
+      const st = build(cfg, '0004', '0006');           // leader 2 ahead at our anchor strike
+      st.recordTdBerth({ headcode: '1L01', to: '0002', from: '0004', ts: iso(T + 20000), event: 'CA' });
+      st.recordTdClearStep({ headcode: '1L01', to: '0002', from: '0004', ts: iso(T + 20000) });
+      st.recordTdBerth({ headcode: '1L01', to: 'T686', from: '0002', ts: iso(T + 90000), event: 'CA' });
+      return st;
+    };
+    const later = new Date(T + 100000);
+    const one = mk(ONE), unl = mk(UNLIMITED);
+    check('crossed ahead: the leader has left the road (the premise)', one._blockedByAhead(F, later), null);
+    checkTruthy('crossed ahead, unlimited: held — the leader cleared after our anchor strike', !!unl._crossedAheadSinceStrike(F, later));
+    check('crossed ahead, N=1: released — that leader was 2 ahead at our anchor strike', one._crossedAheadSinceStrike(F, later, 1), null);
+    checkTruthy('crossed ahead, N=2: still held at 2 ahead', !!one._crossedAheadSinceStrike(F, later, 2));
+    const blind = mk(ONE); blind.closeStrikeSeen.delete('1L01|0004');
+    checkTruthy('crossed ahead, leader unplaceable: held — the limit only releases on evidence', !!blind._crossedAheadSinceStrike(F, later, 1));
+    checkTruthy('crossed ahead, N=1, through the countdown: not held as queued', !queuedHold(one._closeTimeInfo(F, later)));
   }
 }
 

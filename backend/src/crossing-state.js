@@ -1053,7 +1053,14 @@ class CrossingState {
     // the past, and never earlier than the anchor rule's own answer, so it cannot pull a
     // close EARLIER than the shipped behaviour — this can only ever defer.
     const queuedBound = (info) => {
-      const ahead = this._blockedByAhead(t, now) || this._crossedAheadSinceStrike(t, now);
+      // Distance-limited (td.<dir>.queueMaxAhead): only a train close enough to actually slow
+      // this one holds its COUNTDOWN. Measured 2026-10-05 — east stopping is +73s with the
+      // leader 1 berth ahead, +41s at 2, +5s at 3 — and the unlimited test was holding a third
+      // of eastbound strikes for trains that were not late. The BARRIERS DOWN gate below in
+      // _confirmedCloseTime deliberately keeps the unlimited test: this changes what the
+      // countdown says, never when the app asserts the barrier is down.
+      const maxAhead = this._queueMaxAhead(t.direction);
+      const ahead = this._blockedByAhead(t, now, maxAhead) || this._crossedAheadSinceStrike(t, now, maxAhead);
       if (!ahead) return info;
       // The bound STOPS RECEDING at the protecting berth (td.<dir>.clear.from). That strike
       // is the last physical event before the road, so the close is no longer open-ended:
@@ -1244,7 +1251,13 @@ class CrossingState {
   // clear step AFTER this train's anchor strike and before this train crossed. If it
   // reached the road first but struck later than we did, it was in front of us — no chain
   // reasoning needed. Holds until this train clears, which is when the close stops mattering.
-  _crossedAheadSinceStrike(t, now) {
+  //
+  // `maxAhead` (default unlimited) limits it to a leader that was within that many berths at
+  // THIS train's anchor strike — the moment the stale arithmetic was taken, so the only moment
+  // its distance means anything. Placed from closeStrikeSeen, which holds every chain strike
+  // for the strike TTL. A leader that cannot be placed counts as within the limit: the limit
+  // only ever RELEASES a hold on positive evidence that the leader was too far off to matter.
+  _crossedAheadSinceStrike(t, now, maxAhead = Infinity) {
     if (!t || !t.headcode || !t.direction) return null;
     const spec = this._closeAnchor(t);
     const berth = spec ? spec.berth : this._approachBerth(t.direction);
@@ -1256,9 +1269,41 @@ class CrossingState {
     for (const [headcode, s] of this.clearStepSeen) {
       if (headcode === t.headcode) continue;
       if (s.direction !== t.direction) continue;       // the other road does not queue us
-      if (s.ts > struck.ts && s.ts < until) return { headcode, clearedAt: s.ts };
+      if (!(s.ts > struck.ts && s.ts < until)) continue;
+      if (maxAhead !== Infinity) {
+        const steps = this._stepsAheadAt(t.direction, berth, headcode, struck.ts);
+        if (steps !== null && steps > maxAhead) continue;   // too far off at our anchor strike
+      }
+      return { headcode, clearedAt: s.ts };
     }
     return null;
+  }
+
+  // How many berths ahead of `fromBerth` the train `headcode` was at time `atMs`, from its own
+  // chain strikes in closeStrikeSeen. Null when it cannot be placed ahead (no strike recorded
+  // by then, or recorded at or behind fromBerth) — callers treat null as "no evidence".
+  _stepsAheadAt(direction, fromBerth, headcode, atMs) {
+    const cfg = this.config.td && this.config.td[direction === 'east' ? 'eastbound' : 'westbound'];
+    const chain = cfg && cfg.approachChain;
+    if (!Array.isArray(chain)) return null;
+    const fromIdx = chain.indexOf(fromBerth);
+    if (fromIdx === -1) return null;
+    let idx = -1;
+    for (let j = 0; j < chain.length; j++) {
+      const s = this.closeStrikeSeen.get(this._strikeKey(headcode, chain[j]));
+      if (s && s.direction === direction && s.ts <= atMs) idx = j;
+    }
+    return idx > fromIdx ? idx - fromIdx : null;
+  }
+
+  // queueMaxAhead for a direction (crossings.json td.<dir>.queueMaxAhead), or Infinity when
+  // unset — so a crossing that does not configure it behaves exactly as before 2026-10.
+  // 0 means what it says (no train ahead ever queues this one); it must not fall through to
+  // unlimited, which is the opposite.
+  _queueMaxAhead(direction) {
+    const cfg = this.config.td && this.config.td[direction === 'east' ? 'eastbound' : 'westbound'];
+    const v = cfg && cfg.queueMaxAhead;
+    return (typeof v === 'number' && v >= 0) ? v : Infinity;
   }
 
   // Register #20 — is this train QUEUED behind another going the same way?
@@ -1281,7 +1326,11 @@ class CrossingState {
   // Measured over 108 days of TD, 9,939 consecutive eastbound pairs: of the 682 that merged
   // on the same-direction branch, 675 (99.0%) were queued by this test; of the 9,029 that
   // did not merge, 7 (0.1%) were. It isolates the fault almost exactly.
-  _blockedByAhead(t, now) {
+  //
+  // `maxAhead` (default unlimited — the rule above) counts a train only if it is at most that
+  // many berths ahead, the crossing berth being one step past the last chain berth. The
+  // result now also carries `steps`, the distance to the nearest train ahead.
+  _blockedByAhead(t, now, maxAhead = Infinity) {
     if (!t || !t.headcode || !t.direction) return null;
     const cfg = this.config.td && this.config.td[t.direction === 'east' ? 'eastbound' : 'westbound'];
     const chain = cfg && cfg.approachChain;
@@ -1299,11 +1348,16 @@ class CrossingState {
       // On the crossing berth: in the way regardless of chain position (it has no index).
       const onXing = xingBerth && live.berth === xingBerth;
       if (!onXing && (idx === -1 || idx <= hereIdx)) continue;
-      // Nearest one ahead wins, and the crossing berth is nearer than any chain berth.
+      // Nearest to THIS train wins. The crossing berth is one step past the last chain berth,
+      // so it ranks as the FURTHEST ahead — nearer the road, not nearer the follower. (This
+      // comment used to say the opposite; the code always did this.)
       const rank = onXing ? chain.length : idx;
       if (!best || rank < best.rank) best = { headcode, berth: live.berth, rank };
     }
-    return best ? { headcode: best.headcode, berth: best.berth } : null;
+    if (!best) return null;
+    const steps = best.rank - hereIdx;
+    if (steps > maxAhead) return null;                 // nearest is too far off, so all are
+    return { headcode: best.headcode, berth: best.berth, steps };
   }
 
   // CONFIRMED close time (gated CLOSED onset) for a single train. Strike-based when
@@ -1337,6 +1391,8 @@ class CrossingState {
     // still run. What is deferred is only the assertion that the barrier is already down.
     const dirCfg = this.config.td && this.config.td[t.direction === 'east' ? 'eastbound' : 'westbound'];
     const protecting = dirCfg && dirCfg.clear && dirCfg.clear.from;
+    // UNLIMITED on purpose (no queueMaxAhead): the 2026-10 distance limit narrows what the
+    // countdown calls queued, not when the app may assert BARRIERS DOWN.
     if (protecting && !this._freshStrike(t, now, protecting)
         && (this._blockedByAhead(t, now) || this._crossedAheadSinceStrike(t, now))) {
       const offsetSecs = anchor && typeof anchor.offsetSecs === 'number' ? anchor.offsetSecs : 0;
