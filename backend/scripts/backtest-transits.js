@@ -86,25 +86,43 @@ const out = cells => console.log('  ' + cells.map(([v, w]) => (w < 0 ? String(v)
   for (const r of runs) byDir[r.dirn].push(r);
   for (const d of ['east', 'west']) byDir[d].sort((a, b) => a.xt - b.xt);
   const lowerBound = (arr, t) => { let lo = 0, hi = arr.length; while (lo < hi) { const m = (lo + hi) >> 1; if (arr[m].xt < t) lo = m + 1; else hi = m; } return lo; };
-  function blockedAt(run, berth, t) {
-    const chain = CHAIN[run.dirn], myIdx = chain.indexOf(berth), arr = byDir[run.dirn];
-    for (let i = lowerBound(arr, t - 30 * 60000); i < arr.length && arr[i].xt <= t + 30 * 60000; i++) {
-      const o = arr[i];
-      if (o === run) continue;
+  // Same-direction runs that could be in the way at any instant in [from, to] — the window the
+  // live test would look across, widened to cover a whole approach so it is found once per run.
+  const candidates = (run, from, to) => {
+    const arr = byDir[run.dirn], out = [];
+    for (let i = lowerBound(arr, from - 30 * 60000); i < arr.length && arr[i].xt <= to + 30 * 60000; i++) if (arr[i] !== run) out.push(arr[i]);
+    return out;
+  };
+  // HOW MANY BERTHS AHEAD the nearest same-direction train is, for a train at chain index myIdx at
+  // time t; Infinity when nothing is in the way. The crossing berth (0002 east / 0007 west) counts
+  // as one step past the last chain berth. "Queued" under today's live rule is simply < Infinity,
+  // so N = any reproduces the old yes/no exactly; a distance limit N is <= N.
+  function nearestAhead(run, myIdx, t, cands) {
+    const chain = CHAIN[run.dirn], xIdx = chain.length;
+    let best = Infinity;
+    for (const o of cands) {
+      if (o.xt < t - 30 * 60000 || o.xt > t + 30 * 60000) continue;
       if (t >= o.xt) {
         const left = o.outTs !== null ? o.outTs : o.xt + 120000;
-        if (t < left) return true;                       // on the crossing berth: in the way
+        if (t < left) best = Math.min(best, xIdx - myIdx);   // on the crossing berth: in the way
         continue;
       }
       let idx = -1, seen = 0;
       for (let j = 0; j < chain.length; j++) { const s = o.ins[chain[j]]; if (s !== undefined && s <= t) { idx = j; seen = s; } }
-      if (idx > myIdx && t - seen <= STRIKE_TTL_MS) return true;
+      if (idx > myIdx && t - seen <= STRIKE_TTL_MS) best = Math.min(best, idx - myIdx);
     }
-    return false;
+    return best;
   }
   for (const r of runs) {
-    r.q = {};
-    for (const b of CHAIN[r.dirn]) if (r.ins[b] !== undefined) r.q[b] = blockedAt(r, b, r.ins[b]);
+    r.q = {}; r.ahead = {};
+    const strikes = CHAIN[r.dirn].filter(b => r.ins[b] !== undefined).map(b => r.ins[b]);
+    r.cands = candidates(r, Math.min(...strikes), r.xt);
+    CHAIN[r.dirn].forEach((b, idx) => {
+      if (r.ins[b] === undefined) return;
+      r.ahead[b] = nearestAhead(r, idx, r.ins[b], r.cands);
+      r.q[b] = r.ahead[b] < Infinity;
+    });
+    if (r.day <= CUTOFF) r.cands = null;      // only the test window's hold simulation needs it again
   }
 
   // ---------------------------------------------------------------- samples
@@ -117,7 +135,7 @@ const out = cells => console.log('  ' + cells.map(([v, w]) => (w < 0 ? String(v)
     r.samp = {};
     const anchor = anchors[r.dirn][r.cls];
     for (const p of pairsOf(r)) {
-      const smp = { dirn: r.dirn, cls: r.cls, key: p.key, to: p.to,
+      const smp = { dirn: r.dirn, cls: r.cls, key: p.key, to: p.to, ahead: r.ahead[p.from],
         secs: p.secs, at: r.ins[p.from], done: r.ins[p.to], q: !!r.q[p.from], train: r.day <= CUTOFF };
       samples.push(smp);
       if (p.to === XING || p.to === anchor) r.samp[p.key] = smp;
@@ -347,6 +365,144 @@ const out = cells => console.log('  ' + cells.map(([v, w]) => (w < 0 ? String(v)
       [best === 'BASE' ? '' : (sc[best] - sc.BASE > 0 ? '+' : '') + f1(sc[best] - sc.BASE), 8]]);
   }
   console.log('  * fewer than 30 test samples: treat that row\'s winner as noise.');
+
+  // ---------------------------------------------------------------- 6. queue sweep
+  // Which definition of "queued" picks out the trains a leader actually slows? Today's live rule
+  // (_blockedByAhead) counts ANY same-direction train anywhere further along the chain. C20
+  // measured its 77s penalty on a much tighter group: pairs close enough to merge. Here the
+  // train ahead only counts if it is at most N berths ahead, and each N is judged three ways.
+  const NS = [1, 2, 3, 4, Infinity];
+  const nLabel = N => (N === Infinity ? 'any' : 'N=' + N);
+  // `ahead` is Infinity when nothing is in the way, and Infinity <= Infinity is true — so the
+  // comparison is never written bare. Under N = any this is exactly the old yes/no.
+  const isQ = (ahead, N) => ahead !== Infinity && ahead <= N;
+  console.log('\n=== 6. QUEUE SWEEP — which definition of "queued" picks out the trains a leader actually slows?');
+  console.log('  N: the train ahead only counts if it is at most N berths ahead; the crossing berth (0002 east / 0007');
+  console.log('  west) is one step past the last chain berth. "any" is today\'s live rule (_blockedByAhead).');
+
+  // 6a ------------------------------------------------------------------------------------
+  // By EXACT distance, not "within N": a cumulative median hides dilution until the delayed trains
+  // fall below half the group, so it cannot show where the delay stops. Each distance is compared
+  // with trains that had nothing ahead at all. N is then the furthest distance that still pays.
+  console.log('\n-- 6a. Queue penalty BY DISTANCE on the row that sets each class\'s close (anchor -> crossing), training window.');
+  console.log('  "none ahead" = median with no train in the way. Each distance: its median minus that, then n and the');
+  console.log('  share of the class\'s anchor strikes at that distance. "-" = under 15 trains, too thin to read.');
+  const DIST = [[1, 1], [2, 2], [3, 3], [4, Infinity]];
+  out([['', -5], ['class', -14], ['row', -10], ['none ahead', 14]].concat(DIST.map(([a]) => [a === 4 ? '4+ ahead' : `${a} ahead`, 17])));
+  for (const d of ['east', 'west']) {
+    for (const [cls, A] of Object.entries(anchors[d])) {
+      const rs = trainRuns.filter(r => r.dirn === d && r.cls === cls && r.ins[A] !== undefined)
+        .map(r => ({ secs: (r.xt - r.ins[A]) / 1000, ahead: r.ahead[A] })).filter(x => x.secs > 0 && x.secs <= 1800);
+      if (!rs.length) continue;
+      const none = rs.filter(x => x.ahead === Infinity).map(x => x.secs);
+      const base = none.length >= MIN_N ? median(none) : NaN;
+      const cells = DIST.map(([lo, hi]) => {
+        const g = rs.filter(x => x.ahead !== Infinity && x.ahead >= lo && x.ahead <= hi).map(x => x.secs);
+        const share = f0(100 * g.length / rs.length) + '%';
+        if (g.length < MIN_N || !isFinite(base)) return [g.length ? `- n${g.length}` : '', 17];
+        const gap = median(g) - base;
+        return [`${gap >= 0 ? '+' : ''}${f0(gap)}s n${g.length} ${share}`, 17];
+      });
+      out([[d, -5], [cls, -14], [`${A}>XING`, -10], [isFinite(base) ? `${f0(base)}s n${none.length}` : '-', 14]].concat(cells));
+    }
+  }
+
+  // 6b ------------------------------------------------------------------------------------
+  // QSPLIT at each N, rows to the crossing, fit on training and scored on test exactly as section 1.
+  const xTrain = samples.filter(x => x.train && x.to === XING), xTest = test.filter(x => x.to === XING);
+  const fitN = new Map();
+  for (const N of NS) {
+    const g = new Map();
+    for (const x of xTrain) { const k = `${rowKey(x)}|${N}|${isQ(x.ahead, N) ? 1 : 0}`; if (!g.has(k)) g.set(k, []); g.get(k).push(x.secs); }
+    for (const [k, v] of g) if (v.length >= MIN_N) fitN.set(k, median(v));
+  }
+  const predN = (x, N) => { const v = fitN.get(`${rowKey(x)}|${N}|${isQ(x.ahead, N) ? 1 : 0}`); return v !== undefined ? v : fit.get(rowKey(x)).med; };
+  const errStats = (list, pf) => {
+    const e = list.map(x => x.secs - pf(x)); const n = e.length; if (!n) return null;
+    return { n, mae: e.reduce((a, b) => a + Math.abs(b), 0) / n, bias: e.reduce((a, b) => a + b, 0) / n,
+      early: 100 * e.filter(v => v < -30).length / n };
+  };
+  const split6b = (title, rowFilter) => {
+    console.log('\n' + title);
+    out([['', -5], ['', -10], ['flagged', 8], ['queued n', 9], ['MAE', 6], ['bias', 6], ['early', 7],
+      ['clear n', 8], ['MAE', 6], ['bias', 6], ['early', 7], ['all MAE', 8]]);
+    for (const d of ['east', 'west']) {
+      const lst = xTest.filter(x => x.dirn === d && rowFilter(x));
+      if (!lst.length) continue;
+      const b = errStats(lst, x => fit.get(rowKey(x)).med);
+      out([[d.toUpperCase(), -5], ['BASE', -10], ['', 8], ['', 9], ['', 6], ['', 6], ['', 7], ['', 8], ['', 6], ['', 6], ['', 7], [f1(b.mae), 8]]);
+      for (const N of NS) {
+        const pf = x => predN(x, N);
+        const q = errStats(lst.filter(x => isQ(x.ahead, N)), pf), c = errStats(lst.filter(x => !isQ(x.ahead, N)), pf), a = errStats(lst, pf);
+        const cell = (r, w) => (r ? [[r.n, w], [f1(r.mae), 6], [f1(r.bias), 6], [f1(r.early) + '%', 7]] : [['-', w], ['', 6], ['', 6], ['', 7]]);
+        out([['', -5], ['QSPLIT ' + (N === Infinity ? 'any' : N), -10], [f1(100 * (q ? q.n : 0) / lst.length) + '%', 8]]
+          .concat(cell(q, 9), cell(c, 8), [[f1(a.mae), 8]]));
+      }
+    }
+  };
+  console.log('\n-- 6b. Split prediction to the crossing at each N, test window. Error in s; early = unsafe-miss %;');
+  console.log('  flagged = share of these predictions made while the definition called the train queued.');
+  split6b('   from each class\'s ANCHOR (the row that sets the close; the queue state is read where it matters)',
+    x => x.key === `${anchors[x.dirn][x.cls]}>${XING}`);
+  split6b('   from EVERY berth (a queue read far out says little about the queue at the anchor)', () => true);
+
+  // 6c ------------------------------------------------------------------------------------
+  // "Train held" the queued rule would produce at each N. Every 10 s through each approach — from
+  // the first chain strike until the train crosses — ask what the live rule asks:
+  //   queued now     a train within N berths ahead at this instant (_blockedByAhead), and
+  //   cleared ahead  C20's second half (_crossedAheadSinceStrike): once a train ahead performs its
+  //                  clear step after this train's anchor strike, held until this train crosses.
+  //                  For finite N it only applies if the train was within N at its anchor strike —
+  //                  the stale-anchor problem it guards against only arises for a train queued then.
+  // The 'any' total over --recent is the check: it should sit near held-report.js's queued +
+  // queued+unstruck seconds per day. If it does not, this section is not describing the live rule.
+  const STEP = 10000;
+  function queueHeld(run) {
+    const chain = CHAIN[run.dirn], st = chain.map(b => run.ins[b]);
+    const first = Math.min(...st.filter(x => x !== undefined));
+    const A = anchors[run.dirn][run.cls];
+    let caStart = Infinity;
+    if (A && run.ins[A] !== undefined) {
+      for (const o of run.cands) if (o.xt > run.ins[A] && o.xt < run.xt && o.xt < caStart) caStart = o.xt;
+    }
+    const aheadAtAnchor = A && run.ins[A] !== undefined ? run.ahead[A] : Infinity;
+    const res = NS.map(() => ({ now: 0, ca: 0 }));
+    for (let t = first; t < run.xt; t += STEP) {
+      let myIdx = -1;
+      for (let j = 0; j < st.length; j++) if (st[j] !== undefined && st[j] <= t) myIdx = j;
+      const steps = (myIdx >= 0 && t - st[myIdx] <= STRIKE_TTL_MS) ? nearestAhead(run, myIdx, t, run.cands) : Infinity;
+      NS.forEach((N, i) => {
+        if (isQ(steps, N)) res[i].now += STEP / 1000;
+        else if (t >= caStart && isQ(aheadAtAnchor, N)) res[i].ca += STEP / 1000;
+      });
+    }
+    return res;
+  }
+  console.log('\n-- 6c. "Train held" the queued rule would produce at each N — train-seconds per day, checked every 10 s.');
+  console.log('  queued now = a train within N berths ahead at that moment; cleared ahead = C20\'s second half (held until');
+  console.log('  it crosses once a train ahead clears after its anchor strike), for trains within N at that strike.');
+  // Totalled as it goes rather than kept per run: this box is also serving the live app.
+  const tot = { east: NS.map(() => ({ now: 0, ca: 0, rec: 0 })), west: NS.map(() => ({ now: 0, ca: 0, rec: 0 })) };
+  for (const r of testRuns) {
+    const h = queueHeld(r), isRecent = r.day >= RECENT;
+    h.forEach((x, i) => { const T = tot[r.dirn][i]; T.now += x.now; T.ca += x.ca; if (isRecent) T.rec += x.now + x.ca; });
+  }
+  out([['', -5], ['', -5], ['queued now', 11], ['cleared ahead', 14], ['total', 8], ['', 4], [`since ${RECENT}`, 17]]);
+  const both = NS.map(() => 0);
+  for (const d of ['east', 'west']) {
+    NS.forEach((N, i) => {
+      const { now, ca, rec } = tot[d][i];
+      both[i] += rec;
+      out([[i === 0 ? d.toUpperCase() : '', -5], [N === Infinity ? 'any' : String(N), -5], [f0(now / testDays), 11],
+        [f0(ca / testDays), 14], [f0((now + ca) / testDays), 8], ['', 4], [recentDays ? f0(rec / recentDays) : '-', 17]]);
+    });
+  }
+  if (recentDays) {
+    console.log('  BOTH directions since %s: %s train-s/day under today\'s rule (any). Set that beside held-report.js:',
+      RECENT, f0(both[NS.length - 1] / recentDays));
+    console.log('  its queued + queued+unstruck seconds divided by its days. Same ballpark = this simulates the live rule.');
+    console.log('  At each N, the share of that left:  ' + NS.map((N, i) => `${nLabel(N)} ${f0(100 * both[i] / (both[NS.length - 1] || 1))}%`).join('  '));
+  }
 
   // ---------------------------------------------------------------- CSV
   if (CSV) {
