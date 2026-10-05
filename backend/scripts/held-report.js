@@ -44,6 +44,13 @@ function resolveFiles(pattern) {
 }
 
 const files = resolveFiles(process.argv[2]);
+if (!files.length) {
+  // Zero FILES is not zero holds. Say which, or "no episodes" sends someone off to check TD.
+  console.log('No log files matched %s — nothing was read, so this says nothing about holds.',
+    process.argv[2] ? `'${process.argv[2]}'` : 'the default location');
+  console.log('Files are named data/logs/YYYY-MM-DD.jsonl; only * works as a wildcard.');
+  process.exit(0);
+}
 const starts = new Map();
 const ends = [];
 const perDay = new Map();
