@@ -12,6 +12,14 @@
 
 const CrossingState = require('../src/crossing-state');
 
+// The suite must not write held-episode lines into the SERVICE's real log. `logger.log`
+// appends to data/logs/<today>.jsonl, and since 740d4fc that file is a measurement source:
+// running `npm test` on the VPS was putting ~700 episodes a run into it, dated off this
+// file's fixed 2023 epoch, with durations of about three years. held-report.js now drops
+// them on sight, but the right place to stop it is here. Blocks that need to SEE the calls
+// swap in their own recorder and restore this no-op afterwards.
+require('../src/logger').logHeld = function () {};
+
 let pass = 0, fail = 0;
 function check(label, actual, expected) {
   if (actual === expected) { console.log(`  PASS  ${label}`); pass++; }
