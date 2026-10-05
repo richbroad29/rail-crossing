@@ -391,7 +391,7 @@ planted answer first; that is how two of its bugs were caught.
 ## Active work / pending items
 
 - **Confidence-tier narrowing via TD berth state** — TD sightings now flow into predictions (`tdSeen`/`tdSeenAt` on each CIF train) and drive the late-minute lock for Q-freight, but the per-berth `tdBerth` field (approach/protecting/clear) is still not populated. Setting it would unlock the ±90s → ±60s → ±30s → "imminent" confidence-window narrowing. This **position-based triggering** is intended to replace the `areaEntryLeadSecs` projection wholesale, which is why those lead values are not worth tuning.
-- **Show "Train held" less often — decided by backtest, step 1 built (`c2eb4b3`, NOT DEPLOYED).**
+- **Show "Train held" less often — decided by backtest, step 1 LIVE (`c2eb4b3`, deployed 2026-10-05 21:27 UTC).**
   Rich's ask, 2026-09-23: it appears often, and the fix must be a set rule that scales to other
   crossings. Rich then reframed it (2026-10-05): **the timing is the real issue, not the label** —
   relabelling queued trains was rejected; improve the prediction instead.
@@ -407,10 +407,12 @@ planted answer first; that is how two of its bugs were caught.
     a third of eastbound strikes. By distance (§6a): east stopping +73s at 1 berth, +41s at 2,
     **+5s at 3**. `stoppingLocal` has NO penalty at any distance (the Southwick stop absorbs it);
     ECS is delayed at every distance.
-  - **Step 1 (built):** `td.<dir>.queueMaxAhead: 2` — a train ahead only queues the COUNTDOWN within
+  - **Step 1 (live 2026-10-05 21:27 UTC):** `td.<dir>.queueMaxAhead: 2` — a train ahead only queues the COUNTDOWN within
     2 berths. The BARRIERS DOWN gate keeps the unlimited test. Predicted: queued held time to ~32%,
-    total "Train held" down ~60%. **Verify after deploy with held-report.js** — if queued time does
-    not fall to roughly a third, the model is wrong and it should be rolled back.
+    total "Train held" down ~60%. **Verify with held-report.js on post-deploy days only** (skip
+    2026-10-05, which straddles the restart): `node backend/scripts/held-report.js 'backend/data/logs/2026-10-1*.jsonl'`
+    from 10 Oct. Before: ~21,400 queued train-s/day (queued + queued+unstruck). Predicted ~6,800. If it
+    does not fall to roughly a third, the model is wrong — roll back to `d6f0017` and find out why.
   - **Step 2 (next):** queued/clear medians at N=2 in the transit table, so a genuine queue gets a
     countdown instead of a hold — and ECS gets its own numbers.
   - **Side finding, unexplained:** westbound anchor rows run ~20s later than the July table (bias
