@@ -87,6 +87,14 @@ when the process stopped, and is meant to read that way. Closure periods are not
 else, and a held close *suppresses* CLOSING_SOON, so before this a hold's main trace in the state
 log was a transition that never happened.
 
+**A train ahead only queues the countdown within `queueMaxAhead` berths (2026-10, `c2eb4b3`).**
+`td.<dir>.queueMaxAhead` (2 at Portslade) limits `queuedBound` — the countdown's queued hold — to a
+train at most that many berths ahead, the crossing berth counting one past the last chain berth.
+Set from the backtest's §6a: the furthest distance that still carries a real delay. **The BARRIERS
+DOWN gate in `_confirmedCloseTime` keeps the unlimited test on purpose** — the limit changes what
+the countdown says, never when the app asserts the barrier is down. Absent = unlimited (old
+behaviour); 0 = never queued. For a new crossing: run the backtest, read N off §6a.
+
 The **frontend has no build step** — edit files, push to `main`, GitHub Pages deploys within ~1 minute.
 
 ### Run `sh scripts/bump-assets.sh` before pushing a frontend change
@@ -343,6 +351,18 @@ record-first playbook, the harness that replays recorded API payloads through th
 to re-check at the start of every audit so regressions are caught. Read `SKILL.md` before
 starting a watch; the ordering of its first phase matters (start recording before reading code).
 
+### Backtesting a prediction change before shipping it
+
+`backend/scripts/backtest-transits.js` (on `backend-v2`, run on the VPS where the TD logs are:
+`nice -n 19 node --max-old-space-size=350 backend/scripts/backtest-transits.js`) fits candidate
+predictors on TD up to `--cutoff` (default: the live table's generation date) and scores them on
+everything after — accuracy for every row of the transit table, the unsafe-miss rate, simulated
+hold time, and the queue-distance sweep. It shares its run extraction with `derive-transits.js`
+via `backend/scripts/lib/td-runs.js`, so it scores the live table's own rows. Its `consistency`
+line must read *matches the live table*, and its hold simulations are checked against the real
+held log — read those two before anything else. Validate changes to it on synthetic TD with a
+planted answer first; that is how two of its bugs were caught.
+
 ## Common tasks — quick reference
 
 - **Tweak timing parameters**: edit `backend/config/crossings.json` on `backend-v2` (`closeBefore` / `openAfter` / `openLagSecs` / `closeTrigger`) and deploy — the frontend renders the backend's closures. (`shared/crossings.json` feeds only the client-side confidence-window / debug-panel display.)
@@ -371,24 +391,31 @@ starting a watch; the ordering of its first phase matters (start recording befor
 ## Active work / pending items
 
 - **Confidence-tier narrowing via TD berth state** — TD sightings now flow into predictions (`tdSeen`/`tdSeenAt` on each CIF train) and drive the late-minute lock for Q-freight, but the per-berth `tdBerth` field (approach/protecting/clear) is still not populated. Setting it would unlock the ±90s → ±60s → ±30s → "imminent" confidence-window narrowing. This **position-based triggering** is intended to replace the `areaEntryLeadSecs` projection wholesale, which is why those lead values are not worth tuning.
-- **Show "Train held" less often — measuring, then one rule.** Rich's ask, 2026-09-23: it appears
-  often and the fix must be a set rule that scales to other crossings. Step 0 shipped 09-27 (above);
-  **next step is to read a few days of it**:
-  ```
-  jq -r 'select(.cat=="held" and .phase=="end") | [.reasons, .durationSecs] | @tsv' \
-    ~/rail-crossing/backend/data/logs/*.jsonl |
-    awk -F'\t' '{n[$1]++; s[$1]+=$2} END {for (r in n) printf "%-22s %4d episodes  %6ds total  %5.0fs mean\n", r, n[r], s[r], s[r]/n[r]}' | sort -k2 -rn
-  ```
-  Then pick from the options already worked through, in this order of preference:
-  **(A)** a noise margin on `expired` — `ts + k x sdSecs < now`, capped, where `sdSecs` is the
-  transit spread `_projectBerth` already has, so every crossing derives its own grace and a new
-  crossing needs no calibration. This is the one that deserves to be *the* rule.
-  **(D)** stop calling a *queued* train "held" — it is normal operation, not a stopped train, and
-  needs no constant at all. **(E)** fewer surfaces (a hold currently prints in up to five places at
-  once) — free, no logic change. **(B)**, a dwell before the wording escalates, is the reserve if A+D
-  is not enough; express it as a multiple of the class offset, not a flat number of seconds.
-  Note the whole question is the CLOSE side (`closePending`) — the open side's hold is a state gate
-  that stops the app reporting CLEAR with a train on the crossing, and is not a display choice.
+- **Show "Train held" less often — decided by backtest, step 1 built (`c2eb4b3`, NOT DEPLOYED).**
+  Rich's ask, 2026-09-23: it appears often, and the fix must be a set rule that scales to other
+  crossings. Rich then reframed it (2026-10-05): **the timing is the real issue, not the label** —
+  relabelling queued trains was rejected; improve the prediction instead.
+  - **The held log** (`node backend/scripts/held-report.js`) put 90.5% of held time under the
+    `queued` rule, 9.7% under `unstruck` (short: mean 31s), almost all of it eastbound.
+  - **The backtest** (`backend/scripts/backtest-transits.js`, see below) scored every candidate out
+    of sample against 10 weeks of TD the live table never saw. Rejected on the data: a rolling mean
+    of the last 5 trains (worse everywhere — east r=0.18 is real but 5 trains is too few, west r≈0),
+    and inflating the median far out (unsafe-miss rate 50-62%). The sd grace on `expired` works but
+    is a trade (east k=1 cuts short holds 73%; west needs k=3, i.e. minutes of "any moment now") —
+    revisit after step 1. Splitting the table queued/clear wins everywhere but modestly.
+  - **The finding that mattered:** `_blockedByAhead` counted ANY train anywhere ahead on the chain —
+    a third of eastbound strikes. By distance (§6a): east stopping +73s at 1 berth, +41s at 2,
+    **+5s at 3**. `stoppingLocal` has NO penalty at any distance (the Southwick stop absorbs it);
+    ECS is delayed at every distance.
+  - **Step 1 (built):** `td.<dir>.queueMaxAhead: 2` — a train ahead only queues the COUNTDOWN within
+    2 berths. The BARRIERS DOWN gate keeps the unlimited test. Predicted: queued held time to ~32%,
+    total "Train held" down ~60%. **Verify after deploy with held-report.js** — if queued time does
+    not fall to roughly a third, the model is wrong and it should be rolled back.
+  - **Step 2 (next):** queued/clear medians at N=2 in the transit table, so a genuine queue gets a
+    countdown instead of a hold — and ECS gets its own numbers.
+  - **Side finding, unexplained:** westbound anchor rows run ~20s later than the July table (bias
+    +19.7s, 28% of trains >30s late). Stale table or skew — re-run the backtest with a later
+    `--cutoff` to tell them apart; regenerating the table is cheap.
 - **TD liveness is unmonitored** — see the note in the pipeline section above and register #21. Next
   step is to root-cause the 09-22 stop (the journal around 22:24 UTC that day) and add a staleness
   watchdog on last-event time, surfaced on `/health` so it is visible without reading the log
