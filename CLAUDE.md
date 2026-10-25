@@ -377,7 +377,7 @@ planted answer first; that is how two of its bugs were caught.
 
 - **`queueMaxAhead: 2`** — a train ahead only holds the countdown as queued within 2 berths; the
   BARRIERS DOWN gate keeps the unlimited test. Measured, not guessed: see "Held countdowns" above
-  and register #22. **Unverified in production until the held-report check below passes.**
+  and register C22. **Verified in production 2026-10-25** — queued holds fell to 32% of before, as predicted.
 - **`backend/scripts/backtest-transits.js`** — out-of-sample backtest of transit predictors and the
   queue-distance sweep. See "Backtesting a prediction change" above.
 - **`backend/scripts/held-report.js`** — reads the `cat:"held"` lines: episodes and held seconds by
@@ -408,11 +408,10 @@ planted answer first; that is how two of its bugs were caught.
 
 ### Next steps, in order (as of 2026-10-05)
 
-1. **Verify `queueMaxAhead` in production — from 10 Oct.** On the VPS:
-   `node backend/scripts/held-report.js 'backend/data/logs/2026-10-1*.jsonl'`. Add `queued` and
-   `queued+unstruck` held seconds, divide by days. Before ~21,400/day; predicted ~6,800 (32%). Roughly
-   a third = the backtest's model holds, close register #22. Not near it = roll back to `d6f0017`
-   and find out why before building anything on top. (Optional early look: `…/2026-10-06.jsonl`.)
+1. ~~Verify `queueMaxAhead` in production.~~ **DONE 2026-10-25 — passed.** 10–19 Oct: 6,889 s/day of
+   queued holds against ~21,400 before and ~6,800 predicted (32%); total held down ~57% against ~60%
+   predicted. TD gap-checked over the window first. The backtest's model holds — register #22 closed as
+   C22, and steps 2–4 can build on it.
 2. **Step 2: queued/clear medians in the transit table at N=2**, so a genuine queue gets a
    countdown from its own median instead of a hold, and the queued hold can go. Backtest §6b: east
    error from the anchor 39.0 → 35.3s, west 14.9 → 14.4s, no worse on unsafe misses. Needs
@@ -441,7 +440,7 @@ the wall clock to have stepped backwards between two recomputes — probably one
 ### Standing items
 
 - **Confidence-tier narrowing via TD berth state** — TD sightings now flow into predictions (`tdSeen`/`tdSeenAt` on each CIF train) and drive the late-minute lock for Q-freight, but the per-berth `tdBerth` field (approach/protecting/clear) is still not populated. Setting it would unlock the ±90s → ±60s → ±30s → "imminent" confidence-window narrowing. This **position-based triggering** is intended to replace the `areaEntryLeadSecs` projection wholesale, which is why those lead values are not worth tuning.
-- **Show "Train held" less often — decided by backtest, step 1 LIVE (`c2eb4b3`, deployed 2026-10-05 21:27 UTC).**
+- **Show "Train held" less often — decided by backtest, step 1 LIVE and VERIFIED (`c2eb4b3`, deployed 2026-10-05 21:27 UTC; verified 2026-10-25, C22).**
   Rich's ask, 2026-09-23: it appears often, and the fix must be a set rule that scales to other
   crossings. Rich then reframed it (2026-10-05): **the timing is the real issue, not the label** —
   relabelling queued trains was rejected; improve the prediction instead.
@@ -463,6 +462,7 @@ the wall clock to have stepped backwards between two recomputes — probably one
     2026-10-05, which straddles the restart): `node backend/scripts/held-report.js 'backend/data/logs/2026-10-1*.jsonl'`
     from 10 Oct. Before: ~21,400 queued train-s/day (queued + queued+unstruck). Predicted ~6,800. If it
     does not fall to roughly a third, the model is wrong — roll back to `d6f0017` and find out why.
+    **Result (2026-10-25): 6,889 s/day, 32% — passed.** See register C22.
   - **Step 2 (next):** queued/clear medians at N=2 in the transit table, so a genuine queue gets a
     countdown instead of a hold — and ECS gets its own numbers.
   - **Side finding, unexplained:** westbound anchor rows run ~20s later than the July table (bias
