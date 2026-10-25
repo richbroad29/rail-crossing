@@ -1645,12 +1645,21 @@ class CrossingState {
     // running at the time, and the question is about ordinary days, not audit windows.
     const prevHeldSince = this.closeHeldSince || new Map();
     const onList = new Set();
+    const closedOn = new Set();
     this.closeHeldSince = new Map();
     for (const a of ann) {
       const hc = a.train.headcode;
       if (!hc) continue;
       onList.add(hc);
       if (!a.closeHeld) continue;
+      // A hold is only ever SEEN on a closure that has not started: once the train's own
+      // gated close has passed, its card reads "Closed" (closure-card.js) and the header
+      // counts to the open. `held` itself stays set — a queued train keeps it through the
+      // protecting strike and past its own crossing, until it drops off the list — but that
+      // time is on no screen, and counting it put 22% of logged held time (10-19 Oct,
+      // scripts/held-split.js) in the 'gone' tail. So the episode ends here, as 'closed'.
+      // Only the episode: closePending in the payload is untouched.
+      if (a.confClose && a.confClose.getTime() <= now.getTime()) { closedOn.add(hc); continue; }
       const open = prevHeldSince.get(hc);
       if (open) {
         // Same unbroken episode: fold in whatever is holding it NOW. `reasons` is therefore
@@ -1677,11 +1686,13 @@ class CrossingState {
       // its projected crossing), i.e. the hold outlived our knowledge of the train rather
       // than the train outlived the hold. A duration histogram that mixed them would put the
       // drop grace's own 3 minutes into the tail and read it as how long trains stand.
+      // 'closed' is the train's own close arriving while still held — the card went from
+      // "Train held" to "Closed" without a countdown in between (see closedOn above).
       logger.logHeld(this.id, 'end', {
         headcode: hc, direction: open.direction, trainClass: open.trainClass,
         reasons: open.reasons, since: new Date(open.ts).toISOString(),
         durationSecs: Math.round((now.getTime() - open.ts) / 1000),
-        how: onList.has(hc) ? 'released' : 'gone'
+        how: !onList.has(hc) ? 'gone' : closedOn.has(hc) ? 'closed' : 'released'
       });
     }
   }

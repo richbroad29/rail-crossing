@@ -19,7 +19,10 @@
 //
 // `how` matters for the durations: 'released' is the train moving, 'gone' is it leaving
 // the merged list at the 3-min sighting grace. Mixed together, that grace's own three
-// minutes lands in the tail and reads as how long trains actually stand.
+// minutes lands in the tail and reads as how long trains actually stand. 'closed' (from
+// 2026-10-25) is the train's own close arriving while still held — its card went straight
+// from "Train held" to "Closed". Logs from before that have no 'closed': those holds ran on
+// through barriers-down and the crossing into 'gone' (scripts/held-split.js measures it).
 
 const fs = require('fs');
 const path = require('path');
