@@ -2395,6 +2395,41 @@ console.log('  -- step 0: the held-episode log --');
       st._computeClosures([eastLocal('1N06', T + 600000)], new Date(T));
       check('log: an ordinary closure writes no held lines', lines.length, 0);
     }
+
+    // --- 7. closed: the train's own close arrives while it is still held -----------------
+    //
+    // A queued train stays `held` through its protecting strike and past its own crossing,
+    // until it drops off the list. None of that is on a screen — its card reads "Closed" —
+    // and 10-19 Oct it was 22% of all logged held time. The episode ends when the close
+    // does; the payload's closePending does not change.
+    {
+      lines.length = 0;
+      const st = new CrossingState('portslade', SHIPPED);
+      const F = { ...mkT({ dir: 'east', headcode: '1N07', bestTimeMs: T + 200000 }),
+                  callsAtStation: true, callsAtApproach: false };     // stopping: 0008 + 55s
+      const step = (hc, from, to, ts) => {
+        st.recordTdSighting(hc, new Date(ts));
+        st.recordTdBerth({ headcode: hc, to, from, ts: iso(ts), event: 'CA' });
+        st.recordTdClearStep({ headcode: hc, to, from, ts: iso(ts) });
+        st.recordTdCloseStrike({ headcode: hc, to, from, ts: iso(ts) });
+      };
+      step('1L07', '0008', '0006', T - 5000);           // leader 1 ahead at our anchor strike
+      step('1N07', '0010', '0008', T);
+      step('1L07', '0006', '0004', T + 30000);
+      step('1L07', '0004', '0002', T + 60000);
+      step('1N07', '0008', '0006', T + 130000);
+      step('1N07', '0006', '0004', T + 170000);         // protecting strike: barriers down
+      step('1N07', '0004', '0002', T + 200000);         // crossed
+      let last = [];
+      for (let s = 0; s <= 400; s += 5) last = st._computeClosures([F], new Date(T + s * 1000));
+      const ended = lines.filter(l => l.phase === 'end');
+      check('closed: the queued hold opened at the start', row(lines.filter(l => l.phase === 'start'), 0).reason, 'queued');
+      check('closed: it ends once, at the protecting strike', ended.length, 1);
+      check('closed: …recorded as its own ending', row(ended, 0).how, 'closed');
+      check('closed: …lasting until the close, not until the train left the list', row(ended, 0).durationSecs, 170);
+      check('closed: nothing is held in memory after the train has crossed', st.closeHeldSince.size, 0);
+      check('closed: the payload still says closePending (unchanged)', !!(last[0] || {}).closePending, true);
+    }
   } finally {
     logger.logHeld = realLogHeld;
   }

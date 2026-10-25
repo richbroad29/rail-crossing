@@ -3,18 +3,19 @@
 // Where the logged "Train held" time actually went — and how much of it could have been on
 // screen at all.
 //
-// held-report.js sums each episode's durationSecs. That is the time the ENGINE had the train
-// flagged held, which is not the time anyone saw "Train held": the app shows the flag only on
-// the next closure that has not started yet (shared/predict.js derive, `upcoming`). Once the
-// train strikes its protecting berth (0004 east / 0005 west) its closure is under way and the
-// flag is no longer read; once it has crossed, it is long gone from the screen. Measured
-// 2026-10-25 by reproduction: a queued train stays flagged held after its own crossing until
-// it drops off the merged list — so the 'gone' episodes (half of all logged held time,
-// 10–19 Oct) carry time nobody saw.
+// held-report.js sums each episode's durationSecs. Before the 'closed' ending (2026-10-25)
+// that was the time the ENGINE had the train flagged held, which is not the time anyone saw
+// "Train held": the app shows it only on closures that have not started (the header countdown
+// for the next one, closure-card.js for each upcoming card). Once the train strikes its
+// protecting berth (0004 east / 0005 west) its closure is under way and its card reads
+// "Closed"; once it has crossed, the card is gone. Reproduced 2026-10-25: a queued train
+// stayed flagged held after its own crossing until it dropped off the merged list, so the
+// 'gone' episodes (half of all logged held time, 10–19 Oct) carried time nobody saw. Logs
+// written after the 'closed' ending shipped should show almost nothing outside `before`.
 //
 // This splits every episode against the TD log for the same train:
 //   before   — start of hold → its protecting-berth strike. The ONLY part that can show.
-//              An upper bound even so: it shows only while that train's closure is next.
+//              An upper bound even so: a period's card carries its first train's flag.
 //   down     — protecting strike → its crossing (0004→0002 / 0005→0007). Barriers down.
 //   after    — after it crossed.
 //   no xing  — no crossing found for that headcode within 30 min. Unsplit.
