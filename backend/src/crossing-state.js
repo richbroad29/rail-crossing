@@ -1059,6 +1059,13 @@ class CrossingState {
       // of eastbound strikes for trains that were not late. The BARRIERS DOWN gate below in
       // _confirmedCloseTime deliberately keeps the unlimited test: this changes what the
       // countdown says, never when the app asserts the barrier is down.
+      // A class the backtest measured no queueing penalty on is not queued, however close
+      // the train ahead is (td.<dir>.queueExemptClasses). queueMaxAhead bounded the distance
+      // but never the class, so the rule went on holding east stoppingLocal — measured at
+      // -9s / -34s, the booked Southwick stop absorbing the queue — which was 688 of the 838
+      // queued holds raised over 2026-10-22..23. Tested FIRST: it is a property of this
+      // train alone, so there is no reason to go looking for a leader we would then ignore.
+      if (this._queueExemptClass(t)) return info;
       const maxAhead = this._queueMaxAhead(t.direction);
       const ahead = this._blockedByAhead(t, now, maxAhead) || this._crossedAheadSinceStrike(t, now, maxAhead);
       if (!ahead) return info;
@@ -1304,6 +1311,17 @@ class CrossingState {
     const cfg = this.config.td && this.config.td[direction === 'east' ? 'eastbound' : 'westbound'];
     const v = cfg && cfg.queueMaxAhead;
     return (typeof v === 'number' && v >= 0) ? v : Infinity;
+  }
+
+  // Classes a train ahead does not delay (td.<dir>.queueExemptClasses). The companion to
+  // _queueMaxAhead: that one asks HOW FAR ahead the leader may be, this one asks WHETHER
+  // this train is the kind a leader slows at all. Both come from the same backtest row, and
+  // a class whose measured delay is zero has no queued behaviour to describe — holding it
+  // is asserting a delay the calibration says is not there. Absent/empty ⇒ no exemption.
+  _queueExemptClass(t) {
+    const cfg = this.config.td && this.config.td[t.direction === 'east' ? 'eastbound' : 'westbound'];
+    const list = cfg && cfg.queueExemptClasses;
+    return Array.isArray(list) && list.indexOf(this._classOf(t)) >= 0;
   }
 
   // Register #20 — is this train QUEUED behind another going the same way?

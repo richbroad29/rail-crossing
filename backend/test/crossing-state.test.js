@@ -2114,12 +2114,23 @@ console.log('  -- step 0: closePendingReason / closePendingSince --');
 
   // The #14 scenario: stopped in 0008, 0006 never struck, so the 0008>0006 projection
   // (median 71s) is long expired.
-  const stuck = (dwellSecs, { leaderAt = null } = {}) => {
+  const stuck = (dwellSecs, { leaderAt = null, freight = false } = {}) => {
     const st = new CrossingState('portslade', SHIPPED);
     const now = new Date(T + dwellSecs * 1000);
-    const t = eastLocal('1N01', T + 200000);
-    st.recordTdBerth({ headcode: '1N01', to: '0008', from: '0010', ts: iso(T), event: 'CA' });
-    st.recordTdSighting('1N01', new Date(T));
+    // `freight` is for the overlap case below, and only for it. Since 2026-10-25 east
+    // stoppingLocal is in td.eastbound.queueExemptClasses — the backtest measures no
+    // queueing penalty on it — so it can no longer raise 'queued' and could not carry two
+    // rules at once. East freight anchors at 0006 like stoppingLocal does, so a train
+    // standing in 0008 still has an expired projection ('unstruck'), and it is not exempt,
+    // so a leader two berths ahead still queues it. Same two rules, same assertion, a class
+    // the rule still applies to. The 'unstruck'/'upstream' cases keep the original train:
+    // they have no leader, so the exemption cannot reach them.
+    const t = freight
+      ? { ...mkT({ dir: 'east', type: 'freight', headcode: '6X01', bestTimeMs: T + 200000 }) }
+      : eastLocal('1N01', T + 200000);
+    const hc = t.headcode;
+    st.recordTdBerth({ headcode: hc, to: '0008', from: '0010', ts: iso(T), event: 'CA' });
+    st.recordTdSighting(hc, new Date(T));
     // A leader two berths ahead (in 0004, the follower being in 0008) — close enough to queue
     // it under the shipped td.eastbound.queueMaxAhead of 2. This used to stand the leader on
     // the crossing berth, 0002, which is THREE ahead of 0008 and so, since 2026-10, correctly
@@ -2195,7 +2206,8 @@ console.log('  -- step 0: closePendingReason / closePendingSince --');
   // hidden one is the reason a tolerance on `expired` would leave this hold exactly where
   // it is — which is the mistake this field exists to prevent anyone making.
   {
-    const { p } = stuck(180, { leaderAt: T + 100000 });
+    const { p, st, t } = stuck(180, { leaderAt: T + 100000, freight: true });
+    check('step 0 premise: the class is one a queue still applies to', st._classOf(t), 'freight');
     check('step 0: two rules holding one train are BOTH reported',
       p.closePendingReason, 'queued+unstruck');
   }
@@ -2493,6 +2505,104 @@ console.log('  -- 2026-10 queueMaxAhead: a train ahead only queues this one with
     const blind = mk(ONE); blind.closeStrikeSeen.delete('1L01|0004');
     checkTruthy('crossed ahead, leader unplaceable: held — the limit only releases on evidence', !!blind._crossedAheadSinceStrike(F, later, 1));
     checkTruthy('crossed ahead, N=1, through the countdown: not held as queued', !queuedHold(one._closeTimeInfo(F, later)));
+  }
+}
+
+// ---- 2026-10: queueExemptClasses — a class a queue does not delay is never queued ---------
+//
+// queueMaxAhead bounded how FAR ahead a leader may be, but nothing bounded WHICH CLASS could
+// be held. The same backtest row it was set from (§6a, 2026-10-05) measured east stoppingLocal
+// at -9s with a leader 1 berth ahead and -34s at 2: no penalty at any distance, because the
+// booked Southwick stop sits inside the approach berth and absorbs the queue. So the rule was
+// holding the one class its own calibration says is not delayed — measured over 2026-10-22..23
+// of live TD, 688 of the 838 queued holds raised eastbound were stoppingLocal.
+//
+// The exemption is a property of the FOLLOWER alone, so it must not depend on where the leader
+// is, and it must leave every other class exactly as it was.
+console.log('  -- 2026-10 queueExemptClasses: a class a queue does not delay is never queued --');
+{
+  const SHIPPED = JSON.parse(require('fs').readFileSync(
+    require('path').join(__dirname, '..', 'config', 'crossings.json'), 'utf8')).portslade;
+  const noExempt = () => { const c = JSON.parse(JSON.stringify(SHIPPED));
+    for (const d of ['eastbound', 'westbound']) delete c.td[d].queueExemptClasses;
+    return c; };
+  const T = BASE;
+  // Both follow a leader two berths ahead — inside the shipped queueMaxAhead of 2, so distance
+  // is never what separates them. They differ only in class.
+  //   1N01 calls at Southwick => stoppingLocal, anchor 0006 + 100s  (exempt)
+  //   1H01 does not           => stopping,      anchor 0008 +  55s  (not exempt)
+  const LOCAL = { ...mkT({ dir: 'east', headcode: '1N01', bestTimeMs: T + 200000 }),
+                  callsAtStation: true, callsAtApproach: true };
+  const THRU  = { ...mkT({ dir: 'east', headcode: '1H01', bestTimeMs: T + 200000 }),
+                  callsAtStation: true, callsAtApproach: false };
+  const build = (cfg, follower) => {
+    const st = new CrossingState('portslade', cfg);
+    const step = (hc, to, from, ts) => {
+      st.recordTdSighting(hc, new Date(ts));
+      st.recordTdBerth({ headcode: hc, to, from, ts: iso(ts), event: 'CA' });
+      st.recordTdClearStep({ headcode: hc, to, from, ts: iso(ts) });
+      st.recordTdCloseStrike({ headcode: hc, to, from, ts: iso(ts) });
+    };
+    step('1L01', '0004', '0006', T - 5000);            // leader, two berths ahead
+    step(follower.headcode, '0008', '0010', T);        // follower strikes 0008
+    return st;
+  };
+  const now = new Date(T + 10000);
+  const queuedHold = ci => !!(ci.held && /queued/.test(ci.heldReason || ''));
+  const shipped = new CrossingState('portslade', SHIPPED);
+
+  check('premise: the local train is stoppingLocal', shipped._classOf(LOCAL), 'stoppingLocal');
+  check('premise: the through train is stopping', shipped._classOf(THRU), 'stopping');
+  check('premise: stoppingLocal is the shipped exemption', shipped._queueExemptClass(LOCAL), true);
+  check('premise: …and stopping is not', shipped._queueExemptClass(THRU), false);
+
+  // The exempt class: the leader is right there, and it still is not a queue.
+  {
+    const st = build(SHIPPED, LOCAL);
+    check('exempt: the leader IS two berths ahead (so distance is not what excused it)',
+      (st._blockedByAhead(LOCAL, now, 2) || {}).steps, 2);
+    const ci = st._closeTimeInfo(LOCAL, now);
+    checkTruthy('exempt: the countdown is NOT held as queued', !queuedHold(ci));
+  }
+
+  // The same position, a class the backtest DID measure a delay on: unchanged.
+  {
+    const st = build(SHIPPED, THRU);
+    checkTruthy('not exempt: still held as queued at the same distance',
+      queuedHold(st._closeTimeInfo(THRU, now)));
+  }
+
+  // Byte-identical for every non-exempt class — this must not quietly move the 93% case.
+  {
+    const a = build(SHIPPED, THRU), b = build(noExempt(), THRU);
+    check('not exempt: the close is identical with and without the exemption configured',
+      a._closeTimeInfo(THRU, now).at.toISOString(), b._closeTimeInfo(THRU, now).at.toISOString());
+  }
+
+  // A crossing that does not configure it behaves exactly as before 2026-10-25.
+  {
+    const st = build(noExempt(), LOCAL);
+    check('unconfigured: nothing is exempt', st._queueExemptClass(LOCAL), false);
+    checkTruthy('unconfigured: stoppingLocal is queued again, as before 2026-10-25',
+      queuedHold(st._closeTimeInfo(LOCAL, now)));
+  }
+
+  // Westbound has no stoppingLocal at all (_eastClass is east-only), so the empty list there
+  // is correct rather than an omission — assert the class genuinely cannot arise.
+  {
+    const W = { ...mkT({ dir: 'west', headcode: '1W01', bestTimeMs: T + 200000 }),
+                callsAtStation: true, callsAtApproach: true };
+    check('west: a calling train is stopping, never stoppingLocal', shipped._classOf(W), 'stopping');
+    check('west: so nothing is exempt there', shipped._queueExemptClass(W), false);
+  }
+
+  // The BARRIERS DOWN gate is deliberately NOT exempted here — same scoping decision
+  // queueMaxAhead made. This change moves what the countdown says, not when the app
+  // asserts the barrier is down.
+  {
+    const a = build(SHIPPED, LOCAL), b = build(noExempt(), LOCAL);
+    check('the BARRIERS DOWN gate is unchanged by the exemption',
+      a._confirmedCloseTime(LOCAL, now).toISOString(), b._confirmedCloseTime(LOCAL, now).toISOString());
   }
 }
 
