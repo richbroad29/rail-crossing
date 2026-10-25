@@ -115,6 +115,38 @@ The observer PWA is deliberately **not** stamped — its service worker already 
 `cache: 'reload'` and matches its precached shell on the exact URL, so a token would miss that
 cache and break the offline launch it exists for.
 
+## Working from the phone or the web (cloud sessions)
+
+A session started from the Claude app or claude.ai/code runs in Anthropic's sandbox with
+a fresh checkout from GitHub. It has the repo and nothing else — not Rich's Mac, not the
+VPS, not the `.env` files, not the SSH key. Plan around that rather than discovering it
+one failed command at a time.
+
+**Works**
+
+- Everything tracked on `main`: `shared/`, `portslade/`, this file, `.claude/skills/crossing-audit/`.
+- Backend source and its unit tests, which live on the other branch:
+  `git checkout backend-v2 && cd backend && npm install && npm test`.
+- Reading history, writing code, drafting analysis, planning an audit.
+
+**Does not work**
+
+- `scripts/vps-read` and any `ssh` — the key is only on Rich's Mac. No live logs, no
+  `journalctl`, no berth data, no `systemctl`.
+- `backend/` on `main` — gitignored, it is a branch-switching artifact.
+- `~/bv2` — a local worktree, not part of any checkout.
+- `analysis-data/` — 75 MB of captured logs, deliberately never pushed.
+
+**Pushing from a phone is publishing**
+
+`main` auto-deploys to `railcrossing.uk` through GitHub Pages. A push from the phone is
+live within a minute or two, with no restart step and no chance to eyeball it first. So
+from a cloud session, commit to a branch and open a PR; leave `main` alone unless Rich
+has said otherwise in that conversation.
+
+`backend-v2` is the opposite trap: pushing it changes nothing at all. The backend only
+goes live when the service is restarted on the VPS, which is a Mac-only step.
+
 ## Branches
 
 - **`main`** — what's live. Frontend-only, calls the VPS backend (see Architecture).
@@ -333,6 +365,25 @@ When considering a change, **read the current file first**. Don't suggest edits 
 
 External services should be free unless the value clearly justifies a paid tier. If a recurring cost is needed, flag it explicitly with the figure ("$5/month") rather than burying it.
 
+### Reading the VPS: use `scripts/vps-read`, not raw `ssh`
+
+The box at `130.162.167.237` serves live traffic, so inspection and change are kept
+apart. `scripts/vps-read` runs a command there after parsing it and refusing anything
+that could write: redirection, command substitution, `rm`/`mv`/`chmod`, process kills,
+`systemctl` verbs other than `status`/`is-active`/`show`, and inline interpreters
+(`node -e`, `python3 -`) which would make the guard meaningless.
+
+```bash
+scripts/vps-read 'cd ~/rail-crossing/backend && tail -100 data/logs/state.log'
+scripts/vps-read 'sudo journalctl -u rail-crossing --since "30 min ago" | tail -40'
+scripts/vps-read 'systemctl is-active rail-crossing && git -C ~/rail-crossing rev-parse HEAD'
+```
+
+Because it cannot change the server, it is allowlisted and runs without a prompt.
+Anything it refuses is not forbidden — restarts, recorder runs, deploys — those go
+through a normal `ssh` command, which asks first. That prompt is the point: on this
+project a restart *is* the deploy.
+
 ## Working approach with Rich
 
 - **Step-by-step terminal/VPS instructions** — spell out each command individually with context. Rich won't translate a summary into actions reliably.
@@ -373,6 +424,30 @@ planted answer first; that is how two of its bugs were caught.
 - **Add a new crossing**: append entry to `shared/crossings.json`, create `<crossing-name>/index.html` mirroring `portslade/index.html`, call `initCrossing('<id>')`.
 - **Test changes**: open `portslade/index.html` directly in a browser (`open portslade/index.html` on macOS) — the VPS API URL is hard-coded (`API_BASE` in `shared/crossing.js`) so it works against live data.
 
+## Recently shipped (2026-10-25 — backend `114bbe3` live 20:42 UTC, frontend `3f8cfb3`)
+
+- **`queueExemptClasses` (backend `114bbe3`, DEPLOYED)** — `queueMaxAhead` bounded how FAR ahead a
+  leader may be, but nothing bounded WHICH CLASS could be held. The same backtest row it was set
+  from measures east `stoppingLocal` at -9s / -34s by distance: no penalty at any distance, because
+  the booked Southwick stop absorbs the queue. `td.<dir>.queueExemptClasses` (`["stoppingLocal"]`
+  eastbound; westbound has no such class — `_eastClass` is east-only) is tested before we look for a
+  leader at all. Replayed over 2026-10-22..23 of live TD: held closes 228 → 138 and 198 → 91. The
+  BARRIERS DOWN gate is deliberately untouched, as `queueMaxAhead` chose.
+- **A closure that has already ended is not the next one (frontend `7dd96cb`)** — `derive()` took
+  "this period starts in the future" as sufficient to call it the next closure. A period can have a
+  start in the future and an end already past, and the backend keeps exactly those alive on purpose
+  so an unsighted train still counts down (register #14) — 287 of them on 2026-10-23. Picked ahead
+  of the real one it put its own expired `predictedStart` into Next Close: 105 of 125 samples that
+  day tripped the #15 invariant. Fix is `stillDown` on both branches, the same test the current
+  branch and `relevant()` already use. **Three backend rules were tried first and all broke
+  behaviour C1b, C7 and the #14 no-lurch case assert deliberately — do not re-attempt a backend
+  drop of inverted periods.**
+- **"Open for" must not skip the closure that cancels it (frontend `3f8cfb3`)** — `gapToNextCloseAfter`
+  tested `s > time`, so a closure starting at or BEFORE the reopen was passed over and the gap
+  measured to the one after it. That is the "Open for 4m 30s" beside a held close on Rich's
+  2026-08-31 screenshot, reproduced exactly. Also now excludes the period the open came from, and
+  takes the earliest close in TIME rather than the first in list order.
+
 ## Recently shipped (backend-v2, live 2026-10-05 — `c2eb4b3`)
 
 - **`queueMaxAhead: 2`** — a train ahead only holds the countdown as queued within 2 berths; the
@@ -406,7 +481,41 @@ planted answer first; that is how two of its bugs were caught.
 
 ## Active work / pending items
 
-### Next steps, in order (as of 2026-10-05)
+### Next steps, in order (as of 2026-10-25)
+
+**0a. `how:"gone"` holds — INVESTIGATE FIRST, possible goal-1 defect.** In the held log for
+10–19 Oct these are 98 episodes (8% of them) but **52.8% of all held time**: mean 540s, median
+505s, max 1,010s, ~10/day. `gone` means the train left the merged list at the 3-min sighting
+grace without the hold ever being released, so a user sees "Train held" for ~9 minutes and then
+the closure vanishes. Which of two things it is decides its priority:
+  - the train never crossed (terminated, stabled, turned back) → a false alarm, goal 2;
+  - the train crossed after being dropped → a closure shown late or not at all, **goal 1**.
+
+  **Every one of the 98 is a queued hold** (64 `queued+unstruck`, 34 `queued`), and 64 of the 71
+  `queued+unstruck` episodes in the window are `gone` — so the two populations are nearly the same
+  set. `queueExemptClasses` does NOT fix it: the split is east `stopping` 54 / `ecs` 31 / `fast` 7 /
+  `stoppingLocal` 6, and only that last 6 (9% of gone held-time) is exempted. Do not re-measure
+  after the 10-25 deploy and conclude it resolved itself.
+
+  Method: read-only script in `backend/scripts/` on backend-v2. For each `cat:"held"` line with
+  `phase:"end"` and `how:"gone"`, find that headcode's next clear step in the TD log (east
+  `0004→0002`, west `0005→0007`; config `td.<dir>.clear`) and group by the gap. Field names are
+  confirmed: `logger.logHeld` spreads `data` straight into the line, so `reasons`, `durationSecs`,
+  `how`, `trainClass`, `direction` are exactly as they appear. Plant a known answer in a fixture
+  before trusting it.
+
+**0b. CB and CC are swapped in `td-listener.js` (~line 184) — investigate WITH 0a, they may be one
+fault.** Verified against the real feed 2026-10-25, not just the spec: `CB` carries `from` only
+(`"from":"AM12","to":null`) and `CC` carries `to` only (`"from":null,"to":"A001"`). So CB is the
+cancel and CC the interpose, the opposite of the comment there. The code emits sightings on
+`CA || CB` and skips `CC`, so interposes are missed until the next CA, and — the part that bites —
+every CB reaches `recordTdBerth`, where `const berth = evt.to || null` writes **`berth: null` into
+`liveTrains` and refreshes `lastSeen`**. That blanks the train's position for every reader,
+including `_blockedByAhead` and `_chainIndex`, so a queued hold cannot release on position. ~37
+CB/day (370 CA-vs-CB-vs-CC over ten October days: 9,435 / 370 / 413). The clear-step and
+close-strike recorders are safe — both require `evt.to`. If fixing, also fix the fixture at
+`live-positions.test.js:56` (a made-up CB carrying both from and to) and this file's line saying
+"every CA/CB event emits a sighting".
 
 1. ~~Verify `queueMaxAhead` in production.~~ **DONE 2026-10-25 — passed.** 10–19 Oct: 6,889 s/day of
    queued holds against ~21,400 before and ~6,800 predicted (32%); total held down ~57% against ~60%
