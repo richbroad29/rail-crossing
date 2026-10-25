@@ -103,10 +103,12 @@ site visit or a new subscription.
    `docs/multi-crossing-readiness.md` Phase A. Until then, `TARGET_AREA = 'LA'` blocks this outright.)
 2. Add the area to `sclass.json` in collection-only mode if it isn't already: `"logRaw": "all"`,
    `"crossings": {}`. It emits zero events and banks raw bytes for the hunt in Phase 3.
-3. Confirm both logs are landing and rotating. Note the **23:00Z rotation** — a strike at 22:59 looks
+3. Confirm both logs are landing and rotating. Files are named by **London** date, so they rotate at
+   London midnight — 23:00 UTC in summer, 00:00 UTC in winter. A strike just before the boundary looks
    missing unless consecutive days are stitched.
-4. **Gap-check, weekly, until the watchdog exists.** One file per day, each ending near 22:59 UTC. A
-   missing day, or a file ending well short of 22:59 (register #21's last file ended at 22:24), is a
+4. **Gap-check, weekly, until the watchdog exists.** One file per day, each ending just before London
+   midnight (≈22:59 UTC in BST, ≈23:59 UTC in GMT). A missing day, or a file ending well short of
+   that (register #21's last file ended at 22:24 UTC on a BST day, 35 min early), is a
    feed outage — note its dates and exclude them from every derivation and from `run-rate`'s 14-day
    window, which otherwise reads the hole as "this freight didn't run".
 5. Diarise the Phase 3 review for **+14 days** of *gap-free* logging, not 14 calendar days.
