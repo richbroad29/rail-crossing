@@ -269,7 +269,24 @@
       // the backend's flat 60s end floor existed to paper over.
       var stillDown = (p.holdingOpen && trustHold) || t <= p.end.getTime();
       if (!current && t >= p.start.getTime() && stillDown) { current = p; }
-      else if (!upcoming && p.start.getTime() > t) { upcoming = p; }
+      // `stillDown` on BOTH branches. A future start was taken as sufficient to call a period
+      // "the next closure", which it is not: a period can have a start in the future and an
+      // end already in the past, and that one has nothing left to happen in it.
+      //
+      // It is not a malformed payload. The backend deliberately keeps such a period alive so
+      // an unstruck or never-sighted train still counts down and still reaches CLOSING_SOON
+      // (register #14) — its close is held at `now + offset`, permanently ahead of the clock,
+      // while its open came from a bestTime that has already gone by. Three backend tests
+      // encode that on purpose, so the period is doing its job; the mistake was here, in
+      // reading it as a closure still to come.
+      //
+      // Picked ahead of the real one, it put its own expired predictedStart into Next Close:
+      // 105 of 125 samples on 2026-10-23, replayed from live TD, showed a next close BEFORE
+      // the current closure's reopen. Same test as the current branch above, so the two
+      // cannot disagree about whether a period has finished, and the same one `relevant()`
+      // in closure-card.js has always applied to the list — which is why the rows below
+      // looked right while the two cards above contradicted each other.
+      else if (!upcoming && p.start.getTime() > t && stillDown) { upcoming = p; }
     }
     var out = { status: 'OPEN', current: current, upcoming: upcoming,
                 nextCloseTime: null, nextOpenTime: null, downForMs: null, downForRange: null,
