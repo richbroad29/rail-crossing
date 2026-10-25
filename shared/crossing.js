@@ -35,16 +35,38 @@ function $(id) { return document.getElementById(id); }
 var fmtTime = PREDICT.fmtTime, fmtShort = PREDICT.fmtShort, fmtCountdown = PREDICT.fmtCountdown,
     fmtWhen = PREDICT.fmtWhen, fmtSoon = PREDICT.fmtSoon,
     fmtDuration = PREDICT.fmtDuration, fmtDownFor = PREDICT.fmtDownFor;
-// How long the crossing stays clear from `time`: the gap to the first predicted close after
-// it. Walks the period list rather than reading derive(), which surfaces only the FIRST
-// upcoming closure — while the crossing is clear the relevant one is the second, because the
-// first is the closure we are counting down to. Null when the backend sent nothing beyond it.
-function gapToNextCloseAfter(time) {
+// How long the crossing stays clear from `time`: the gap from it to the EARLIEST predicted
+// close still to come, excluding the period that ends at `time` itself. Walks the period list
+// rather than reading derive(), which surfaces only the FIRST upcoming closure — while the
+// crossing is clear the relevant one is the second, because the first is the closure we are
+// counting down to. Null when the backend sent nothing beyond it.
+//
+// Three things this must NOT do, each of which it used to.
+//
+// 1. Skip a closure that starts at or before `time`. The test was `s > time`, so a next
+//    closure landing before the reopen was passed over and the gap measured to the one after
+//    it — the card then promised an open period that the card beside it was simultaneously
+//    denying. That is the "Open for 4m 30s" on Rich's 2026-08-31 screenshot: the real next
+//    close was 29s BEFORE the reopen, and the answer printed was the 273s gap to the closure
+//    after that. A close at or before `time` means there is no open period; the gap is <= 0
+//    and buildEventCard already renders that as no sub-line, which is the honest answer.
+// 2. Count the period that ends at `time`. Its own close is necessarily before its own end,
+//    so with (1) fixed it would always win and the gap would always be negative. `exclude` is
+//    the period derive() took `nextOpenTime` from — current while down, upcoming while clear.
+// 3. Take the first MATCH IN LIST ORDER rather than the earliest in time. The list is not
+//    guaranteed sorted by close, and a period that has already finished can still carry a
+//    start in the future (register #14 keeps those alive so an unsighted train still counts
+//    down) — so the same `stillDown` test derive() uses skips them here too.
+function gapToNextCloseAfter(time, exclude) {
+  var now = Date.now(), best = null;
   for (var i = 0; i < closurePeriods.length; i++) {
-    var s = closurePeriods[i].predictedStart || closurePeriods[i].start;
-    if (s.getTime() > time) return s.getTime() - time;
+    var p = closurePeriods[i];
+    if (p === exclude) continue;
+    if (!p.holdingOpen && p.end.getTime() <= now) continue;   // already finished
+    var s = (p.predictedStart || p.start).getTime();
+    if (best === null || s < best) best = s;
   }
-  return null;
+  return best === null ? null : best - time;
 }
 // ---- the two-slot event timeline ------------------------------------------------------
 // Must match the .55s transition on .cards-track in crossing.css.
@@ -358,7 +380,11 @@ function updateStatus() {
   // which is the wrong one for a card about the NEXT one. "Closed for" is the length of the
   // upcoming closure; "Open for" is the gap from the reopen to the close after it.
   var closedForMs = upcoming ? upcoming.end.getTime() - (upcoming.predictedStart || upcoming.start).getTime() : null;
-  var openForMs = nextOpenTime ? gapToNextCloseAfter(nextOpenTime.getTime()) : null;
+  // Exclude the period nextOpenTime came from — current while the barriers are down,
+  // upcoming while the crossing is clear (see derive()). Without it a period's own close,
+  // which always precedes its own end, would be the answer every time.
+  var openForMs = nextOpenTime
+    ? gapToNextCloseAfter(nextOpenTime.getTime(), currentClosure || upcoming) : null;
   renderEventCards(pr, t, closedForMs, openForMs);
   renderClosures();
 
