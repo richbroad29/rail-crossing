@@ -38,7 +38,13 @@ Ordered. Getting 1 wrong costs weeks, not hours.
 4. **Berth codes are only unique within a TD area.** `0006` exists in LA and in most other areas.
    Until the area-keying fix ships, a second area means a distant train can anchor a real closure.
    Check this before adding any second area.
-5. **A ship gate is a gate.** If the close-anchor spread doesn't meet the bar, the answer is "keep
+5. **Logging can stop silently, so check it rather than assume it.** Register #21: TD stopped being
+   written for 4½ days in September while systemd said `active (running)`, LDB kept polling and the
+   API kept serving — invisible from every signal that existed. At Portslade it was found by accident.
+   At a site you never look at, it would never be found, and the calibration window would quietly
+   contain a hole. Until the TD liveness watchdog exists, gap-check the logs (below) before trusting
+   any accumulated data.
+6. **A ship gate is a gate.** If the close-anchor spread doesn't meet the bar, the answer is "keep
    logging", not "launch with a wider confidence window". The app's stated goals are catch every
    closure, then avoid false alarms, then accurate timing — a crossing that fails gate 2 fails goal 2.
 
@@ -99,7 +105,11 @@ site visit or a new subscription.
    `"crossings": {}`. It emits zero events and banks raw bytes for the hunt in Phase 3.
 3. Confirm both logs are landing and rotating. Note the **23:00Z rotation** — a strike at 22:59 looks
    missing unless consecutive days are stitched.
-4. Diarise the Phase 3 review for **+14 days**.
+4. **Gap-check, weekly, until the watchdog exists.** One file per day, each ending near 22:59 UTC. A
+   missing day, or a file ending well short of 22:59 (register #21's last file ended at 22:24), is a
+   feed outage — note its dates and exclude them from every derivation and from `run-rate`'s 14-day
+   window, which otherwise reads the hole as "this freight didn't run".
+5. Diarise the Phase 3 review for **+14 days** of *gap-free* logging, not 14 calendar days.
 
 Cost of getting this wrong: every week you delay is a week added to launch, and the data is not
 recoverable.
@@ -161,8 +171,11 @@ count means the TIPLOC sets are wrong or the line genuinely has reversing servic
 Derive the `timing` block. Three sub-phases, in dependency order.
 
 **5a. Transits — no ground truth needed, ~14 days of TD.**
-Run `derive-transits.js`. Note it currently hard-codes `CHAIN`/`CLEAR` and classifies by
-Portslade-specific proxies (platform dwell, berth-0006 occupancy) — parameterise it first. Cells with
+Run `derive-transits.js`. Its chain and classifier live in `backend/scripts/lib/td-runs.js`, hard-coded
+to Portslade (`CHAIN`/`CLEAR` at lines 21-25, the Southwick test at line 99) — parameterise the lib
+first; `backtest-transits.js` shares it, so the backtest comes along free. Then use the backtest
+(CLAUDE.md, "Backtesting a prediction change") to check the table out-of-sample before trusting it,
+and to set `queueMaxAhead` from its §6 queue-distance sweep. Cells with
 n<15 are omitted rather than guessed, which is the right behaviour: an omitted cell degrades to the
 bestTime fallback, a guessed one degrades to a confident lie.
 
@@ -207,7 +220,8 @@ accumulates, and record any change here with its reason.
 | 3 | Open-lag spread | sd < 20 s | Portslade west sd 5.3, east sd 9.0. Generous headroom |
 | 4 | Direction resolution | ≥ 99% of movements resolved, **no silent default** | An unresolved direction must be `unknown`, never a guess |
 | 5 | Replay integrity | 0 inverted periods, 0 "CLEAR with a train on the crossing" over ≥ 3 days replayed | Registers #14/#15 — both were real, both were invisible without replay |
-| 6 | Freight false positives | Q-flagged predicted-but-unsighted rate measured and surfaced | Goal 2: avoid false alarms |
+| 6 | Data continuity | No unexplained TD gaps in the calibration window; known gaps excluded | Register #21 — a 4½-day silent outage that nothing detected |
+| 7 | Freight false positives | Q-flagged predicted-but-unsighted rate measured and surfaced | Goal 2: avoid false alarms |
 
 Gate 5 is the `crossing-audit` skill's job — hand off to it rather than reimplementing. Run it against
 the new crossing **before** launch, not after.

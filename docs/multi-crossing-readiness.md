@@ -297,9 +297,11 @@ Worth stating plainly, because it's most of the system:
   note — *"Method (no geography needed)"* — is precisely the property a remote launch needs.
 
 **Correction to an earlier draft of this review:** the other two derivation scripts are *not*
-parameterised. `derive-transits.js` hard-codes `CHAIN` and `CLEAR` as literals at the top of the file
-(lines 37-41) and takes only `--days` / `--out`; `derive-ttc.js` hard-codes `PLAN` and takes only a log
-directory. Both also classify trains by Portslade-specific proxies — platform dwell for "calls at
+parameterised. `derive-transits.js` takes only `--days` / `--out`, and the chain it walks is hard-coded:
+since the October backtest work the literals live in `backend/scripts/lib/td-runs.js:21-25` (`CHAIN`,
+`CLEAR`), shared with `backtest-transits.js` — so one parameterisation now fixes both scripts.
+`derive-ttc.js` hard-codes `PLAN` and takes only a log directory. All of them classify trains by
+Portslade-specific proxies (`lib/td-runs.js:99` reads `ins['0006']` / `ins['0004']` directly) — platform dwell for "calls at
 Portslade", berth-0006 occupancy for "calls at Southwick". So of the three, only `derive-chain.js` runs
 against a new crossing today. Parameterising the other two is a prerequisite for Phase C, and it is the
 cheap half: the logic is sound and general, the constants just need to come from config.
