@@ -70,6 +70,31 @@ or the app reports the crossing clear with a train on it: `_deriveState`, the `g
 filter, and `PREDICT.derive`. The client stops trusting the flag once the payload is >90 s old,
 so a device that has lost the backend can't sit on BARRIERS DOWN.
 
+**Which rule raised a held close, and for how long (live 2026-09-27, `740d4fc`).** A held period
+carries `closePendingReason` and `closePendingSince` **only while held** (an ordinary closure is
+byte-identical on the wire). The reason is a `+`-joined **set**, not a precedence — `unstruck` (the
+anchor projection expired), `queued` (a train ahead has not vacated, #20), `upstream` (the #14 final
+guard), or e.g. `queued+unstruck`. A set because the rules overlap, and reporting only the winner
+could not answer the question they exist for: how much held time a given rule's threshold would
+actually remove, when another rule is holding the same train anyway.
+
+Those two fields are **served, not stored**. The durable record is `logger.logHeld`, two lines per
+episode in `backend/data/logs/<date>.jsonl` (`cat: "held"`) — `start` with the opening rule, `end`
+with every rule that held it, `durationSecs`, and `how`: `released` (the train moved) vs `gone` (it
+left the merged list at the 3-min sighting grace). **Transitions, never ticks** — a hold recomputes
+at 1 Hz and `logger.log` appends synchronously. A `start` with no `end` is a hold that was still up
+when the process stopped, and is meant to read that way. Closure periods are not logged anywhere
+else, and a held close *suppresses* CLOSING_SOON, so before this a hold's main trace in the state
+log was a transition that never happened.
+
+**A train ahead only queues the countdown within `queueMaxAhead` berths (2026-10, `c2eb4b3`).**
+`td.<dir>.queueMaxAhead` (2 at Portslade) limits `queuedBound` — the countdown's queued hold — to a
+train at most that many berths ahead, the crossing berth counting one past the last chain berth.
+Set from the backtest's §6a: the furthest distance that still carries a real delay. **The BARRIERS
+DOWN gate in `_confirmedCloseTime` keeps the unlimited test on purpose** — the limit changes what
+the countdown says, never when the app asserts the barrier is down. Absent = unlimited (old
+behaviour); 0 = never queued. For a new crossing: run the backtest, read N off §6a.
+
 The **frontend has no build step** — edit files, push to `main`, GitHub Pages deploys within ~1 minute.
 
 ### Run `sh scripts/bump-assets.sh` before pushing a frontend change
@@ -172,6 +197,15 @@ Dedup: UID-first (CIF `CIF_train_uid` vs LDBSVWS `svc.uid`), then headcode + tim
 **Midnight-crossing CIF times — FIXED, don't re-fix.** This section used to describe a live bug: CIF times past 24:00 (e.g. `2510` = 01:10 next morning) mapped modulo-24, placing the train at 01:10 *today* instead of *tomorrow*. It was fixed in `1315934` and the description here was left stale, contradicting "Recently shipped" below. `londonMinsToDate` now takes `dayOffset = Math.floor(total / 1440)` and shifts the date stamp by it, and `analyseRoute` unwraps a route's times across 00:00 — so `2510` resolves to 01:10 tomorrow. Verified in `time-utils.js:80-93`.
 
 *TD* — STOMP listener active, writing JSONL to `~/rail-crossing/backend/data/logs/td/`. **Partially joined into predictions:** every CA/CB event emits a `sighting` event (`td-listener.js`); `crossing-state` records the first sighting per headcode per day in `tdSeenToday`, surfaces `tdSeen`/`tdSeenAt` on the API, and uses the sighting as the late-minute lock signal for CIF predictions (see Q-freight handling below). Still pending: confidence-tier narrowing via `tdBerth` (approach/protecting/clear).
+
+**TD can stop silently — check the logs are growing, 2026-09-27.** `td-listener` reconnects on a
+failed connect (exponential backoff to 60 s) and on a client `error` event, but nothing watches
+whether events are still *arriving*. On 2026-09-22 writing stopped at 22:24 UTC and did not resume
+until a restart on 09-27 — **4½ days with no berth data**, while systemd showed `active (running)`,
+LDB polled normally every 30 s and the API served predictions throughout. Everything that depends on
+TD degraded to timetable-only in that window: strike-anchored closes, clear-step-anchored opens, the
+Q-freight late-minute lock, and `run-rate`'s 14-day scan (which now has a four-day hole in it). See
+register #21. The cheap check is that today's file in `backend/data/logs/td/` exists and is growing.
 
 **Q-freight handling — false-positive control for CIF.** Freight scheduled in CIF often carries `Q` in `CIF_operating_characteristics` = "runs as required" (path booked, train only runs on demand — ~50% of Portslade-area freight). The pipeline addresses this in three layers:
 - `schedule-parser.js` sets `runsAsRequired=true` when the entry has the `Q` flag.
@@ -317,6 +351,18 @@ record-first playbook, the harness that replays recorded API payloads through th
 to re-check at the start of every audit so regressions are caught. Read `SKILL.md` before
 starting a watch; the ordering of its first phase matters (start recording before reading code).
 
+### Backtesting a prediction change before shipping it
+
+`backend/scripts/backtest-transits.js` (on `backend-v2`, run on the VPS where the TD logs are:
+`nice -n 19 node --max-old-space-size=350 backend/scripts/backtest-transits.js`) fits candidate
+predictors on TD up to `--cutoff` (default: the live table's generation date) and scores them on
+everything after — accuracy for every row of the transit table, the unsafe-miss rate, simulated
+hold time, and the queue-distance sweep. It shares its run extraction with `derive-transits.js`
+via `backend/scripts/lib/td-runs.js`, so it scores the live table's own rows. Its `consistency`
+line must read *matches the live table*, and its hold simulations are checked against the real
+held log — read those two before anything else. Validate changes to it on synthetic TD with a
+planted answer first; that is how two of its bugs were caught.
+
 ## Common tasks — quick reference
 
 - **Tweak timing parameters**: edit `backend/config/crossings.json` on `backend-v2` (`closeBefore` / `openAfter` / `openLagSecs` / `closeTrigger`) and deploy — the frontend renders the backend's closures. (`shared/crossings.json` feeds only the client-side confidence-window / debug-panel display.)
@@ -327,6 +373,30 @@ starting a watch; the ordering of its first phase matters (start recording befor
 - **Add a new crossing**: append entry to `shared/crossings.json`, create `<crossing-name>/index.html` mirroring `portslade/index.html`, call `initCrossing('<id>')`.
 - **Test changes**: open `portslade/index.html` directly in a browser (`open portslade/index.html` on macOS) — the VPS API URL is hard-coded (`API_BASE` in `shared/crossing.js`) so it works against live data.
 
+## Recently shipped (backend-v2, live 2026-10-05 — `c2eb4b3`)
+
+- **`queueMaxAhead: 2`** — a train ahead only holds the countdown as queued within 2 berths; the
+  BARRIERS DOWN gate keeps the unlimited test. Measured, not guessed: see "Held countdowns" above
+  and register #22. **Unverified in production until the held-report check below passes.**
+- **`backend/scripts/backtest-transits.js`** — out-of-sample backtest of transit predictors and the
+  queue-distance sweep. See "Backtesting a prediction change" above.
+- **`backend/scripts/held-report.js`** — reads the `cat:"held"` lines: episodes and held seconds by
+  rule, how they ended, by direction/class, duration shape. Takes a glob (only `*` is a wildcard):
+  `node backend/scripts/held-report.js 'backend/data/logs/2026-10-1*.jsonl'`.
+- **`backend/scripts/lib/td-runs.js`** — run extraction shared by `derive-transits.js` and the
+  backtest (byte-identical table output before and after the move), so they cannot drift apart.
+- **`npm test` no longer writes into the live log.** Until `bac913a` the suite appended ~700 fake
+  held episodes (dated 2023) to `data/logs/<today>.jsonl` on every run — the VPS's 2026-09-27 file
+  carries them. held-report drops any line dated >2 days from its file, and says how many.
+
+## Recently shipped (backend-v2, live 2026-09-27 — `740d4fc`)
+
+- **Held-close instrumentation** — `closePendingReason` / `closePendingSince` on a held period, plus
+  a two-line-per-episode `cat: "held"` record in the daily log. Step 0 of "show *Train held* less
+  often": the rules that raise a hold are not interchangeable, so the threshold has to be set from
+  measured shares rather than guessed. See the held-countdowns section above. No frontend change —
+  neither app reads the fields.
+
 ## Recently shipped (backend-v2, live 2026-05-31)
 
 - **Late-running CIF freight re-attachment** — a TD-sighted train whose scheduled crossing has passed (or is inside T−60s) now has `bestTime` re-projected from the sighting + `timing.areaEntryLeadSecs`, floored to the future, so it shows as imminent instead of expiring/vanishing. The lead values are a deliberate stopgap pending position-based triggering — **do not tune them** (see "Confidence-tier narrowing" below).
@@ -336,7 +406,72 @@ starting a watch; the ordering of its first phase matters (start recording befor
 
 ## Active work / pending items
 
+### Next steps, in order (as of 2026-10-05)
+
+1. **Verify `queueMaxAhead` in production — from 10 Oct.** On the VPS:
+   `node backend/scripts/held-report.js 'backend/data/logs/2026-10-1*.jsonl'`. Add `queued` and
+   `queued+unstruck` held seconds, divide by days. Before ~21,400/day; predicted ~6,800 (32%). Roughly
+   a third = the backtest's model holds, close register #22. Not near it = roll back to `d6f0017`
+   and find out why before building anything on top. (Optional early look: `…/2026-10-06.jsonl`.)
+2. **Step 2: queued/clear medians in the transit table at N=2**, so a genuine queue gets a
+   countdown from its own median instead of a hold, and the queued hold can go. Backtest §6b: east
+   error from the anchor 39.0 → 35.3s, west 14.9 → 14.4s, no worse on unsafe misses. Needs
+   `derive-transits.js` to emit the split and `_projectBerth`/the close to read it. ECS (delayed at
+   every distance) may want its own N — decide from §6a once step 2 exists.
+3. **Westbound +20s bias.** Anchor rows run ~20s later than the July table (bias +19.7s, 28% of
+   trains >30s late) — most of why west has more short `unstruck` holds than east. Re-run the
+   backtest with a later `--cutoff` (e.g. `2026-09-01`): if the bias shrinks, the table is stale —
+   regenerate it (`node backend/scripts/derive-transits.js`, then deploy). If not, it is skew.
+4. **Then revisit the sd grace on `expired`** against whatever holds are left. Backtest: east k=1
+   cuts short holds 73% for 309 s/day of "any moment now" on trains that then went held anyway;
+   west needs k=3. Worth it only if steps 1-3 leave a visible problem.
+5. **TD liveness watchdog (register #21)** — independent of the above. Read the journal around
+   2026-09-22 22:24 UTC first (`journalctl -u rail-crossing --since "2026-09-22 22:00" --until
+   "2026-09-23 00:00" | grep -iE "td|stomp"`), then add last-event staleness → reconnect, surfaced on
+   `/health`. Cheap check meanwhile: today's `backend/data/logs/td/` file exists and is growing.
+
+Decided and NOT to be reopened without new data: relabelling queued trains instead of fixing their
+timing (Rich, 2026-10-05); a rolling mean of the last 5 trains (worse in every backtest summary);
+inflating the median far out (unsafe-miss rate 50-62%).
+
+Small loose end: one held episode in 1,204 (09-27..10-05) logged a NEGATIVE duration, which needs
+the wall clock to have stepped backwards between two recomputes — probably one NTP correction.
+`grep -h '"cat":"held"' backend/data/logs/2026-*.jsonl | grep '"durationSecs":-'` shows it. Not urgent.
+
+### Standing items
+
 - **Confidence-tier narrowing via TD berth state** — TD sightings now flow into predictions (`tdSeen`/`tdSeenAt` on each CIF train) and drive the late-minute lock for Q-freight, but the per-berth `tdBerth` field (approach/protecting/clear) is still not populated. Setting it would unlock the ±90s → ±60s → ±30s → "imminent" confidence-window narrowing. This **position-based triggering** is intended to replace the `areaEntryLeadSecs` projection wholesale, which is why those lead values are not worth tuning.
+- **Show "Train held" less often — decided by backtest, step 1 LIVE (`c2eb4b3`, deployed 2026-10-05 21:27 UTC).**
+  Rich's ask, 2026-09-23: it appears often, and the fix must be a set rule that scales to other
+  crossings. Rich then reframed it (2026-10-05): **the timing is the real issue, not the label** —
+  relabelling queued trains was rejected; improve the prediction instead.
+  - **The held log** (`node backend/scripts/held-report.js`) put 90.5% of held time under the
+    `queued` rule, 9.7% under `unstruck` (short: mean 31s), almost all of it eastbound.
+  - **The backtest** (`backend/scripts/backtest-transits.js`, see below) scored every candidate out
+    of sample against 10 weeks of TD the live table never saw. Rejected on the data: a rolling mean
+    of the last 5 trains (worse everywhere — east r=0.18 is real but 5 trains is too few, west r≈0),
+    and inflating the median far out (unsafe-miss rate 50-62%). The sd grace on `expired` works but
+    is a trade (east k=1 cuts short holds 73%; west needs k=3, i.e. minutes of "any moment now") —
+    revisit after step 1. Splitting the table queued/clear wins everywhere but modestly.
+  - **The finding that mattered:** `_blockedByAhead` counted ANY train anywhere ahead on the chain —
+    a third of eastbound strikes. By distance (§6a): east stopping +73s at 1 berth, +41s at 2,
+    **+5s at 3**. `stoppingLocal` has NO penalty at any distance (the Southwick stop absorbs it);
+    ECS is delayed at every distance.
+  - **Step 1 (live 2026-10-05 21:27 UTC):** `td.<dir>.queueMaxAhead: 2` — a train ahead only queues the COUNTDOWN within
+    2 berths. The BARRIERS DOWN gate keeps the unlimited test. Predicted: queued held time to ~32%,
+    total "Train held" down ~60%. **Verify with held-report.js on post-deploy days only** (skip
+    2026-10-05, which straddles the restart): `node backend/scripts/held-report.js 'backend/data/logs/2026-10-1*.jsonl'`
+    from 10 Oct. Before: ~21,400 queued train-s/day (queued + queued+unstruck). Predicted ~6,800. If it
+    does not fall to roughly a third, the model is wrong — roll back to `d6f0017` and find out why.
+  - **Step 2 (next):** queued/clear medians at N=2 in the transit table, so a genuine queue gets a
+    countdown instead of a hold — and ECS gets its own numbers.
+  - **Side finding, unexplained:** westbound anchor rows run ~20s later than the July table (bias
+    +19.7s, 28% of trains >30s late). Stale table or skew — re-run the backtest with a later
+    `--cutoff` to tell them apart; regenerating the table is cheap.
+- **TD liveness is unmonitored** — see the note in the pipeline section above and register #21. Next
+  step is to root-cause the 09-22 stop (the journal around 22:24 UTC that day) and add a staleness
+  watchdog on last-event time, surfaced on `/health` so it is visible without reading the log
+  directory. Separate piece of work from the held question; don't bolt it onto that.
 - Ongoing calibration of `closeBefore` / `openAfter` / `closeTrigger` offsets from feedback data
 - `consecutiveWindow` was REMOVED from the Portslade config on 2026-08-01: it is the legacy
   grouping window and has been dead since `mergeOppositeMaxGapSecs` shipped, but it sat in both
