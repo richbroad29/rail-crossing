@@ -2446,10 +2446,23 @@ console.log('  -- step 0: the held-episode log --');
 
     // --- 7. closed: the train's own close arrives while it is still held -----------------
     //
-    // A queued train stays `held` through its protecting strike and past its own crossing,
-    // until it drops off the list. None of that is on a screen — its card reads "Closed" —
-    // and 10-19 Oct it was 22% of all logged held time. The episode ends when the close
-    // does; the payload's closePending does not change.
+    // A queued train stays `held` through its protecting strike, and the episode ends there,
+    // as `closed`. 10-19 Oct that was 22% of all logged held time.
+    //
+    // This block used to assert that `closePending` ALSO stayed true past the train's own
+    // crossing, on the stated grounds that "none of that is on a screen — its card reads
+    // Closed". That grounds was wrong, and the correction is the point of the 2026-10-26
+    // change below. Rendered through the deployed closure-card over this very fixture: the
+    // period's end is the clear step + the east open lag, so once it passes, `isCurrent` is
+    // false and the row falls through to the `closePending` branch and reads **"Train held"**
+    // again — with the banner back at CROSSING CLEAR — until `relevant()` drops the period at
+    // end + 60s. About 55 seconds per episode of advertising a held closure for a train that
+    // has already gone, roughly 9 times a day.
+    //
+    // So `closePending` must go false once the train has crossed. The closure itself is NOT
+    // affected: BARRIERS DOWN still fires at the protecting strike (measured — all 99 of the
+    // `how:"gone"` trains over 10-19 Oct struck it before crossing), which is why this is a
+    // stale row rather than a missed closure.
     {
       lines.length = 0;
       const st = new CrossingState('portslade', SHIPPED);
@@ -2476,7 +2489,12 @@ console.log('  -- step 0: the held-episode log --');
       check('closed: …recorded as its own ending', row(ended, 0).how, 'closed');
       check('closed: …lasting until the close, not until the train left the list', row(ended, 0).durationSecs, 170);
       check('closed: nothing is held in memory after the train has crossed', st.closeHeldSince.size, 0);
-      check('closed: the payload still says closePending (unchanged)', !!(last[0] || {}).closePending, true);
+      check('closed: closePending is FALSE once the train has crossed (2026-10-26)',
+        !!(last[0] || {}).closePending, false);
+      // The closure itself is untouched — it still gates on the protecting strike and still
+      // ends on the clear step + open lag. Only the "still to come" claim is withdrawn.
+      check('closed: …and the period still ends on the clear step + east open lag',
+        (last[0] || {}).end, iso(T + 200000 + 40000));
     }
   } finally {
     logger.logHeld = realLogHeld;
@@ -2674,6 +2692,91 @@ console.log('  -- 2026-10 queueExemptClasses: a class a queue does not delay is 
     const a = build(SHIPPED, LOCAL), b = build(noExempt(), LOCAL);
     check('the BARRIERS DOWN gate is unchanged by the exemption',
       a._confirmedCloseTime(LOCAL, now).toISOString(), b._confirmedCloseTime(LOCAL, now).toISOString());
+  }
+}
+
+// ---- 2026-10-26: a train that has CROSSED is not still queued -----------------------------
+//
+// FIELD MEASUREMENT, the `how:"gone"` holds. Over 2026-10-10..19, 99 held episodes ended by the
+// train leaving the merged list at the 3-minute sighting grace rather than by the hold being
+// released. They were 8% of episodes but 52.8% of all held time (mean 536s, ~9/day).
+//
+// scripts/gone-holds.js joined each one to the crossing clear step in the TD log. EVERY ONE of
+// the 99 trains crossed — none failed to run — so this is not a false alarm (goal 2) but real
+// closures being shown wrong (goal 1). In 61 of them the train crossed a median 212s BEFORE the
+// hold ended: the app went on advertising "Train held, closure still to come" for three and a
+// half minutes after that closure had been and gone, ~19 min/day of it.
+//
+// The cause is here. `_crossedAheadSinceStrike` exists because an anchor that struck while we
+// were queued is too early to trust. Once WE have performed the clear step we have crossed, so
+// there is no close left to hold — and its own comment says "once we have crossed, this is
+// moot". But the guard only returned null when our clear step predated the anchor STRIKE; a
+// train that crossed after its strike kept matching a leader inside the narrowed window and
+// stayed flagged queued until it was dropped. `if (mine) return null` is what the comment
+// already described.
+//
+// NOT a fix for the queued close being early (the uncalibrated lag, CLAUDE.md step 2). Once
+// released, the period starts at strike + offset, still ~73s early. What it stops is the hold
+// outliving the train.
+console.log('  -- 2026-10-26: a train that has crossed is not still queued --');
+{
+  const SHIPPED = JSON.parse(require('fs').readFileSync(
+    require('path').join(__dirname, '..', 'config', 'crossings.json'), 'utf8')).portslade;
+  const T = BASE;
+  const step = (st, hc, to, from, ts) => {
+    st.recordTdSighting(hc, new Date(ts));
+    st.recordTdBerth({ headcode: hc, to, from, ts: iso(ts), event: 'CA' });
+    st.recordTdClearStep({ headcode: hc, to, from, ts: iso(ts) });
+    st.recordTdCloseStrike({ headcode: hc, to, from, ts: iso(ts) });
+  };
+  // 1H01 is east `stopping` (anchor 0008 + 55s), queued behind 1L01 when its anchor struck.
+  const F = { ...mkT({ dir: 'east', headcode: '1H01', bestTimeMs: T + 260000 }),
+              callsAtStation: true, callsAtApproach: false };
+  // `upTo` lets each assertion see only the TD that had happened by then.
+  const build = (upTo) => {
+    const st = new CrossingState('portslade', SHIPPED);
+    const ev = [['1L01','0006','0008',T], ['1H01','0008','0010',T+5000],
+                ['1L01','0004','0006',T+60000], ['1L01','0002','0004',T+120000],
+                ['1H01','0006','0008',T+150000], ['1H01','0004','0006',T+200000],
+                ['1H01','0002','0004',T+260000]];
+    for (const [hc, to, from, ts] of ev) if (ts <= upTo) step(st, hc, to, from, ts);
+    return st;
+  };
+
+  // Premise: while it really is behind the leader, it is held — the rule must still work.
+  {
+    const st = build(T + 130000), now = new Date(T + 130000);
+    check('premise: the follower is class stopping', st._classOf(F), 'stopping');
+    checkTruthy('premise: before it crosses, the leader having cleared keeps it queued',
+      !!st._crossedAheadSinceStrike(F, now, 2));
+    checkTruthy('premise: …and the close is held', !!st._closeTimeInfo(F, now).held);
+  }
+
+  // The fix: its own clear step has landed, so it has crossed.
+  {
+    const now = new Date(T + 300000), st = build(T + 300000);
+    checkTruthy('premise: our own clear step is recorded', !!st._freshClearStep(F, now));
+    check('premise: nothing is ahead of it any more', st._blockedByAhead(F, now, 2), null);
+    check('a train that has crossed is no longer queued',
+      st._crossedAheadSinceStrike(F, now, 2), null);
+    const ci = st._closeTimeInfo(F, now);
+    check('…so its close is no longer held', !!ci.held, false);
+    check('…and reads the plain anchor arithmetic, 0008 + 55s',
+      ci.at.toISOString(), iso(T + 5000 + 55000));
+    const p = st._computeClosures([F], now)[0];
+    check('…and the period is a closure, not a pending hold', !!p.closePending, false);
+    check('…ending on its own clear step + the east open lag',
+      p.end, iso(T + 260000 + 40000));
+  }
+
+  // The older guard still has to work: crossed BEFORE the anchor struck (a stale strike).
+  {
+    const st = new CrossingState('portslade', SHIPPED);
+    step(st, '1H01', '0002', '0004', T);            // crossed first
+    step(st, '1H01', '0008', '0010', T + 60000);    // then a later strike
+    const now = new Date(T + 70000);
+    check('crossed before the strike: still not queued (the pre-existing guard)',
+      st._crossedAheadSinceStrike(F, now, 2), null);
   }
 }
 

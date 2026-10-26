@@ -1364,9 +1364,26 @@ class CrossingState {
     const berth = spec ? spec.berth : this._approachBerth(t.direction);
     const struck = berth ? this._freshStrike(t, now, berth) : null;
     if (!struck) return null;                          // no anchor reading ⇒ nothing tainted
+    // Once WE have performed the clear step we have crossed, and a closure that has happened
+    // has no close left to hold. Measured 2026-10-26 (scripts/gone-holds.js, 10-10..19): of 99
+    // `how:"gone"` episodes — 8% of holds but 52.8% of all held time — every single train
+    // crossed, and in 61 it crossed a median 212s BEFORE the hold ended, so the app advertised
+    // "Train held, closure still to come" for three and a half minutes after that closure was
+    // over. The old guard only released when our clear step predated the anchor STRIKE; a train
+    // crossing AFTER its strike went on matching a leader inside the narrowed window below and
+    // stayed queued until the 3-minute sighting grace dropped it.
+    //
+    // This does not make the close RIGHT — released, it reads strike + offset, still early by
+    // the uncalibrated queued lag (CLAUDE.md step 2). It stops the hold outliving the train.
+    // `_freshClearStep` applies a TTL but no upper bound, so a clear step stamped LATER than
+    // `now` still comes back — which a test fixture that records a whole run up front will
+    // produce, and which would release this hold before the train had gone anywhere. Compare
+    // against the clock explicitly. (The old code was accidentally safe here: it used the
+    // step only as an upper bound on the search window, where a future value is inert.)
+    const nowMs = now instanceof Date ? now.getTime() : (now || Date.now());
     const mine = this._freshClearStep(t, now);
-    const until = mine ? mine.ts : Infinity;           // once we have crossed, this is moot
-    if (until <= struck.ts) return null;
+    if (mine && mine.ts <= nowMs) return null;
+    const until = mine ? mine.ts : Infinity;
     for (const s of this.clearStepSeen.values()) {
       if (s.headcode === t.headcode) continue;
       if (s.direction !== t.direction) continue;       // the other road does not queue us
