@@ -62,8 +62,11 @@ function listDayFiles(logdir) {
 // approach can straddle two files. A run is detected by its clear step; `ins` holds the LAST
 // strike into each chain berth within 30 min before it, plus ins[XING].
 //   yields { file, day, runs: [{ hc, dirn, cls, ins, xt, outTs, dwell, sec6 }] }
-async function* runsByDay(logdir, { days = 0 } = {}) {
+// `until` (YYYY-MM-DD) stops after that day's file — so a table can be rebuilt on exactly the
+// window the live one was, and the backtest's own training cutoff means the same thing here.
+async function* runsByDay(logdir, { days = 0, until = null } = {}) {
   let files = listDayFiles(logdir);
+  if (until) files = files.filter(f => f.slice(3, 13) <= until);
   if (days > 0) files = files.slice(-days);
   let prev = [];
   for (const fn of files) {
@@ -105,6 +108,69 @@ async function* runsByDay(logdir, { days = 0 } = {}) {
   }
 }
 
+// QUEUED-AT-STRIKE — how many berths ahead the nearest same-direction train was at each of a
+// run's chain strikes. Lifted verbatim out of backtest-transits.js on 2026-10-26 so the table's
+// queued cells (derive-transits) are built on exactly the definition the backtest scored them
+// with, and the live engine records the same quantity at each strike (crossing-state
+// recordTdCloseStrike -> _blockedByAhead at the strike instant).
+//
+// Mirrors crossing-state._blockedByAhead: a same-direction train further along the chain
+// (fresh within the strike TTL), or standing on the crossing berth, at the instant of the
+// strike. Only trains that completed a run are visible here — a train that never crossed
+// (terminated, reversed) is in liveTrains but not in this list, so this slightly UNDER-counts.
+const STRIKE_TTL_MS = 20 * 60 * 1000;     // crossing-state CLOSE_STRIKE_TTL_MS
+
+function aheadTools(runs) {
+  const byDir = { east: [], west: [] };
+  for (const r of runs) byDir[r.dirn].push(r);
+  for (const d of ['east', 'west']) byDir[d].sort((a, b) => a.xt - b.xt);
+  const lowerBound = (arr, t) => { let lo = 0, hi = arr.length; while (lo < hi) { const m = (lo + hi) >> 1; if (arr[m].xt < t) lo = m + 1; else hi = m; } return lo; };
+  // Same-direction runs that could be in the way at any instant in [from, to] — the window the
+  // live test would look across, widened to cover a whole approach so it is found once per run.
+  const candidates = (run, from, to) => {
+    const arr = byDir[run.dirn], out = [];
+    for (let i = lowerBound(arr, from - 30 * 60000); i < arr.length && arr[i].xt <= to + 30 * 60000; i++) if (arr[i] !== run) out.push(arr[i]);
+    return out;
+  };
+  // HOW MANY BERTHS AHEAD the nearest same-direction train is, for a train at chain index myIdx at
+  // time t; Infinity when nothing is in the way. The crossing berth (0002 east / 0007 west) counts
+  // as one step past the last chain berth. "Queued" under today's live rule is simply < Infinity,
+  // so N = any reproduces the old yes/no exactly; a distance limit N is <= N.
+  function nearestAhead(run, myIdx, t, cands) {
+    const chain = CHAIN[run.dirn], xIdx = chain.length;
+    let best = Infinity;
+    for (const o of cands) {
+      if (o.xt < t - 30 * 60000 || o.xt > t + 30 * 60000) continue;
+      if (t >= o.xt) {
+        const left = o.outTs !== null ? o.outTs : o.xt + 120000;
+        if (t < left) best = Math.min(best, xIdx - myIdx);   // on the crossing berth: in the way
+        continue;
+      }
+      let idx = -1, seen = 0;
+      for (let j = 0; j < chain.length; j++) { const s = o.ins[chain[j]]; if (s !== undefined && s <= t) { idx = j; seen = s; } }
+      if (idx > myIdx && t - seen <= STRIKE_TTL_MS) best = Math.min(best, idx - myIdx);
+    }
+    return best;
+  }
+  return { candidates, nearestAhead };
+}
+
+// Sets r.ahead[berth] (steps to the nearest train ahead at that strike, Infinity = none) and
+// r.cands (the runs that could be in the way) on every run. Callers drop r.cands when done.
+function markAhead(runs) {
+  const tools = aheadTools(runs);
+  for (const r of runs) {
+    r.ahead = {};
+    const strikes = CHAIN[r.dirn].filter(b => r.ins[b] !== undefined).map(b => r.ins[b]);
+    r.cands = tools.candidates(r, Math.min(...strikes), r.xt);
+    CHAIN[r.dirn].forEach((b, idx) => {
+      if (r.ins[b] === undefined) return;
+      r.ahead[b] = tools.nearestAhead(r, idx, r.ins[b], r.cands);
+    });
+  }
+  return tools;
+}
+
 // Every measured berth pair in a run, in chain order, with derive-transits' sanity filter.
 function pairsOf(run) {
   const order = ORDER[run.dirn];
@@ -126,4 +192,5 @@ const median = v => { const s = v.slice().sort((a, b) => a - b); const m = s.len
 const sd = v => { const m = v.reduce((a, b) => a + b, 0) / v.length;
   return Math.sqrt(v.reduce((a, b) => a + (b - m) * (b - m), 0) / v.length); };
 
-module.exports = { CHAIN, CLEAR, XING, ORDER, classify, readDay, listDayFiles, runsByDay, pairsOf, median, sd };
+module.exports = { CHAIN, CLEAR, XING, ORDER, STRIKE_TTL_MS, classify, readDay, listDayFiles, runsByDay,
+  aheadTools, markAhead, pairsOf, median, sd };

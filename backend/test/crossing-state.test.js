@@ -20,6 +20,19 @@ const CrossingState = require('../src/crossing-state');
 // swap in their own recorder and restore this no-op afterwards.
 require('../src/logger').logHeld = function () {};
 
+// The live transit table WITHOUT its step-2 queued section (2026-10-26). The tests of the queued
+// HOLD rule — #20, step 0's C20 case, queueMaxAhead, queueExemptClasses, the 'closed' episode —
+// pin to it, so they go on testing the hold whatever the shipped table carries. Once a queued
+// cell applies, a train queued at its strike counts down from its own median instead of being
+// held; the step-2 block tests that.
+const TABLE_NO_QUEUED = (() => {
+  const t = JSON.parse(require('fs').readFileSync(
+    require('path').join(__dirname, '..', 'data', 'transits.json'), 'utf8')).portslade || {};
+  delete t.queued;
+  return t;
+})();
+const holdOnly = cfg => ({ ...cfg, transits: TABLE_NO_QUEUED });
+
 let pass = 0, fail = 0;
 function check(label, actual, expected) {
   if (actual === expected) { console.log(`  PASS  ${label}`); pass++; }
@@ -1895,7 +1908,7 @@ console.log('  -- #18 a merged period ends on the last train to CLEAR, not the l
 
   // Rebuilt per instant so each assertion sees only the TD the app had by then.
   const build = (nowMs) => {
-    const st = new CrossingState('portslade', SHIPPED);
+    const st = new CrossingState('portslade', holdOnly(SHIPPED));
     const step = (hc, to, from, ts) => {
       if (ts > nowMs) return;
       st.recordTdSighting(hc, new Date(ts));
@@ -2174,7 +2187,7 @@ console.log('  -- step 0: closePendingReason / closePendingSince --');
   // touch this hold — which is exactly the distinction the field exists to expose.
   {
     const S15_0006 = T - 322000, S15_0004 = T - 160000, H23_0008 = T - 155000;
-    const st = new CrossingState('portslade', SHIPPED);
+    const st = new CrossingState('portslade', holdOnly(SHIPPED));
     const step = (hc, to, from, ts) => {
       st.recordTdSighting(hc, new Date(ts));
       st.recordTdBerth({ headcode: hc, to, from, ts: iso(ts), event: 'CA' });
@@ -2416,7 +2429,7 @@ console.log('  -- step 0: the held-episode log --');
     // does; the payload's closePending does not change.
     {
       lines.length = 0;
-      const st = new CrossingState('portslade', SHIPPED);
+      const st = new CrossingState('portslade', holdOnly(SHIPPED));
       const F = { ...mkT({ dir: 'east', headcode: '1N07', bestTimeMs: T + 200000 }),
                   callsAtStation: true, callsAtApproach: false };     // stopping: 0008 + 55s
       const step = (hc, from, to, ts) => {
@@ -2425,15 +2438,23 @@ console.log('  -- step 0: the held-episode log --');
         st.recordTdClearStep({ headcode: hc, to, from, ts: iso(ts) });
         st.recordTdCloseStrike({ headcode: hc, to, from, ts: iso(ts) });
       };
-      step('1L07', '0008', '0006', T - 5000);           // leader 1 ahead at our anchor strike
-      step('1N07', '0010', '0008', T);
-      step('1L07', '0006', '0004', T + 30000);
-      step('1L07', '0004', '0002', T + 60000);
-      step('1N07', '0008', '0006', T + 130000);
-      step('1N07', '0006', '0004', T + 170000);         // protecting strike: barriers down
-      step('1N07', '0004', '0002', T + 200000);         // crossed
+      // Fed in time order as the clock runs, as the live feed does. Recording them all up front
+      // would make the protecting strike "fresh" from the first pass (a strike stamped in the
+      // future reads as recent), which is not a situation the engine ever meets.
+      const events = [
+        ['1L07', '0008', '0006', T - 5000],             // leader 1 ahead at our anchor strike
+        ['1N07', '0010', '0008', T],
+        ['1L07', '0006', '0004', T + 30000],
+        ['1L07', '0004', '0002', T + 60000],
+        ['1N07', '0008', '0006', T + 130000],
+        ['1N07', '0006', '0004', T + 170000],           // protecting strike: barriers down
+        ['1N07', '0004', '0002', T + 200000]            // crossed
+      ];
       let last = [];
-      for (let s = 0; s <= 400; s += 5) last = st._computeClosures([F], new Date(T + s * 1000));
+      for (let s = 0; s <= 400; s += 5) {
+        while (events.length && events[0][3] <= T + s * 1000) step(...events.shift());
+        last = st._computeClosures([F], new Date(T + s * 1000));
+      }
       const ended = lines.filter(l => l.phase === 'end');
       check('closed: the queued hold opened at the start', row(lines.filter(l => l.phase === 'start'), 0).reason, 'queued');
       check('closed: it ends once, at the protecting strike', ended.length, 1);
@@ -2468,7 +2489,7 @@ console.log('  -- 2026-10 queueMaxAhead: a train ahead only queues this one with
   // 1H01 calls at Portslade but not Southwick: class stopping, close anchor 0008 + 55s.
   const F = { ...mkT({ dir: 'east', headcode: '1H01', bestTimeMs: T + 200000 }), callsAtStation: true, callsAtApproach: false };
   const build = (cfg, leaderTo, leaderFrom) => {
-    const st = new CrossingState('portslade', cfg);
+    const st = new CrossingState('portslade', holdOnly(cfg));
     const step = (hc, to, from, ts) => {
       st.recordTdSighting(hc, new Date(ts));
       st.recordTdBerth({ headcode: hc, to, from, ts: iso(ts), event: 'CA' });
@@ -2571,7 +2592,7 @@ console.log('  -- 2026-10 queueExemptClasses: a class a queue does not delay is 
   const THRU  = { ...mkT({ dir: 'east', headcode: '1H01', bestTimeMs: T + 200000 }),
                   callsAtStation: true, callsAtApproach: false };
   const build = (cfg, follower) => {
-    const st = new CrossingState('portslade', cfg);
+    const st = new CrossingState('portslade', holdOnly(cfg));
     const step = (hc, to, from, ts) => {
       st.recordTdSighting(hc, new Date(ts));
       st.recordTdBerth({ headcode: hc, to, from, ts: iso(ts), event: 'CA' });
@@ -2638,6 +2659,183 @@ console.log('  -- 2026-10 queueExemptClasses: a class a queue does not delay is 
     const a = build(SHIPPED, LOCAL), b = build(noExempt(), LOCAL);
     check('the BARRIERS DOWN gate is unchanged by the exemption',
       a._confirmedCloseTime(LOCAL, now).toISOString(), b._confirmedCloseTime(LOCAL, now).toISOString());
+  }
+}
+
+// ---- 2026-10-26: step 2 — a queued train counts down from its own median -------------------
+//
+// Rich, 2026-10-05: fix the timing, not the label. A train that struck its berth with another
+// within queueMaxAhead in front does not run like the clear runs the table is mostly measured on
+// (east stopping 0008>XING +73s at 1 ahead, +41s at 2: backtest 6a), and the only true thing we
+// said about it was "Train held". The table's queued section (derive-transits) gives it its own
+// median, conditioned on where the nearest train was AT the strike (recordTdCloseStrike). Built
+// on the real base table plus a queued fixture; the numbers below are plain arithmetic on them:
+// east stopping 0008>XING 189s and offsetSecs 55, so the class lead is 134s; west stopping
+// 0003>XING 153s with crossingLeadSecs 92; east passenger open lag 40s.
+console.log('  -- 2026-10-26 step 2: a queued train counts down from its own (queued) median --');
+{
+  const SHIPPED = JSON.parse(require('fs').readFileSync(
+    require('path').join(__dirname, '..', 'config', 'crossings.json'), 'utf8')).portslade;
+  const QT = JSON.parse(JSON.stringify(TABLE_NO_QUEUED));
+  QT.queued = {
+    maxAhead: { east: 2, west: 2 },
+    east: {
+      stopping: { '0010>XING': { secs: 420, sdSecs: 60, n: 40 }, '0008>XING': { secs: 250, sdSecs: 50, n: 174 },
+                  '0006>XING': { secs: 160, sdSecs: 40, n: 150 } },
+      stoppingLocal: { '0006>XING': { secs: 230, sdSecs: 50, n: 330 } }
+    },
+    west: { stopping: { '0003>XING': { secs: 175, sdSecs: 30, n: 187 } } }
+  };
+  const withQ = (cfg, table) => ({ ...cfg, transits: table || QT });
+  const T = BASE, LAG = 40;
+  const stopping = hc => ({ ...mkT({ dir: 'east', headcode: hc, bestTimeMs: T + 300000 }),
+                            callsAtStation: true, callsAtApproach: false });
+  const local = hc => ({ ...mkT({ dir: 'east', headcode: hc, bestTimeMs: T + 300000 }),
+                         callsAtStation: true, callsAtApproach: true });
+  // TD fed the way the 'sighting' hook feeds it, in time order — berth first, then the strike.
+  const world = (cfg, steps) => {
+    const st = new CrossingState('portslade', cfg);
+    for (const [hc, from, to, ts] of steps) {
+      st.recordTdSighting(hc, new Date(ts));
+      st.recordTdBerth({ headcode: hc, to, from, ts: iso(ts), event: 'CA' });
+      st.recordTdClearStep({ headcode: hc, to, from, ts: iso(ts) });
+      st.recordTdCloseStrike({ headcode: hc, to, from, ts: iso(ts) });
+    }
+    return st;
+  };
+  const F = stopping('1H01');
+  const ONE_AHEAD = [['1L01', '0008', '0006', T - 5000], ['1H01', '0010', '0008', T]];
+  const now = new Date(T + 10000);
+  const sig = ci => `${ci.at.toISOString()}/${ci.held}/${ci.heldReason || '-'}`;
+  // Methods this block introduces, called defensively so that falsifying against an engine
+  // without them FAILS every assertion rather than throwing at the first.
+  const call = (st, name, ...a) => (typeof st[name] === 'function' ? st[name](...a) : undefined);
+
+  // The quantity the cells are conditioned on, read once at the strike.
+  {
+    check('strike: how far ahead the nearest train was is recorded with it',
+      (world(withQ(SHIPPED), ONE_AHEAD).closeStrikeSeen.get('1H01|0008') || {}).ahead, 1);
+    check('strike: nothing ahead is recorded as null',
+      (world(withQ(SHIPPED), [['1H02', '0010', '0008', T]]).closeStrikeSeen.get('1H02|0008') || {}).ahead, null);
+    const blind = new CrossingState('portslade', withQ(SHIPPED));
+    blind.recordTdCloseStrike({ headcode: '1H03', to: '0008', from: '0010', ts: iso(T) });
+    check('strike: a train the live map has not placed there is "not known", never guessed',
+      'ahead' in (blind.closeStrikeSeen.get('1H03|0008') || {}), false);
+  }
+
+  // The rule itself.
+  {
+    check('premise: without queued cells this train is held as queued',
+      sig(world(holdOnly(SHIPPED), ONE_AHEAD)._closeTimeInfo(F, now)).split('/').slice(1).join('/'), 'true/queued');
+    const st = world(withQ(SHIPPED), ONE_AHEAD);
+    const ci = st._closeTimeInfo(F, now);
+    check('queued at its strike: a countdown, not a hold', ci.held, false);
+    check('…to strike + its queued median - the class lead (0008 + 250 - 134)', ci.at.toISOString(), iso(T + 116000));
+    check('…and the open moves with it: queued crossing + open lag', st._openPred(F, now).toISOString(), iso(T + (250 + LAG) * 1000));
+    const p = st._computeClosures([F], now)[0] || {};
+    checkTruthy('…so the closure is not inverted', Date.parse(p.end) >= Date.parse(p.predictedStart || p.start));
+    check('…the period end is that open too', p.end, iso(T + (250 + LAG) * 1000));
+    check('…and the period is not closePending', !!p.closePending, false);
+    const pc = call(st, '_projectCrossing', F, now) || {};
+    check('the crossing projection every reader shares is the queued one when later',
+      `${pc.ts}/${!!pc.queued}`, `${T + 250000}/true`);
+    check('…and the clear-run one without the cells (0008 + 189)',
+      (call(world(holdOnly(SHIPPED), ONE_AHEAD), '_projectCrossing', F, now) || {}).ts, T + 189000);
+    check('past its queued median, still blocked: held as queued, as before',
+      sig(st._closeTimeInfo(F, new Date(T + 120000))), `${iso(T + 120000)}/true/queued`);
+  }
+
+  // The train list's late-runner drop rule reads the same projection. A timetable-only (CIF)
+  // train is dropped 3 min past its projected crossing; empty stock queued at 0008 stands far
+  // longer than its clear-run timing allows (+219s at 1 ahead, 6a), so on the clear projection
+  // it would vanish from the list mid-approach — a closure not shown, goal 1. Real clock here:
+  // _mergeTrains reads it.
+  {
+    const now0 = Date.now();
+    const QE = JSON.parse(JSON.stringify(QT));
+    QE.queued.east.ecs = { '0008>XING': { secs: 500, sdSecs: 90, n: 265 } };
+    const mk = table => {
+      const st = new CrossingState('portslade', withQ(SHIPPED, table));
+      for (const [hc, from, to, ts] of [['5L00', '0008', '0006', now0 - 425000], ['5H01', '0010', '0008', now0 - 420000]]) {
+        st.recordTdSighting(hc, new Date(ts));
+        st.recordTdBerth({ headcode: hc, to, from, ts: new Date(ts).toISOString(), event: 'CA' });
+        st.recordTdCloseStrike({ headcode: hc, to, from, ts: new Date(ts).toISOString() });
+      }
+      st._scheduleTimeToDate = () => new Date(now0 - 10 * 60000);
+      st.scheduleTrains = [{ uid: 'E00001', headcode: '5H01', direction: 'east', trainType: 'ecs',
+        estimatedCrossingMins: 0, origin: 'A', destination: 'B', operator: 'ZZ' }];
+      return st._mergeTrains().find(m => m.headcode === '5H01');
+    };
+    check('premise: on the clear-run projection the queued ECS falls off the list', mk(TABLE_NO_QUEUED), undefined);
+    const kept = mk(QE);
+    checkTruthy('on its queued crossing it stays on the list', !!kept);
+    // 80s out, clear of the list's 30s floor on bestTime (BEST_TIME_EPSILON_MS), which would
+    // otherwise win by however many ms the clock moved since now0.
+    check('…with that crossing as its time (0008 + 500)', kept ? kept.bestTime.getTime() : null, now0 - 420000 + 500000);
+  }
+
+  // Where it does not apply, the answer is exactly what it was.
+  {
+    const steps = [['1L01', '0004', '0002', T - 5000], ['1H01', '0010', '0008', T]];
+    check('3 ahead at its strike: not queued — identical to no cells',
+      sig(world(withQ(SHIPPED), steps)._closeTimeInfo(F, now)), sig(world(holdOnly(SHIPPED), steps)._closeTimeInfo(F, now)));
+    const L = local('1N01');
+    const lsteps = [['1L01', '0006', '0004', T - 5000], ['1N01', '0008', '0006', T]];
+    check('exempt class (stoppingLocal): no estimate — identical to no cells',
+      sig(world(withQ(SHIPPED), lsteps)._closeTimeInfo(L, now)), sig(world(holdOnly(SHIPPED), lsteps)._closeTimeInfo(L, now)));
+    check('no queued section in the table: no estimate', call(world(holdOnly(SHIPPED), ONE_AHEAD), '_queuedEstimate', F, now), null);
+  }
+
+  // Before its anchor: the estimate beats the 'unstruck' bound until now + offset overtakes it.
+  {
+    const steps = [['1L01', '0008', '0006', T - 5000], ['1H01', '0012', '0010', T]];   // 2 ahead
+    const st = world(withQ(SHIPPED), steps);
+    check('pre-anchor, clear projection to 0008 expired, queued at 0010: counts down (0010 + 420 - 134)',
+      sig(st._closeTimeInfo(F, new Date(T + 200000))), `${iso(T + 286000)}/false/-`);
+    const n2 = new Date(T + 235000);                  // now + 55 = +290, past the estimate
+    check('…once the bound passes the estimate, the old rules decide, reasons and all',
+      sig(st._closeTimeInfo(F, n2)), sig(world(holdOnly(SHIPPED), steps)._closeTimeInfo(F, n2)));
+    check('…which is the bound, named for both rules', st._closeTimeInfo(F, n2).heldReason, 'queued+unstruck');
+  }
+
+  // The train in front reopens later than the estimate: then it decides the close.
+  {
+    const QT2 = JSON.parse(JSON.stringify(QT));
+    QT2.queued.east.stopping['0008>XING'].secs = 200;                // estimate 0008 + 200 - 134
+    const steps = [['1L01', '0006', '0004', T - 5000], ['1H01', '0010', '0008', T]];
+    const st = world(withQ(SHIPPED, QT2), steps);
+    const L = stopping('1L01');
+    st.ldbTrains = [L];
+    const floor = st._openPred(L, now).getTime();
+    checkTruthy('premise: the train in front reopens after the estimate', floor > T + 66000);
+    check('…so it is held as queued, floored on that open', sig(st._closeTimeInfo(F, now)),
+      `${new Date(floor).toISOString()}/true/queued`);
+  }
+
+  // Protecting berth struck: the close is under way and the physical rule answers.
+  {
+    const steps = ONE_AHEAD.concat([['1L01', '0006', '0004', T + 20000], ['1L01', '0004', '0002', T + 40000],
+      ['1H01', '0008', '0006', T + 60000], ['1H01', '0006', '0004', T + 90000]]);
+    check('protecting berth struck: no estimate', call(world(withQ(SHIPPED), steps), '_queuedEstimate', F, new Date(T + 95000)), null);
+  }
+
+  // BARRIERS DOWN is not this rule's to move.
+  {
+    const st = world(withQ(SHIPPED), ONE_AHEAD);
+    const conf = st._confirmedCloseTime(F, now).getTime();
+    checkTruthy('BARRIERS DOWN gate: still deferred past now + offset while the train ahead is in the way',
+      conf >= now.getTime() + 55000);
+    checkTruthy('…and never before the countdown now shown', conf >= st._closeTimeInfo(F, now).at.getTime());
+  }
+
+  // One rule, both directions.
+  {
+    const W = { ...mkT({ dir: 'west', headcode: '1W01', bestTimeMs: T + 300000 }), callsAtStation: true };
+    const steps = [['1W00', '0003', '0005', T - 5000], ['1W01', '0001', '0003', T]];
+    check('west premise: without the cells, the clear-run close (0003 + 153 - 92)',
+      sig(world(holdOnly(SHIPPED), steps)._closeTimeInfo(W, now)), `${iso(T + 61000)}/false/-`);
+    check('west, queued at its strike: its own median (0003 + 175 - 92)',
+      sig(world(withQ(SHIPPED), steps)._closeTimeInfo(W, now)), `${iso(T + 83000)}/false/-`);
   }
 }
 

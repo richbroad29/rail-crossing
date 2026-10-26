@@ -35,10 +35,13 @@
  *       that is the check that this simulator describes the live system.
  *   S2  the same, projecting to the CROSSING from every berth, anchor or not — the view in
  *       which a queued train's lost time shows up, and so the one #1 is judged on.
+ *   7   the STEP 2 rule as shipped (2026-10-26): a train queued at its freshest strike counts
+ *       down from its own queued median instead of being held. Held seconds today vs with it,
+ *       and the accuracy of the countdowns it shows instead.
  */
 const fs = require('fs');
 const path = require('path');
-const { CHAIN, XING, ORDER, runsByDay, pairsOf, median, sd } = require('./lib/td-runs');
+const { CHAIN, XING, ORDER, STRIKE_TTL_MS, runsByDay, markAhead, pairsOf, median, sd } = require('./lib/td-runs');
 
 const args = process.argv.slice(2);
 const argOf = (k, d) => { const i = args.indexOf(k); return i === -1 ? d : args[i + 1]; };
@@ -49,7 +52,6 @@ const CSV = argOf('--csv', null);
 const TABLE = argOf('--table', path.join(__dirname, '..', 'data', 'transits.json'));
 const CONFIG = argOf('--config', path.join(__dirname, '..', 'config', 'crossings.json'));
 const MIN_N = 15;
-const STRIKE_TTL_MS = 20 * 60 * 1000;     // crossing-state CLOSE_STRIKE_TTL_MS
 const KS = [0, 0.5, 1, 1.5, 2, 3];
 
 const anchors = (() => {
@@ -78,50 +80,12 @@ const out = cells => console.log('  ' + cells.map(([v, w]) => (w < 0 ? String(v)
   if (!runs.length) { console.error('No runs found under', LOGDIR); process.exit(2); }
 
   // ---------------------------------------------------------------- queued-at-strike
-  // Mirrors crossing-state._blockedByAhead: a same-direction train further along the chain
-  // (fresh within the strike TTL), or standing on the crossing berth, at the instant of the
-  // strike. Only trains that completed a run are visible here — a train that never crossed
-  // (terminated, reversed) is in liveTrains but not in this list, so this slightly UNDER-counts.
-  const byDir = { east: [], west: [] };
-  for (const r of runs) byDir[r.dirn].push(r);
-  for (const d of ['east', 'west']) byDir[d].sort((a, b) => a.xt - b.xt);
-  const lowerBound = (arr, t) => { let lo = 0, hi = arr.length; while (lo < hi) { const m = (lo + hi) >> 1; if (arr[m].xt < t) lo = m + 1; else hi = m; } return lo; };
-  // Same-direction runs that could be in the way at any instant in [from, to] — the window the
-  // live test would look across, widened to cover a whole approach so it is found once per run.
-  const candidates = (run, from, to) => {
-    const arr = byDir[run.dirn], out = [];
-    for (let i = lowerBound(arr, from - 30 * 60000); i < arr.length && arr[i].xt <= to + 30 * 60000; i++) if (arr[i] !== run) out.push(arr[i]);
-    return out;
-  };
-  // HOW MANY BERTHS AHEAD the nearest same-direction train is, for a train at chain index myIdx at
-  // time t; Infinity when nothing is in the way. The crossing berth (0002 east / 0007 west) counts
-  // as one step past the last chain berth. "Queued" under today's live rule is simply < Infinity,
-  // so N = any reproduces the old yes/no exactly; a distance limit N is <= N.
-  function nearestAhead(run, myIdx, t, cands) {
-    const chain = CHAIN[run.dirn], xIdx = chain.length;
-    let best = Infinity;
-    for (const o of cands) {
-      if (o.xt < t - 30 * 60000 || o.xt > t + 30 * 60000) continue;
-      if (t >= o.xt) {
-        const left = o.outTs !== null ? o.outTs : o.xt + 120000;
-        if (t < left) best = Math.min(best, xIdx - myIdx);   // on the crossing berth: in the way
-        continue;
-      }
-      let idx = -1, seen = 0;
-      for (let j = 0; j < chain.length; j++) { const s = o.ins[chain[j]]; if (s !== undefined && s <= t) { idx = j; seen = s; } }
-      if (idx > myIdx && t - seen <= STRIKE_TTL_MS) best = Math.min(best, idx - myIdx);
-    }
-    return best;
-  }
+  // lib/td-runs.markAhead: the same definition derive-transits builds the table's queued cells
+  // with (and crossing-state records at each live strike). See there for what it mirrors.
+  const { nearestAhead } = markAhead(runs);
   for (const r of runs) {
-    r.q = {}; r.ahead = {};
-    const strikes = CHAIN[r.dirn].filter(b => r.ins[b] !== undefined).map(b => r.ins[b]);
-    r.cands = candidates(r, Math.min(...strikes), r.xt);
-    CHAIN[r.dirn].forEach((b, idx) => {
-      if (r.ins[b] === undefined) return;
-      r.ahead[b] = nearestAhead(r, idx, r.ins[b], r.cands);
-      r.q[b] = r.ahead[b] < Infinity;
-    });
+    r.q = {};
+    for (const b in r.ahead) r.q[b] = r.ahead[b] < Infinity;
     if (r.day <= CUTOFF) r.cands = null;      // only the test window's hold simulation needs it again
   }
 
@@ -210,7 +174,8 @@ const out = cells => console.log('  ' + cells.map(([v, w]) => (w < 0 ? String(v)
   try {
     const live = JSON.parse(fs.readFileSync(TABLE, 'utf8')).portslade;
     const diffs = [];
-    for (const d of Object.keys(live)) for (const cls of Object.keys(live[d])) for (const key of Object.keys(live[d][cls])) {
+    // Directions only: the table's `queued` section (step 2, 2026-10-26) is a different population.
+    for (const d of ['east', 'west'].filter(x => live[x])) for (const cls of Object.keys(live[d])) for (const key of Object.keys(live[d][cls])) {
       const b = fit.get(`${d}|${cls}|${key}`); if (b) diffs.push(Math.abs(Math.round(b.med) - live[d][cls][key].secs));
     }
     console.log('consistency: refit BASE vs %s over %d cells — median |diff| %ss, max %ss %s',
@@ -502,6 +467,146 @@ const out = cells => console.log('  ' + cells.map(([v, w]) => (w < 0 ? String(v)
       RECENT, f0(both[NS.length - 1] / recentDays));
     console.log('  its queued + queued+unstruck seconds divided by its days. Same ballpark = this simulates the live rule.');
     console.log('  At each N, the share of that left:  ' + NS.map((N, i) => `${nLabel(N)} ${f0(100 * both[i] / (both[NS.length - 1] || 1))}%`).join('  '));
+  }
+
+  // ---------------------------------------------------------------- 7. step 2 rule
+  // The rule step 2 ships (crossing-state _queuedEstimate / withQueuedEstimate), replayed every
+  // 10 s through each test-window approach from the first chain strike to the PROTECTING strike
+  // (after that the closure is under way and no "Train held" shows). At each instant, from the
+  // train's freshest chain strike B:
+  //   today   held if the queued rule holds it (east only, class not exempt: a train within N now,
+  //           or C20's cleared-ahead) or its anchor is unstruck and the projection to it has expired.
+  //   step 2  if it was queued AT B's strike and a queued cell exists, it counts down to
+  //           B + queued median(B>XING) - the class lead, unless that has run out, the 'unstruck'
+  //           bound (now + offset) is already later, or the train in front reopens later (its
+  //           actual crossing + open lag stands in for its predicted open). Otherwise: today.
+  // Fit on training exactly as 6b (fitN at the configured N); scored only on the test window.
+  {
+    const cfgAll = JSON.parse(fs.readFileSync(CONFIG, 'utf8')).portslade;
+    const ctAll = cfgAll.timing.closeTrigger, tdAll = cfgAll.td || {}, lagAll = cfgAll.timing.openLagSecs || {};
+    const dkey = d => (d === 'east' ? 'eastbound' : 'westbound');
+    const QN = {}, EXEMPT = {}, LAG = {};
+    for (const d of ['east', 'west']) {
+      const v = (tdAll[dkey(d)] || {}).queueMaxAhead;
+      QN[d] = (typeof v === 'number' && v >= 0) ? v : 2;
+      EXEMPT[d] = new Set((tdAll[dkey(d)] || {}).queueExemptClasses || []);
+      LAG[d] = (lagAll[d] || {}).passenger || 0;
+    }
+    const leadOf = (d, cls) => {
+      const spec = ((ctAll[d] || {}).classes || {})[cls];
+      if (!spec) return null;
+      if (typeof spec.offsetSecs !== 'number') return typeof ctAll[d].crossingLeadSecs === 'number' ? ctAll[d].crossingLeadSecs : null;
+      const b = fit.get(`${d}|${cls}|${spec.berth}>${XING}`);
+      return b ? b.med - spec.offsetSecs : null;
+    };
+    const offsetOf = (d, cls) => {
+      const spec = ((ctAll[d] || {}).classes || {})[cls]; if (!spec) return null;
+      if (typeof spec.offsetSecs === 'number') return spec.offsetSecs;
+      const b = fit.get(`${d}|${cls}|${spec.berth}>${XING}`), L = ctAll[d].crossingLeadSecs;
+      return b && typeof L === 'number' ? b.med - L : null;
+    };
+    const qCell = (d, cls, B) => fitN.get(`${d}|${cls}|${B}>${XING}|${QN[d]}|1`);
+    // The nearest train within N ahead at t (as nearestAhead) — the run itself, for its open.
+    const leaderAt = (run, myIdx, t) => {
+      const chain = CHAIN[run.dirn], xIdx = chain.length;
+      let best = null, bestSteps = Infinity;
+      for (const o of run.cands) {
+        if (o.xt < t - 30 * 60000 || o.xt > t + 30 * 60000) continue;
+        let steps = Infinity;
+        if (t >= o.xt) { const left = o.outTs !== null ? o.outTs : o.xt + 120000; if (t < left) steps = xIdx - myIdx; }
+        else {
+          let idx = -1, seen = 0;
+          for (let j = 0; j < chain.length; j++) { const st = o.ins[chain[j]]; if (st !== undefined && st <= t) { idx = j; seen = st; } }
+          if (idx > myIdx && t - seen <= STRIKE_TTL_MS) steps = idx - myIdx;
+        }
+        if (steps < bestSteps) { bestSteps = steps; best = o; }
+      }
+      return { steps: bestSteps, o: best };
+    };
+    const tot = {}, acc = {};
+    for (const d of ['east', 'west']) {
+      tot[d] = { q: 0, u: 0, today: 0, step2: 0, shown: 0 };
+      acc[d] = { q: [], b: [] };
+    }
+    for (const run of testRuns) {
+      const d = run.dirn, cls = run.cls, chain = CHAIN[d], prot = chain[chain.length - 1];
+      const A = anchors[d][cls], lead = leadOf(d, cls), off = offsetOf(d, cls);
+      if (!A || lead === null || off === null || run.ins[A] === undefined) continue;
+      const exempt = EXEMPT[d].has(cls), N = QN[d];
+      // accuracy: one prediction per queued strike short of the protecting berth
+      for (const B of chain) {
+        if (B === prot || run.ins[B] === undefined || exempt || !isQ(run.ahead[B], N)) continue;
+        const qc = qCell(d, cls, B), bc = fit.get(`${d}|${cls}|${B}>${XING}`);
+        if (qc === undefined || !bc) continue;
+        acc[d].q.push((run.xt - run.ins[B]) / 1000 - qc);
+        acc[d].b.push((run.xt - run.ins[B]) / 1000 - bc.med);
+      }
+      // hold replay
+      const st = chain.map(b => run.ins[b]);
+      const first = Math.min(...st.filter(x => x !== undefined));
+      const stop = run.ins[prot] !== undefined ? Math.min(run.ins[prot], run.xt) : run.xt;
+      let caStart = Infinity;
+      for (const o of run.cands) if (o.xt > run.ins[A] && o.xt < run.xt && o.xt < caStart) caStart = o.xt;
+      const aheadAtAnchor = run.ahead[A];
+      for (let t = first; t < stop; t += STEP) {
+        let bIdx = -1;
+        for (let j = 0; j < chain.length - 1; j++) if (st[j] !== undefined && st[j] <= t) bIdx = j;
+        if (bIdx < 0) continue;
+        const B = chain[bIdx];
+        const fresh = t - st[bIdx] <= STRIKE_TTL_MS;
+        const lead0 = fresh ? leaderAt(run, bIdx, t) : { steps: Infinity, o: null };
+        const queuedNow = d === 'east' && !exempt && (isQ(lead0.steps, N) || (t >= caStart && isQ(aheadAtAnchor, N)));
+        let unstruck = false;
+        if (run.ins[A] > t) {
+          const pc = fit.get(`${d}|${cls}|${B}>${A}`);
+          if (pc && t > run.ins[B] + pc.med * 1000) unstruck = true;
+        }
+        const today = queuedNow || unstruck;
+        let step2 = today, shown = false;
+        if (!exempt && isQ(run.ahead[B], N)) {
+          const qc = qCell(d, cls, B);
+          if (qc !== undefined) {
+            const close = run.ins[B] + (qc - lead) * 1000;
+            const bound = unstruck ? t + off * 1000 : -Infinity;
+            const floor = isQ(lead0.steps, N) && lead0.o ? lead0.o.xt + LAG[d] * 1000 : -Infinity;
+            if (close >= t && bound < close && floor <= close) { step2 = false; shown = true; }
+          }
+        }
+        const s10 = STEP / 1000, T0 = tot[d];
+        if (queuedNow) T0.q += s10;
+        if (unstruck) T0.u += s10;
+        if (today) T0.today += s10;
+        if (step2) T0.step2 += s10;
+        if (shown) T0.shown += s10;
+      }
+    }
+    console.log('\n=== 7. STEP 2 RULE — a train queued at its freshest strike counts down from its OWN (queued) median.');
+    console.log('  Replayed every 10 s from the first chain strike to the protecting strike, test window (%d days), N = east %s / west %s,',
+      testDays, QN.east, QN.west);
+    console.log('  exempt: %s. "Train held" train-s/day, the part that can be on screen:',
+      ['east', 'west'].map(d => `${d} ${[...EXEMPT[d]].join(',') || '-'}`).join(', '));
+    out([['', -5], ['today: queued', 14], ['unstruck', 9], ['either', 8], ['step 2: held', 13], ['change', 8], ['queued countdown shown', 23]]);
+    for (const d of ['east', 'west']) {
+      const T0 = tot[d];
+      out([[d.toUpperCase(), -5], [f0(T0.q / testDays), 14], [f0(T0.u / testDays), 9], [f0(T0.today / testDays), 8],
+        [f0(T0.step2 / testDays), 13], [(T0.today ? f0(100 * (T0.step2 - T0.today) / T0.today) : '-') + '%', 8], [f0(T0.shown / testDays), 23]]);
+    }
+    const stats = e => { const n = e.length; if (!n) return null;
+      return { n, mae: e.reduce((a, b) => a + Math.abs(b), 0) / n, bias: e.reduce((a, b) => a + b, 0) / n,
+        early: 100 * e.filter(v => v < -30).length / n, late: 100 * e.filter(v => v > 30).length / n }; };
+    console.log('\n  The countdowns it shows instead — one per queued strike short of the protecting berth. Error = actual crossing');
+    console.log('  minus predicted (s); early = the train came >30s SOONER than the countdown said (the unsafe side).');
+    out([['', -5], ['', -14], ['n', 6], ['MAE', 6], ['bias', 6], ['early>30s', 10], ['late>30s', 9]]);
+    for (const d of ['east', 'west']) {
+      for (const [lbl, e] of [['queued median', acc[d].q], ['clear (today)', acc[d].b]]) {
+        const r = stats(e); if (!r) continue;
+        out([[lbl === 'queued median' ? d.toUpperCase() : '', -5], [lbl, -14], [r.n, 6], [f1(r.mae), 6], [f1(r.bias), 6],
+          [f1(r.early) + '%', 10], [f1(r.late) + '%', 9]]);
+      }
+    }
+    console.log('  "clear (today)" is what the same strikes would be predicted from today\'s table — the countdown a queued');
+    console.log('  train runs past and goes "Train held" on. It is the comparison for accuracy, not for safety: today those');
+    console.log('  trains show a hold, which claims no time at all.');
   }
 
   // ---------------------------------------------------------------- CSV

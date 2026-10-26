@@ -406,8 +406,19 @@ class CrossingState {
     if (!dir) return;
     const ms = evt.ts ? new Date(evt.ts).getTime() : Date.now();
     if (!Number.isFinite(ms)) return;
-    this.closeStrikeSeen.set(this._strikeKey(evt.headcode, evt.to),
-      { ts: ms, direction: dir, headcode: evt.headcode, berth: evt.to });
+    const strike = { ts: ms, direction: dir, headcode: evt.headcode, berth: evt.to };
+    // Step 2 (2026-10-26): how many berths ahead the nearest same-direction train was AT THIS
+    // STRIKE — the quantity the table's queued cells are conditioned on (lib/td-runs.markAhead
+    // builds them with the same definition), read once here because it cannot be recovered
+    // later: by the time the close is computed the train ahead has moved on. null = nothing
+    // in the way. Only when the live map already has this train in this berth (the 'sighting'
+    // hook records the berth first); otherwise left undefined, which means "not known".
+    const live = this.liveTrains.get(evt.headcode);
+    if (live && live.berth === evt.to) {
+      const blk = this._blockedByAhead({ headcode: evt.headcode, direction: dir }, new Date(ms));
+      strike.ahead = blk ? blk.steps : null;
+    }
+    this.closeStrikeSeen.set(this._strikeKey(evt.headcode, evt.to), strike);
     this._pruneCloseStrikes(ms);
     if (this._isAnchorBerth(dir, evt.to)) this._markDirty();
   }
@@ -643,7 +654,7 @@ class CrossingState {
       // first-sighting→crossing is a median 2,329s eastbound against a 330s deadline, so
       // 95% of trains would breach it. Only reached now when we have no berth for the
       // train, which is precisely when we genuinely don't know where it is.
-      const projected = this._projectBerth(t, 'XING', now);
+      const projected = this._projectCrossing(t, now);
       const leadMs = this._getAreaEntryLeadMs(t.direction);
       const projectedFromSighting = projected ? projected.ts
         : (tdSighting ? tdSighting.getTime() + leadMs : null);
@@ -911,6 +922,70 @@ class CrossingState {
     return this._freshStrike(t, now, berth) || this._projectBerth(t, berth, now);
   }
 
+  // Step 2 (2026-10-26) — a QUEUED train timed off its own median.
+  //
+  // The berth timings are measured mostly on clear runs, and a train that struck its berth with
+  // another just ahead does not run like one: east stopping 0008>XING is +73s with the leader
+  // one berth ahead and +41s at two (backtest-transits 6a). Until now the only true thing we
+  // said about it was a lower bound — "Train held". The table now carries the same rows
+  // measured on queued trains alone (portslade.queued, derive-transits), so the train gets a
+  // countdown from its own median instead. Backtest 6b, east, from the anchor, N=2: MAE 39.2s,
+  // 17.8% more than 30s early — against 34.8s / 21.0% for clear trains on their clear median.
+  //
+  // Read from the train's FRESHEST chain strike short of the protecting berth, using how far
+  // ahead the nearest train was AT that strike (recordTdCloseStrike) — what the cells were built
+  // on, and something the engine can know at the time. Returns
+  //   { cross, close, berth, ahead, sdSecs, lead }   (ms epoch for cross/close)
+  // or null when it does not apply: no queued table, exempt class, not queued at that strike,
+  // no cell, or the protecting berth has struck (the close is under way; queuedBound has a
+  // physical answer for that). `close` is cross minus the class's lead, the lead the anchor
+  // rule already implies for a typical train (transit[anchor>XING] − offsetSecs: 134-146s east,
+  // crossingLeadSecs 92s west).
+  _queuedEstimate(t, now) {
+    const table = this.transits && this.transits.queued;
+    if (!table || !t || !t.headcode || !t.direction) return null;
+    if (this._queueExemptClass(t)) return null;
+    const spec = this._closeAnchor(t);
+    if (!spec || typeof spec.offsetSecs !== 'number') return null;
+    const cfg = this.config.td && this.config.td[t.direction === 'east' ? 'eastbound' : 'westbound'];
+    const chain = cfg && cfg.approachChain;
+    if (!Array.isArray(chain)) return null;
+    const prot = cfg.clear && cfg.clear.from;
+    if (prot && this._freshStrike(t, now, prot)) return null;
+    let best = null;
+    for (const b of chain) {
+      if (b === prot) continue;
+      const s = this._freshStrike(t, now, b);
+      if (s && (!best || s.ts > best.ts)) best = s;
+    }
+    if (!best || typeof best.ahead !== 'number') return null;
+    // Within BOTH limits: the table's (what its cells mean) and the config's (what the
+    // crossing calls a queue). Either missing means that side imposes none.
+    const tableMax = table.maxAhead && typeof table.maxAhead[t.direction] === 'number' ? table.maxAhead[t.direction] : Infinity;
+    if (best.ahead > Math.min(tableMax, this._queueMaxAhead(t.direction))) return null;
+    const cell = ((table[t.direction] || {})[this._classOf(t)] || {})[`${best.berth}>XING`];
+    if (!cell || typeof cell.secs !== 'number') return null;
+    const base = this._transit(t, spec.berth, 'XING');
+    if (!base) return null;
+    const lead = base.secs - spec.offsetSecs;
+    const cross = best.ts + cell.secs * 1000;
+    return { cross, close: cross - lead * 1000, berth: best.berth, ahead: best.ahead, sdSecs: cell.sdSecs, lead };
+  }
+
+  // Projected crossing (the clear step) for every reader that wants one: _openPred, the period
+  // end (_trainEndInfo) and the late-runner drop rule (_mergeTrains). The clear-run projection,
+  // unless the train is queued and its own median puts the crossing LATER — so the open moves
+  // with the close (a later close against a clear-run open is an inverted closure), and a
+  // queued train is not dropped from the list for standing where queued trains stand.
+  // Max, never min: this can only ever defer.
+  _projectCrossing(t, now) {
+    const proj = this._projectBerth(t, 'XING', now);
+    const q = this._queuedEstimate(t, now);
+    if (!q || (proj && proj.ts >= q.cross)) return proj;
+    return { ts: q.cross, sdSecs: q.sdSecs, projected: true, expired: q.cross < now.getTime(),
+             from: q.berth, queued: true };
+  }
+
   // The berth this train's close is anchored to — its class anchor where configured,
   // otherwise the direction's single approach berth.
   _anchorBerthFor(t) {
@@ -1043,6 +1118,28 @@ class CrossingState {
         : { at: new Date(floor), held: true, heldReason: heldReasons(info, 'upstream') };
     };
 
+    // Step 2 (2026-10-26): a train that was QUEUED at its freshest strike gets a countdown from
+    // its own queued median (_queuedEstimate) instead of a hold — Rich, 2026-10-05: fix the
+    // timing, not the label. Null when it does not apply, and the caller carries on as before:
+    //   - not queued at that strike, no cell, or the estimate has already run out (a train past
+    //     its own queued median is as unknown as any other: the existing rules hold it);
+    //   - the train in front reopens later than the estimate — then IT decides the close, and
+    //     that is the existing queued hold, floored on its open.
+    // A held bound already stronger than the estimate wins, and the existing rules decide (so
+    // the reasons logged are theirs): "not before X" from a strike that has not happened is a
+    // physical fact, and the estimate cannot overrule it.
+    // Otherwise max() with the anchor rule's own answer, so this can only ever defer the close.
+    // The BARRIERS DOWN gate is untouched: this moves the countdown, never the CLOSED state.
+    const withQueuedEstimate = (info, ahead) => {
+      const q = this._queuedEstimate(t, now);
+      if (!q || q.close < now.getTime()) return null;
+      const blocker = ahead ? this._trainByHeadcode(ahead.headcode) : null;
+      const floor = blocker ? this._openPred(blocker, now).getTime() : 0;
+      if (floor > q.close) return null;
+      if (info.held) return info.at.getTime() >= q.close ? null : { at: new Date(q.close), held: false };
+      return { at: new Date(Math.max(q.close, info.at.getTime())), held: false };
+    };
+
     // Register #20 — a train queued behind another cannot be timed off its own berth
     // history, because the berth timings are measured on trains with a clear run and it
     // is not on one (0008 -> crossing, class `stopping`: 188s clear n=2759, 265s queued
@@ -1052,6 +1149,9 @@ class CrossingState {
     // everywhere else in this function. Floored at `now` so the bound is never stamped in
     // the past, and never earlier than the anchor rule's own answer, so it cannot pull a
     // close EARLIER than the shipped behaviour — this can only ever defer.
+    // Step 2 (2026-10-26) does substitute a number where the table has measured one — the
+    // queued train's own median, withQueuedEstimate above. This bound is what is left when
+    // that does not apply.
     const queuedBound = (info) => {
       // Distance-limited (td.<dir>.queueMaxAhead): only a train close enough to actually slow
       // this one holds its COUNTDOWN. Measured 2026-10-05 — east stopping is +73s with the
@@ -1068,6 +1168,8 @@ class CrossingState {
       if (this._queueExemptClass(t)) return info;
       const maxAhead = this._queueMaxAhead(t.direction);
       const ahead = this._blockedByAhead(t, now, maxAhead) || this._crossedAheadSinceStrike(t, now, maxAhead);
+      const estimated = withQueuedEstimate(info, ahead);
+      if (estimated) return estimated;
       if (!ahead) return info;
       // The bound STOPS RECEDING at the protecting berth (td.<dir>.clear.from). That strike
       // is the last physical event before the road, so the close is no longer open-ended:
@@ -1156,7 +1258,11 @@ class CrossingState {
         // projection carries error, so this stops a close landing on top of, or before, the
         // strike that anchored it. It BINDS for fast (2s -> 10s), which is deliberate: at that
         // margin our own pipeline latency is the larger term anyway.
-        return anchored(struck, anchor.offsetSecs, c.minAfterStrikeSecs);
+        // Step 2 applies westbound too — one rule for both directions. There is no queued HOLD
+        // here (queuedBound is east-only), so a queued westbound train used to run past its
+        // clear-run projection and go 'unstruck'; it now counts down from its own median.
+        const info = anchored(struck, anchor.offsetSecs, c.minAfterStrikeSecs);
+        return withQueuedEstimate(info, null) || info;
       }
     }
 
@@ -1554,7 +1660,7 @@ class CrossingState {
     // now + openLagSecs — the only thing still true while the clear step is outstanding, and the
     // same bound the close holds at (boundIfUpstream). Monotone: the key never walks back.
     if (lagSecs != null && now) {
-      const proj = this._projectBerth(t, 'XING', now);
+      const proj = this._projectCrossing(t, now);
       if (proj) {
         return new Date(proj.expired
           ? now.getTime() + lagSecs * 1000
@@ -2091,7 +2197,7 @@ class CrossingState {
     // projectedClear + the same openLagSecs the real anchor would use — so the estimate
     // sharpens berth by berth instead of sitting on a placeholder.
     const lagSecs = this._getOpenLagSecs(train.direction, train.trainType);
-    const proj = this._projectBerth(train, 'XING', now);
+    const proj = this._projectCrossing(train, now);
     if (proj && lagSecs != null) {
       const at = proj.ts + lagSecs * 1000;
       // A live projection is a real prediction and is used as-is. An EXPIRED one (the train
