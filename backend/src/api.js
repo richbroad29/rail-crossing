@@ -1,4 +1,5 @@
 const http = require('http');
+const tdListener = require('./td-listener');
 
 function createApi(crossingStates, port = 3000) {
   const server = http.createServer((req, res) => {
@@ -27,13 +28,21 @@ function createApi(crossingStates, port = 3000) {
     try {
       // Health check
       if (path === '/health') {
+        // Register #21 — the 2026-09-22 outage was invisible from here. The process was up,
+        // LDB was polling and /health said "ok" for four and a half days while the berth feed
+        // that anchors every close and open was dead. `td.staleSecs` is the number that was
+        // missing; `status` degrades with it so an external check does not have to know the
+        // threshold. Deliberately still HTTP 200 — this reports on a dependency, and a
+        // non-200 would read as "the API is down", which it is not.
+        const td = tdListener.feedHealth();
         res.writeHead(200);
         res.end(JSON.stringify({
-          status: 'ok',
+          status: td.started && td.stale ? 'degraded' : 'ok',
           uptime: process.uptime(),
           crossings: Object.keys(crossingStates).length,
           memory: Math.round(process.memoryUsage().rss / 1024 / 1024) + 'MB',
-          time: new Date().toISOString()
+          time: new Date().toISOString(),
+          td
         }));
         return;
       }

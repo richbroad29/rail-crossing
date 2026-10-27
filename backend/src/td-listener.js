@@ -1,4 +1,8 @@
-const stompit = require('stompit');
+// Required lazily, inside connect(). Nothing above the socket needs it, and deferring it
+// means this module — including the feed-liveness logic that register #21 turns on — can be
+// loaded and tested without the dependency present. It had no tests at all before 2026-10-27,
+// which is part of how a four-and-a-half-day outage went unnoticed.
+let stompit = null;
 const fs = require('fs');
 const path = require('path');
 const { EventEmitter } = require('events');
@@ -52,6 +56,95 @@ let sclassRawLogged = 0;
 let sclassEventsLogged = 0;
 let connectAttempts = 0;
 let lastSummaryAt = Date.now();
+
+// ---- feed liveness (register #21) --------------------------------------------------------
+//
+// On 2026-09-22 the feed stopped and nothing noticed for FOUR AND A HALF DAYS. The journal
+// shows exactly how: 22:28:08 "TD STOMP error: connection timed out" and "TD subscribe
+// failed", and then no TD line ever again, while the process stayed up and healthy —
+// LDB polling, log rotation and the schedule load all carried on as normal. Closures
+// anchored to berth strikes were simply missing for the duration (goal 1).
+//
+// Three faults behind it, all addressed here:
+//   1. `client.subscribe`'s error callback only logged and returned, with NO retry at all.
+//   2. Nothing bounded `stompit.connect`: if it neither connects nor errors, the retry chain
+//      ends silently. That is consistent with the journal — the 2s reconnect scheduled by the
+//      error handler produced no "connected" and no "connect failed" line afterwards.
+//   3. Both error paths could schedule reconnects concurrently, so recovery could also mean
+//      several sockets racing.
+//
+// The watchdog is the backstop for all three and for whatever else does this next: it does
+// not care WHY the feed went quiet, only that it did.
+//
+// STALE_MS = 5 min, measured not guessed. The subscription is the whole national feed
+// (/topic/TD_ALL_SIG_AREA), which is never quiet: over 2,261 five-minute summary windows
+// from 2026-10-20 onward the QUIETEST was 97 messages, about one every three seconds at
+// 02:00. Five minutes of total silence is therefore far outside anything observed.
+//
+// Note this must count ALL messages, not area-LA events. LA alone goes genuinely quiet
+// overnight — measured maxima of 151 and 78 minutes between consecutive LA events on
+// 2026-10-22 and 23 — so a watchdog keyed on LA would either fire constantly or need a
+// threshold hours long, which is how this went unnoticed for days in the first place.
+const STALE_MS = 5 * 60 * 1000;
+const WATCHDOG_TICK_MS = 60 * 1000;
+// Bounds a connect that neither succeeds nor fails (fault 2). Generous: the observed healthy
+// connect takes under a second, and a slow-but-working connect must not be cut off.
+const CONNECT_TIMEOUT_MS = 30 * 1000;
+
+let lastMessageAt = null;     // null until the first message; start() seeds the baseline
+let feedStartedAt = null;
+let currentClient = null;
+let reconnectPending = false; // single-flight: see scheduleReconnect
+let watchdogTimer = null;
+let forcedReconnects = 0;
+let lastForcedAt = null;
+
+// One reconnect at a time, whichever path asks for it. Without this the error handler and
+// the watchdog could both fire and leave two live sockets delivering duplicate messages.
+function scheduleReconnect(delayMs, why) {
+  if (reconnectPending) return;
+  reconnectPending = true;
+  console.error(`TD reconnecting in ${Math.round(delayMs / 1000)}s (${why})`);
+  setTimeout(() => { reconnectPending = false; connect(); }, delayMs);
+}
+
+function dropClient() {
+  if (!currentClient) return;
+  const c = currentClient;
+  currentClient = null;
+  try { c.destroy ? c.destroy() : c.disconnect(); } catch (_) { /* already gone */ }
+}
+
+function checkFeedLiveness(now = Date.now()) {
+  const since = lastMessageAt || feedStartedAt;
+  if (since === null) return false;                  // not started
+  if (now - since <= STALE_MS) return false;
+  forcedReconnects++;
+  lastForcedAt = new Date(now).toISOString();
+  console.error(`TD feed silent for ${Math.round((now - since) / 1000)}s `
+    + `(threshold ${STALE_MS / 1000}s) — forcing a reconnect [#21 watchdog]`);
+  dropClient();
+  // Reset the clock so a reconnect that is slow to deliver does not re-trigger every tick.
+  lastMessageAt = now;
+  reconnectPending = false;                          // a hung attempt must not block this one
+  scheduleReconnect(0, 'watchdog: feed silent');
+  return true;
+}
+
+// What /health reports. `staleSecs` is the number that matters — it is what was unbounded.
+function feedHealth(now = Date.now()) {
+  const since = lastMessageAt || feedStartedAt;
+  return {
+    started: feedStartedAt !== null,
+    connected: currentClient !== null,
+    lastMessageAt: lastMessageAt ? new Date(lastMessageAt).toISOString() : null,
+    staleSecs: since === null ? null : Math.round((now - since) / 1000),
+    stale: since === null ? false : (now - since) > STALE_MS,
+    messagesReceived,
+    forcedReconnects,
+    lastForcedReconnectAt: lastForcedAt
+  };
+}
 
 function ensureDir(dir) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -146,6 +239,7 @@ function processMessage(body) {
   if (!Array.isArray(parsed)) return;
 
   messagesReceived++;
+  lastMessageAt = Date.now();     // feed liveness — see STALE_MS (register #21)
   for (const wrapper of parsed) {
     for (const [type, msg] of Object.entries(wrapper)) {
       // S-Class (additive; configured areas only). Handled independently of the
@@ -217,26 +311,50 @@ function connect() {
     }
   };
 
+  if (!stompit) stompit = require('stompit');
+
+  // `settled` bounds the attempt. stompit.connect can in principle neither call back nor
+  // error — which is what the 2026-09-22 journal looks like, a reconnect scheduled at 22:28:10
+  // that produced no "connected" and no "connect failed" line, ever. A callback arriving after
+  // the timeout must then NOT also be handled, or one attempt becomes two clients.
+  let settled = false;
+  const timer = setTimeout(() => {
+    if (settled) return;
+    settled = true;
+    connectAttempts++;
+    const backoff = Math.min(60000, 1000 * Math.pow(2, connectAttempts));
+    console.error(`TD STOMP connect timed out after ${CONNECT_TIMEOUT_MS / 1000}s`);
+    scheduleReconnect(backoff, 'connect timeout');
+  }, CONNECT_TIMEOUT_MS);
+
   stompit.connect(connectOptions, (err, client) => {
+    if (settled) { try { client && client.destroy(); } catch (_) {} return; }
+    settled = true;
+    clearTimeout(timer);
     if (err) {
       const backoff = Math.min(60000, 1000 * Math.pow(2, connectAttempts));
-      console.error(`TD STOMP connect failed: ${err.message} — retry in ${backoff / 1000}s`);
       connectAttempts++;
-      setTimeout(connect, backoff);
+      console.error(`TD STOMP connect failed: ${err.message}`);
+      scheduleReconnect(backoff, 'connect failed');
       return;
     }
     connectAttempts = 0;
+    currentClient = client;
     console.log(`TD STOMP connected to ${HOST}:${PORT}, subscribing to ${TOPIC}`);
 
     client.subscribe({ destination: TOPIC, ack: 'auto' }, (subErr, message) => {
       if (subErr) {
+        // Previously this logged and returned, with no retry — so a subscribe that failed on
+        // an otherwise-live socket left the process connected to nothing, silently, forever.
         console.error('TD subscribe failed:', subErr.message);
+        dropClient();
+        scheduleReconnect(2000, 'subscribe failed');
         return;
       }
       message.readString('utf-8', (readErr, body) => {
         if (readErr) {
           console.error('TD read failed:', readErr.message);
-          return;
+          return;                       // one bad frame is not a reason to drop the feed
         }
         processMessage(body);
       });
@@ -244,8 +362,8 @@ function connect() {
 
     client.on('error', e => {
       console.error('TD STOMP error:', e.message);
-      try { client.disconnect(); } catch (_) {}
-      setTimeout(connect, 2000);
+      dropClient();
+      scheduleReconnect(2000, 'socket error');
     });
   });
 }
@@ -259,7 +377,36 @@ function start() {
   if (decoder) ensureDir(SCLASS_LOG_DIR);
   console.log(`TD listener starting: C-Class area=${TARGET_AREA}, log dir=${LOG_DIR}` +
     (decoder ? `; capturing S-Class + C-Class for area(s) ${Object.keys(decoder.areas).join(',')} -> ${SCLASS_LOG_DIR}` : ''));
+  feedStartedAt = Date.now();
+  // The watchdog outlives any individual client, so it is started once here and never
+  // cleared — the one thing that keeps running when every other recovery path has failed.
+  if (!watchdogTimer) {
+    watchdogTimer = setInterval(() => checkFeedLiveness(), WATCHDOG_TICK_MS);
+    if (watchdogTimer.unref) watchdogTimer.unref();
+  }
   connect();
 }
 
-module.exports = { start, on: emitter.on.bind(emitter) };
+module.exports = {
+  start,
+  on: emitter.on.bind(emitter),
+  // Feed liveness, for GET /health. Register #21: the outage was invisible because nothing
+  // published how long it had been since the last message.
+  feedHealth,
+  // Test seams. The watchdog's whole job happens on a timer during an outage, so it has to be
+  // callable directly; `_setFeedStateForTest` stands in for a feed that has gone quiet.
+  _checkFeedLiveness: checkFeedLiveness,
+  _setFeedStateForTest(st) {
+    if ('lastMessageAt' in st) lastMessageAt = st.lastMessageAt;
+    if ('feedStartedAt' in st) feedStartedAt = st.feedStartedAt;
+    if ('currentClient' in st) currentClient = st.currentClient;
+    if ('reconnectPending' in st) reconnectPending = st.reconnectPending;
+    if ('forcedReconnects' in st) forcedReconnects = st.forcedReconnects;
+  },
+  _constantsForTest: { STALE_MS, WATCHDOG_TICK_MS, CONNECT_TIMEOUT_MS },
+  // The watchdog's last act is to ask for a reconnect, so testing it reaches connect(), which
+  // needs the STOMP library. Injecting a stub keeps the socket out of the test without
+  // weakening what is asserted: whether a reconnect is ATTEMPTED is the behaviour under test,
+  // not whether a TCP connection opens.
+  _setStompitForTest(stub) { stompit = stub; }
+};

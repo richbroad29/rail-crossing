@@ -1,12 +1,12 @@
 {
   "name": "rail-crossing-backend",
   "version": "2.0.0",
-  "description": "Level crossing barrier prediction backend — LDBSVWS + Schedule + TD",
+  "description": "Level crossing barrier prediction backend \u2014 LDBSVWS + Schedule + TD",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
-    "test": "TZ=UTC node test/time-utils.test.js && TZ=Europe/London node test/time-utils.test.js && node test/crossing-state.test.js && TZ=UTC node test/schedule-midnight.test.js && TZ=Europe/London node test/schedule-midnight.test.js && node test/update-extract.test.js && node test/skipped-records.test.js && node test/live-positions.test.js && node test/schedule-calling-pattern.test.js && node test/schedule-multi-traversal.test.js && node test/sclass-decoder.test.js && node test/corpus.test.js && node test/run-rate.test.js && TZ=UTC node test/ldb-poller.test.js && TZ=Europe/London node test/ldb-poller.test.js"
+    "test": "TZ=UTC node test/time-utils.test.js && TZ=Europe/London node test/time-utils.test.js && node test/crossing-state.test.js && TZ=UTC node test/schedule-midnight.test.js && TZ=Europe/London node test/schedule-midnight.test.js && node test/update-extract.test.js && node test/skipped-records.test.js && node test/live-positions.test.js && node test/schedule-calling-pattern.test.js && node test/schedule-multi-traversal.test.js && node test/sclass-decoder.test.js && node test/corpus.test.js && node test/run-rate.test.js && TZ=UTC node test/ldb-poller.test.js && TZ=Europe/London node test/ldb-poller.test.js && node test/td-liveness.test.js"
   },
   "engines": {
     "node": ">=20.0.0"
