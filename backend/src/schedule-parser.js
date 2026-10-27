@@ -20,8 +20,13 @@ function cifTimeToMins(t) {
 // reads as a 24h wall clock (e.g. 00:05). The calendar day is carried by the
 // Date from londonMinsToDate, never by this string.
 function minsToTimeStr(mins) {
-  const h = Math.floor(mins / 60) % 24;
-  const m = Math.round(mins % 60);
+  // Round to the whole minute FIRST. CIF carries half-minutes, so an interpolated
+  // estimate is routinely fractional, and rounding the minutes field on its own took
+  // 479.7 to "07:60" — the carry has to reach the hour. (Seen on a real extract once
+  // out-and-back legs started being interpolated at 07:59.7.)
+  const total = Math.round(mins);
+  const h = Math.floor(total / 60) % 24;
+  const m = total % 60;
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
 
@@ -50,8 +55,11 @@ function isActiveToday(schedule) {
 const MIDNIGHT_WRAP_THRESHOLD_MINS = 720;
 
 // Determine if a schedule traverses a crossing based on TIPLOC sets.
-// Returns { traverses: true, direction, nearWest, nearEast } when it does,
-// otherwise { traverses: false }.
+// Returns { traverses: true, legs: [{ direction, nearWest, nearEast }, ...] } when it does,
+// otherwise { traverses: false }. `legs` has one entry per traversal and is almost always
+// length 1 — an out-and-back working gives more (see the interleaved branch below). The
+// single-traversal case also keeps direction/nearWest/nearEast at the top level, which is
+// what callers read when they know there is only one.
 function analyseRoute(locations, crossingConfig) {
   const westSet = new Set(crossingConfig.tiplocs_west);
   const eastSet = new Set(crossingConfig.tiplocs_east);
@@ -107,50 +115,65 @@ function analyseRoute(locations, crossingConfig) {
 
   // Determine direction: if west calls come before east calls, train is eastbound
   if (lastWest.time < firstEast.time) {
-    return {
-      traverses: true,
-      direction: 'east',
-      nearWest: lastWest,
-      nearEast: firstEast
-    };
+    const leg = { direction: 'east', nearWest: lastWest, nearEast: firstEast };
+    return { traverses: true, ...leg, legs: [leg] };
   } else if (lastEast.time < firstWest.time) {
-    return {
-      traverses: true,
-      direction: 'west',
-      nearWest: firstWest,
-      nearEast: lastEast
-    };
+    const leg = { direction: 'west', nearWest: firstWest, nearEast: lastEast };
+    return { traverses: true, ...leg, legs: [leg] };
   }
 
-  // Ambiguous — west and east calls interleave, so this is a reversing service or a
-  // multiple traversal, and we cannot express it: the pipeline downstream assumes one
-  // crossing per train per day (UID-keyed schedule map, headcode-keyed sighting and
-  // strike maps). So it is still DROPPED, exactly as before — `traverses:false`.
+  // West and east timing points INTERLEAVE. Two different things look like this, and
+  // `transitions` — each west<->east change of side — is what tells them apart. A
+  // transition is `bracketPair` when it is exactly the configured interpolation pair,
+  // i.e. the two timing points that actually bracket this crossing.
   //
-  // What is new is that the drop is no longer silent. `transitions` describes each
-  // west<->east change of side, and `bracketPair` says whether that change is the
-  // configured interpolation pair (the two timing points that actually bracket the
-  // crossing). That flag is the discriminator any real fix needs, because interleaving
-  // does NOT imply traversal: measured on the 2026-07-30 extract, 4 schedules land here
-  // and only 3 are genuine double traversals (SHRHMBS<->HOVE, 7-11.5 min apart). The
-  // fourth, 1Q76, touches Arundel Jn and Preston Park 81 and 228 min apart via the Arun
-  // valley and never comes near Portslade — treating it as a traversal would invent two
-  // closures a week. All 4 are Q-flagged departmental paths, and none was sighted by TD
-  // in 83 days, which is why this stays a log line rather than a feature.
+  //   every transition is the bracket pair  -> a genuine out-and-back over OUR road.
+  //        Measured on the 2026-07-30 extract: 3 of the 4 schedules here, SHRHMBS<->HOVE
+  //        7-11.5 min apart. Emitted below as one leg per traversal.
+  //   anything else                         -> not our crossing. 1Q76 touches Arundel Jn
+  //        and Preston Park 81 and 228 min apart via the Arun valley and never comes near
+  //        Portslade; calling that a traversal would invent two closures a week. Still
+  //        dropped, and still logged so the drop is visible.
+  //
+  // This branch used to drop BOTH, on the reasoning that the pipeline assumed one crossing
+  // per train per day, with the note "revisit only if TD sights one of these headcodes".
+  // TD has: over 2026-10-18..24 the railhead-treatment workings 3S93 and 3S97 were dropped
+  // here every morning and crossed Boundary Road 26 times between them. Checked against the
+  // backend state log for 24 Oct, the app read OPEN or CLOSING_SOON — never CLOSED — across
+  // all four of that day's crossings, twice flipping to OPEN under a minute before the train
+  // reached the road. That is a closure a day and a half, invisible, in RHTT season.
+  //
+  // The downstream assumption was real but narrower than "one crossing per train": what is
+  // keyed per train is the UID (schedule map, now a group of legs) and the headcode (sighting
+  // and strike maps). Strikes are already direction-matched, and the two directions use
+  // disjoint berth chains, so each leg projects only off its own side of the railway. The one
+  // place that genuinely cannot tell the legs apart is the day's FIRST sighting — see
+  // `legIndex` in crossing-state._mergeTrains.
   const interp = crossingConfig.interpolation || {};
   const transitions = [];
+  const legs = [];
   for (let i = 1; i < marks.length; i++) {
     if (marks[i].side === marks[i - 1].side) continue;
     const from = marks[i - 1], to = marks[i];
     const direction = from.side === 'W' ? 'east' : 'west';
     const pair = interp[direction === 'east' ? 'eastbound' : 'westbound'] || {};
+    const bracketPair = from.tiploc === pair.from && to.tiploc === pair.to;
     transitions.push({
       direction,
       from: from.tiploc,
       to: to.tiploc,
       gapMins: Math.round((to.time - from.time) * 10) / 10,
-      bracketPair: from.tiploc === pair.from && to.tiploc === pair.to
+      bracketPair
     });
+    // A transition runs from the side the train is LEAVING to the side it is joining, so
+    // eastbound its two marks are already (west, east) and westbound they are reversed.
+    legs.push(direction === 'east'
+      ? { direction, nearWest: from, nearEast: to }
+      : { direction, nearWest: to, nearEast: from });
+  }
+
+  if (transitions.length > 1 && transitions.every(t => t.bracketPair)) {
+    return { traverses: true, multi: true, legs, transitions };
   }
   return { traverses: false, ambiguous: true, transitions };
 }
@@ -231,10 +254,12 @@ function callsAt(locations, tiploc) {
   return false;
 }
 
-// Build the per-crossing train entry for a record that traverses, or null.
-function buildCrossingEntry(fields, locations, crossingCfg, ambiguousOut) {
+// Build the per-crossing train entries for a record that traverses: ONE PER TRAVERSAL,
+// in time order. Almost always a single entry; an out-and-back working (see analyseRoute)
+// yields one per leg. Returns [] for a record that does not traverse.
+function buildCrossingEntries(fields, locations, crossingCfg, ambiguousOut) {
   const schedCfg = crossingCfg.schedule;
-  if (!schedCfg) return null;
+  if (!schedCfg) return [];
 
   const route = analyseRoute(locations, schedCfg);
   if (!route.traverses) {
@@ -246,11 +271,28 @@ function buildCrossingEntry(fields, locations, crossingCfg, ambiguousOut) {
         transitions: route.transitions || []
       });
     }
-    return null;
+    return [];
   }
 
+  const built = [];
+  for (const leg of route.legs) {
+    const entry = buildLegEntry(fields, locations, schedCfg, leg);
+    if (entry) built.push(entry);
+  }
+  built.sort((a, b) => a.estimatedCrossingMins - b.estimatedCrossingMins);
+  // Stamped after the sort so legIndex is always "which traversal of the day is this",
+  // counting from 0 in the order they happen. Read by crossing-state._mergeTrains, which
+  // must not hand a later leg the day's first TD sighting — that sighting belongs to an
+  // earlier one. Always present, 0/1 for the ordinary single-traversal case, so nothing
+  // downstream has to tell "no legs" from "leg absent".
+  built.forEach((e, i) => { e.legIndex = i; e.legCount = built.length; });
+  return built;
+}
+
+// One traversal -> one schedule entry, or null when its crossing time cannot be estimated.
+function buildLegEntry(fields, locations, schedCfg, leg) {
   const estMins = estimateCrossingTime(
-    route.nearWest, route.nearEast, route.direction, schedCfg.interpolation
+    leg.nearWest, leg.nearEast, leg.direction, schedCfg.interpolation
   );
   if (estMins === null) return null;
 
@@ -261,7 +303,7 @@ function buildCrossingEntry(fields, locations, crossingCfg, ambiguousOut) {
     operator: fields.operator,
     trainType: fields.trainType,
     power: fields.power,
-    direction: route.direction,
+    direction: leg.direction,
     // true/false when the schedule says whether it calls at the crossing station,
     // null when unknowable. Lets crossing-state classify a CIF train beyond the LDB
     // window instead of silently treating every CIF entry as non-stopping.
@@ -276,21 +318,26 @@ function buildCrossingEntry(fields, locations, crossingCfg, ambiguousOut) {
     daysPattern: fields.daysPattern,
     estimatedCrossingTime: minsToTimeStr(estMins),
     estimatedCrossingMins: estMins,
-    nearWestTiploc: route.nearWest.tiploc,
-    nearWestTime: minsToTimeStr(route.nearWest.time),
-    nearEastTiploc: route.nearEast.tiploc,
-    nearEastTime: minsToTimeStr(route.nearEast.time),
+    nearWestTiploc: leg.nearWest.tiploc,
+    nearWestTime: minsToTimeStr(leg.nearWest.time),
+    nearEastTiploc: leg.nearEast.tiploc,
+    nearEastTime: minsToTimeStr(leg.nearEast.time),
     origin: resolveTiploc(locations[0].tiploc_code),
     destination: resolveTiploc(locations[locations.length - 1].tiploc_code),
     source: 'schedule'
   };
 }
 
-// Insert/replace an entry into the uid-keyed map under STP priority.
-function mergeByStp(schedulesByUid, key, entry) {
+// Insert/replace a uid's ENTRIES into the uid-keyed map under STP priority. The value is
+// a group — one entry per traversal — and it is replaced WHOLESALE, never entry by entry:
+// an overlay is a different schedule for the same uid, so it decides how many times that
+// train crosses, and merging leg-by-leg could leave a leg behind from the version it
+// replaced. Every entry in a group comes off the same schedule record and so shares its stp.
+function mergeByStp(schedulesByUid, key, entries) {
+  if (!entries || !entries.length) return;
   const existing = schedulesByUid.get(key);
-  if (!existing || stpRank(entry.stp) >= stpRank(existing.stp)) {
-    schedulesByUid.set(key, entry);
+  if (!existing || stpRank(entries[0].stp) >= stpRank(existing[0].stp)) {
+    schedulesByUid.set(key, entries);
   }
 }
 
@@ -353,6 +400,10 @@ async function parseScheduleFile(filePath, crossingsConfig) {
   // cannot express as a single traversal. Collected so the drop is visible in the log
   // instead of silent; see the comment at that branch for why they stay dropped.
   const ambiguous = [];
+  // Schedules that cross more than once and were EXPANDED into one entry per traversal
+  // (analyseRoute's every-transition-is-the-bracket-pair case). Logged for the same reason
+  // the drops are: this used to be a silent drop, and the fix should not be silent either.
+  const multiLeg = [];
 
   const lineCount = await streamScheduleRecords(filePath, (sched, obj) => {
     if (!sched) {
@@ -390,19 +441,28 @@ async function parseScheduleFile(filePath, crossingsConfig) {
     // Check each crossing
     let traversed = false;
     for (const [crossingId, crossingCfg] of Object.entries(crossingsConfig)) {
-      const entry = buildCrossingEntry(fields, locations, crossingCfg, ambiguous);
-      if (!entry) continue;
+      const entries = buildCrossingEntries(fields, locations, crossingCfg, ambiguous);
+      if (!entries.length) continue;
       traversed = true;
-      mergeByStp(schedulesByUid, `${crossingId}|${fields.uid}`, entry);
+      mergeByStp(schedulesByUid, `${crossingId}|${fields.uid}`, entries);
     }
     if (traversed && crHere) skipped.crOnTraversing += crHere;
   });
 
-  // Collect final results, excluding cancellations
-  for (const [key, entry] of schedulesByUid) {
+  // Collect final results, excluding cancellations. Multi-leg groups are tallied HERE,
+  // off the surviving entries, not where they were built: a uid can appear as several
+  // schedule versions and only the STP winner reaches the results, so counting at build
+  // time over-reported the expansion.
+  for (const [key, entries] of schedulesByUid) {
     const crossingId = key.split('|')[0];
-    if (entry.stp !== 'C') {
-      results[crossingId].push(entry);
+    const kept = entries.filter(e => e.stp !== 'C');
+    for (const entry of kept) results[crossingId].push(entry);
+    if (kept.length > 1) {
+      multiLeg.push({
+        crossingId, uid: kept[0].uid, headcode: kept[0].headcode || '----',
+        runsAsRequired: !!kept[0].runsAsRequired,
+        legs: kept.map(e => `${e.direction} ~${e.estimatedCrossingTime}`)
+      });
     }
   }
 
@@ -437,11 +497,25 @@ async function parseScheduleFile(filePath, crossingsConfig) {
     }).join(', ');
     console.log(
       `Schedule: dropped ${ambiguous.length} ambiguous multi-traversal/reversing ` +
-      `schedule(s) — ${detail}. Register #1: still dropped by design; revisit only if TD ` +
-      `sights one of these headcodes.`
+      `schedule(s) — ${detail}. Register #1: these are the ones NOT over our road — every ` +
+      `side-change would have to be the bracket pair to be kept (see the expansion line). ` +
+      `Revisit only if TD sights one of these headcodes.`
     );
   }
-  lastParseStats = { ...skipped, lineCount, scheduleCount, ambiguousDropped: ambiguous.length, ambiguous };
+  if (multiLeg.length) {
+    const detail = multiLeg
+      .map(m => `${m.headcode} [${m.legs.join(', ')}]${m.runsAsRequired ? ' Q' : ''}`)
+      .join(', ');
+    console.log(
+      `Schedule: expanded ${multiLeg.length} out-and-back schedule(s) into ` +
+      `${multiLeg.reduce((n, m) => n + m.legs.length, 0)} traversals — ${detail}`
+    );
+  }
+  lastParseStats = {
+    ...skipped, lineCount, scheduleCount,
+    ambiguousDropped: ambiguous.length, ambiguous,
+    multiLegKept: multiLeg.length, multiLeg
+  };
   return results;
 }
 
@@ -478,10 +552,16 @@ async function applyUpdateExtract(updateFilePath, crossingsConfig, baseByCrossin
   // Rebuild the uid-keyed map from the base predictions (these already exclude
   // any C the full snapshot carried, so their stp is P/O/N). Clone so the
   // caller's base array is never mutated.
+  // Grouped by uid, because a uid can carry more than one traversal (an out-and-back
+  // working — see analyseRoute). The base array is already in time order, so each group
+  // keeps its legs in order too.
   const schedulesByUid = new Map();
   for (const [crossingId, trains] of Object.entries(baseByCrossing || {})) {
     for (const t of trains) {
-      if (t && t.uid) schedulesByUid.set(`${crossingId}|${t.uid}`, { ...t });
+      if (!t || !t.uid) continue;
+      const key = `${crossingId}|${t.uid}`;
+      if (!schedulesByUid.has(key)) schedulesByUid.set(key, []);
+      schedulesByUid.get(key).push({ ...t });
     }
   }
 
@@ -506,13 +586,16 @@ async function applyUpdateExtract(updateFilePath, crossingsConfig, baseByCrossin
       for (const crossingId of crossingIds) {
         const key = `${crossingId}|${uid}`;
         const existing = schedulesByUid.get(key);
-        if (existing && stpRank('C') >= stpRank(existing.stp)) {
-          schedulesByUid.set(key, { ...existing, stp: 'C' });
-          stats.cancelledIds.push({
-            uid, crossingId,
-            headcode: existing.headcode || null,
-            estimatedCrossingTime: existing.estimatedCrossingTime || null
-          });
+        if (existing && stpRank('C') >= stpRank(existing[0].stp)) {
+          // Cancels the whole uid: a cancelled train makes none of its traversals.
+          schedulesByUid.set(key, existing.map(e => ({ ...e, stp: 'C' })));
+          for (const e of existing) {
+            stats.cancelledIds.push({
+              uid, crossingId,
+              headcode: e.headcode || null,
+              estimatedCrossingTime: e.estimatedCrossingTime || null
+            });
+          }
           didCancel = true;
         }
       }
@@ -527,9 +610,9 @@ async function applyUpdateExtract(updateFilePath, crossingsConfig, baseByCrossin
     const fields = extractTrainFields(sched);
     let didOverlay = false;
     for (const crossingId of crossingIds) {
-      const entry = buildCrossingEntry(fields, locations, crossingsConfig[crossingId]);
-      if (!entry) continue;
-      mergeByStp(schedulesByUid, `${crossingId}|${uid}`, entry);
+      const entries = buildCrossingEntries(fields, locations, crossingsConfig[crossingId]);
+      if (!entries.length) continue;
+      mergeByStp(schedulesByUid, `${crossingId}|${uid}`, entries);
       didOverlay = true;
     }
     if (didOverlay) stats.overlays++;
@@ -538,9 +621,11 @@ async function applyUpdateExtract(updateFilePath, crossingsConfig, baseByCrossin
   // Rebuild per-crossing results, excluding cancellations, sorted by time.
   const results = {};
   for (const id of crossingIds) results[id] = [];
-  for (const [key, entry] of schedulesByUid) {
+  for (const [key, entries] of schedulesByUid) {
     const crossingId = key.split('|')[0];
-    if (entry.stp !== 'C' && results[crossingId]) results[crossingId].push(entry);
+    for (const entry of entries) {
+      if (entry.stp !== 'C' && results[crossingId]) results[crossingId].push(entry);
+    }
   }
   for (const id of crossingIds) {
     results[id].sort((a, b) => a.estimatedCrossingMins - b.estimatedCrossingMins);

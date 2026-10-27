@@ -110,6 +110,42 @@ const now = Date.now();
   check('sighted train that crossed long ago is dropped', merged.some(m => m.headcode === '6O99'), false);
 }
 
+// (d) ...UNLESS its barrier is still coming up. A train is dropped from this list only when
+// it has stopped holding the road, and a cleared train still holds it for openLagSecs. The
+// closure period is built from these trains, so an early drop reports the crossing clear
+// with the barrier still down — measured at ~40s eastbound before this guard (see
+// _mergeTrains). Applies to any CIF-only train; freight and non-stopping passenger are the
+// ones with no LDB copy to fall back on.
+{
+  const lagCfg = {
+    ...cfg,
+    td: { eastbound: { clear: { from: '0004', to: '0002' } }, westbound: { clear: { from: '0005', to: '0007' } } },
+    timing: { ...cfg.timing, openLagSecs: { east: { passenger: 40, freight: 70 }, west: { passenger: 18, freight: 30 } } }
+  };
+  const mk = () => {
+    const st = new CrossingState('test', lagCfg);
+    st._scheduleTimeToDate = () => new Date(now - 60 * 60000);  // booked an hour ago
+    st.scheduleTrains = [lateFreight()];
+    st.recordTdSighting('6O99', new Date(now - 30 * 60000));    // and sighted 30 min ago
+    return st;
+  };
+  // Cleared 10s ago: west freight lag is 30s, so the barrier is still rising.
+  const rising = mk();
+  rising.recordTdClearStep({ headcode: '6O99', ts: new Date(now - 10000), from: '0005', to: '0007' });
+  check('a train whose barrier has not finished rising is KEPT',
+    rising._mergeTrains(new Date(now)).some(m => m.headcode === '6O99'), true);
+
+  // Cleared 31s ago: past the 30s lag, the barrier is up and the train is gone.
+  const up = mk();
+  up.recordTdClearStep({ headcode: '6O99', ts: new Date(now - 31000), from: '0005', to: '0007' });
+  check('  ...and dropped once that lag has elapsed',
+    up._mergeTrains(new Date(now)).some(m => m.headcode === '6O99'), false);
+
+  // The guard is the clear step, not mere lateness: no clear step, same timings, still gone.
+  check('  ...with no clear step at all it is still dropped (c, unchanged)',
+    mk()._mergeTrains(new Date(now)).some(m => m.headcode === '6O99'), false);
+}
+
 // ---------------------------------------------------------------------------
 // TD-triggered open — clear-step anchor (CrossingState._anchorEndToClearStep)
 //
@@ -157,7 +193,7 @@ function mkTrain(o) {
   const stepTs = BASE - 5000;
   const t = mkTrain({ dir: 'east', headcode: '1A01', bestTimeMs: BASE + 60000 });
   state.tdSeenToday.set('1A01', new Date(stepTs));
-  state.clearStepSeen.set('1A01', { ts: stepTs, direction: 'east' });
+  state.clearStepSeen.set('1A01|east', { ts: stepTs, direction: 'east', headcode: '1A01' });
   const periods = state._computeClosures([t], new Date(BASE));
   check('east passenger: end = clearStep + 45s',
     periods[0].end, new Date(stepTs + 45000).toISOString());
@@ -169,7 +205,7 @@ function mkTrain(o) {
   const stepTs = BASE - 3000;
   const t = mkTrain({ dir: 'west', headcode: '2W20', bestTimeMs: BASE + 60000 });
   state.tdSeenToday.set('2W20', new Date(stepTs));
-  state.clearStepSeen.set('2W20', { ts: stepTs, direction: 'west' });
+  state.clearStepSeen.set('2W20|west', { ts: stepTs, direction: 'west', headcode: '2W20' });
   const periods = state._computeClosures([t], new Date(BASE));
   check('west passenger: end = clearStep + 18s',
     periods[0].end, new Date(stepTs + 18000).toISOString());
@@ -181,7 +217,7 @@ function mkTrain(o) {
   const stepTs = BASE;
   const t = mkTrain({ dir: 'east', type: 'freight', headcode: '6O99', bestTimeMs: BASE + 60000 });
   state.tdSeenToday.set('6O99', new Date(stepTs));
-  state.clearStepSeen.set('6O99', { ts: stepTs, direction: 'east' });
+  state.clearStepSeen.set('6O99|east', { ts: stepTs, direction: 'east', headcode: '6O99' });
   const periods = state._computeClosures([t], new Date(BASE));
   check('freight east: end = clearStep + 70s',
     periods[0].end, new Date(stepTs + 70000).toISOString());
@@ -193,7 +229,7 @@ function mkTrain(o) {
   const stepTs = BASE;
   const t = mkTrain({ dir: 'east', type: 'ecs', headcode: '5A05', bestTimeMs: BASE + 60000 });
   state.tdSeenToday.set('5A05', new Date(stepTs));
-  state.clearStepSeen.set('5A05', { ts: stepTs, direction: 'east' });
+  state.clearStepSeen.set('5A05|east', { ts: stepTs, direction: 'east', headcode: '5A05' });
   const periods = state._computeClosures([t], new Date(BASE));
   check('ECS east: treated as passenger (clearStep + 45s)',
     periods[0].end, new Date(stepTs + 45000).toISOString());
@@ -207,8 +243,8 @@ function mkTrain(o) {
   const b = mkTrain({ dir: 'east', headcode: '1A02', bestTimeMs: BASE + 90000 }); // 30s later → merges
   state.tdSeenToday.set('1A01', new Date(BASE));
   state.tdSeenToday.set('1A02', new Date(BASE));
-  state.clearStepSeen.set('1A01', { ts: BASE + 50000, direction: 'east' }); // intermediate — ignored
-  state.clearStepSeen.set('1A02', { ts: BASE + 80000, direction: 'east' }); // final — governs end
+  state.clearStepSeen.set('1A01|east', { ts: BASE + 50000, direction: 'east', headcode: '1A01' }); // intermediate — ignored
+  state.clearStepSeen.set('1A02|east', { ts: BASE + 80000, direction: 'east', headcode: '1A02' }); // final — governs end
   const periods = state._computeClosures([a, b], new Date(BASE));
   check('merged closure: collapses to one period', periods.length, 1);
   check('merged closure: two trains', periods[0].trainCount, 2);
@@ -233,7 +269,7 @@ function mkTrain(o) {
   const stepTs = BASE + 120000;              // train ran ~2 min late
   const t = mkTrain({ dir: 'east', headcode: '1A11', bestTimeMs: BASE }); // fallback end = BASE + 30s
   state.tdSeenToday.set('1A11', new Date(BASE - 60000));
-  state.clearStepSeen.set('1A11', { ts: stepTs, direction: 'east' });
+  state.clearStepSeen.set('1A11|east', { ts: stepTs, direction: 'east', headcode: '1A11' });
   const periods = state._computeClosures([t], new Date(stepTs));
   check('late clear step: end = clearStep + 45s',
     periods[0].end, new Date(stepTs + 45000).toISOString());
@@ -261,7 +297,7 @@ function mkTrain(o) {
   const staleTs = BASE - 25 * 60000;         // 25 min ago (> 20 min TTL)
   const t = mkTrain({ dir: 'east', headcode: '1A01', bestTimeMs: BASE + 60000 });
   state.tdSeenToday.set('1A01', new Date(staleTs));
-  state.clearStepSeen.set('1A01', { ts: staleTs, direction: 'east' });
+  state.clearStepSeen.set('1A01|east', { ts: staleTs, direction: 'east', headcode: '1A01' });
   const periods = state._computeClosures([t], new Date(BASE));
   check('stale clear step (> TTL) ignored → bestTime fallback',
     periods[0].end, new Date(BASE + 60000 + 30000).toISOString());
@@ -618,7 +654,7 @@ const mergeClearCfg = {
   const clearTs = BASE;
   const state = new CrossingState('t', mergeClearCfg);
   setStrike(state, '1S27', clearTs - 212000, 'east'); // 0006 at 19:04:07
-  state.clearStepSeen.set('1S27', { ts: clearTs, direction: 'east' });            // 0004→0002 19:07:39
+  state.clearStepSeen.set('1S27|east', { ts: clearTs, direction: 'east', headcode: '1S27' });            // 0004→0002 19:07:39
   const east = mkT({ dir: 'east', headcode: '1S27', bestTimeMs: clearTs + 141000 }); // stale 19:10:00
   const west = mkT({ dir: 'west', headcode: '2Y62', bestTimeMs: clearTs + 186000 }); // 19:10:45
   const periods = state._computeClosures([east, west], new Date(clearTs + 46000));   // now = 19:08:25
@@ -641,8 +677,8 @@ const mergeClearCfg = {
   // Both trains cleared, but the period must run to the LATER of the two ends.
   const clearTs = BASE;
   const state = new CrossingState('t', mergeClearCfg);
-  state.clearStepSeen.set('1A20', { ts: clearTs, direction: 'east' });
-  state.clearStepSeen.set('1A21', { ts: clearTs + 90000, direction: 'east' });
+  state.clearStepSeen.set('1A20|east', { ts: clearTs, direction: 'east', headcode: '1A20' });
+  state.clearStepSeen.set('1A21|east', { ts: clearTs + 90000, direction: 'east', headcode: '1A21' });
   const a = mkT({ dir: 'east', headcode: '1A20', bestTimeMs: clearTs + 5000 });
   const b = mkT({ dir: 'east', headcode: '1A21', bestTimeMs: clearTs + 10000 });
   const periods = state._computeClosures([a, b], new Date(clearTs + 95000));
@@ -1364,7 +1400,7 @@ console.log('  -- #12 west close: berth-anchored, cannot invert or jump --');
     const t = mkT({ dir: 'west', headcode: '1N44', source: 'ldb', bestTimeMs: T + depOffsetSecs * 1000 });
     setStrike(st, '1N44', T - 60000, 'west', '0003');
     st.recordTdBerth({ headcode: '1N44', to: '0005', from: '0003', ts: new Date(T - 5000).toISOString(), event: 'CA' });
-    st.clearStepSeen.set('1N44', { ts: T + 60000, direction: 'west' });
+    st.clearStepSeen.set('1N44|west', { ts: T + 60000, direction: 'west', headcode: '1N44' });
     return st._computeClosures([t], new Date(T))[0];
   };
   // Sweep the departure estimate across +/-10 min: nothing about the close may move, and the
@@ -1515,7 +1551,7 @@ console.log('  -- #14 held countdowns: no trigger, no zero --');
     checkTruthy('#14: ...and reports it as the current closure', !!api.currentClosure);
 
     // Once the train clears, the hold ends and the end becomes the real anchored value.
-    st.clearStepSeen.set('1W09', { ts: now.getTime(), direction: 'west' });
+    st.clearStepSeen.set('1W09|west', { ts: now.getTime(), direction: 'west', headcode: '1W09' });
     const q = st._computeClosures([t], now)[0];
     check('#14: clear step ⇒ no longer holding', q.holdingOpen, false);
     check('#14: end = clear step + open lag', q.end, iso(now.getTime() + 18000));
@@ -1582,7 +1618,7 @@ console.log('  -- #19 held bounds are re-stamped on the clock, not left to decay
     st._scheduleHoldTick();
     checkTruthy('#19: a held open arms the clock tick', !!st._holdTimer);
 
-    st.clearStepSeen.set('1W09', { ts: now.getTime(), direction: 'west' });
+    st.clearStepSeen.set('1W09|west', { ts: now.getTime(), direction: 'west', headcode: '1W09' });
     st.closurePeriods = st._computeClosures([t], now);
     check('#19: cleared => no longer holding', st.closurePeriods[0].holdingOpen, false);
     st.state = 'OPEN';                         // and the crossing behind it is clear
@@ -1737,7 +1773,7 @@ console.log('  -- #15 anchored ends cannot invert across periods --');
 
     // But a PHYSICAL event may still split them: once the first train has demonstrably
     // cleared and the barrier is up before the second close, two periods is the truth.
-    s3.clearStepSeen.set('1W03', { ts: T - 30000, direction: 'west' });
+    s3.clearStepSeen.set('1W03|west', { ts: T - 30000, direction: 'west', headcode: '1W03' });
     B.bestTime = new Date(T + 190000);
     const split = s3._computeClosures([A, B], new Date(T));
     check('#15: a recorded clear step CAN split the pair again', split.length, 2);
@@ -1800,7 +1836,7 @@ console.log('  -- #18 a merged period ends on the last train to CLEAR, not the l
   check('#18: …and it starts on the real 0006+100s close (13:38:07Z)',
     ps[0].predictedStart, iso(T - 217000));
   checkTruthy('#18: the east train HAS cleared, the west train has NOT (the premise)',
-    st.clearStepSeen.has('2E37') && !st.clearStepSeen.has('1H30'));
+    st.clearStepSeen.has('2E37|east') && !st.clearStepSeen.has('1H30|west'));
 
   // THE BUG. 2E37's clear step + 40s = T+40000, which is 2s before NOW, so the period
   // expires and the app reports the crossing clear — with 1H30 one second from the road.
@@ -1822,7 +1858,7 @@ console.log('  -- #18 a merged period ends on the last train to CLEAR, not the l
   // clear step must not SHORTEN the period. A maximum cannot, which is why this is safe.
   {
     const { st: s2, W: W2, E: E2 } = build();
-    s2.clearStepSeen.set('1H30', { ts: W_CLEAR, direction: 'west' });
+    s2.clearStepSeen.set('1H30|west', { ts: W_CLEAR, direction: 'west', headcode: '1H30' });
     const p2 = s2._computeClosures([W2, E2], new Date(W_CLEAR + 1000))[0];
     check('#18: once BOTH have cleared, the end is the LATER clear step + its lag',
       p2.end, iso(W_CLEAR + 18000));
@@ -1849,13 +1885,13 @@ console.log('  -- #18 a merged period ends on the last train to CLEAR, not the l
     const E = mkT({ dir: 'east', headcode: '2E37', bestTimeMs: T + 30000 });
     const prev = [{ train: W }, { train: E }];         // E last by bestTime, and cleared
     const next = [{ predClose: new Date(T + 90000), confClose: new Date(T + 90000) }];
-    st.clearStepSeen.set('2E37', { ts: T, direction: 'east' });
+    st.clearStepSeen.set('2E37|east', { ts: T, direction: 'east', headcode: '2E37' });
     checkTruthy('#18: no lift while a train in the group has not cleared',
       st._barrierKnownToLift(prev, next, new Date(T + 42000)) === false);
 
     // Both cleared: the lift is the LATER clear step + that train's own lag, not the
     // earlier one — 1H30 at T+43s on the west 18s lag, i.e. T+61s, not 2E37's T+40s.
-    st.clearStepSeen.set('1H30', { ts: T + 43000, direction: 'west' });
+    st.clearStepSeen.set('1H30|west', { ts: T + 43000, direction: 'west', headcode: '1H30' });
     checkTruthy('#18: once both have cleared, the barrier is known to lift',
       st._barrierKnownToLift(prev, next, new Date(T + 61000)) === true);
     const tooSoon = [{ predClose: new Date(T + 55000), confClose: new Date(T + 55000) }];
@@ -2423,10 +2459,23 @@ console.log('  -- step 0: the held-episode log --');
 
     // --- 7. closed: the train's own close arrives while it is still held -----------------
     //
-    // A queued train stays `held` through its protecting strike and past its own crossing,
-    // until it drops off the list. None of that is on a screen — its card reads "Closed" —
-    // and 10-19 Oct it was 22% of all logged held time. The episode ends when the close
-    // does; the payload's closePending does not change.
+    // A queued train stays `held` through its protecting strike, and the episode ends there,
+    // as `closed`. 10-19 Oct that was 22% of all logged held time.
+    //
+    // This block used to assert that `closePending` ALSO stayed true past the train's own
+    // crossing, on the stated grounds that "none of that is on a screen — its card reads
+    // Closed". That grounds was wrong, and the correction is the point of the 2026-10-26
+    // change below. Rendered through the deployed closure-card over this very fixture: the
+    // period's end is the clear step + the east open lag, so once it passes, `isCurrent` is
+    // false and the row falls through to the `closePending` branch and reads **"Train held"**
+    // again — with the banner back at CROSSING CLEAR — until `relevant()` drops the period at
+    // end + 60s. About 55 seconds per episode of advertising a held closure for a train that
+    // has already gone, roughly 9 times a day.
+    //
+    // So `closePending` must go false once the train has crossed. The closure itself is NOT
+    // affected: BARRIERS DOWN still fires at the protecting strike (measured — all 99 of the
+    // `how:"gone"` trains over 10-19 Oct struck it before crossing), which is why this is a
+    // stale row rather than a missed closure.
     {
       lines.length = 0;
       const st = new CrossingState('portslade', holdOnly(SHIPPED));
@@ -2461,7 +2510,12 @@ console.log('  -- step 0: the held-episode log --');
       check('closed: …recorded as its own ending', row(ended, 0).how, 'closed');
       check('closed: …lasting until the close, not until the train left the list', row(ended, 0).durationSecs, 170);
       check('closed: nothing is held in memory after the train has crossed', st.closeHeldSince.size, 0);
-      check('closed: the payload still says closePending (unchanged)', !!(last[0] || {}).closePending, true);
+      check('closed: closePending is FALSE once the train has crossed (2026-10-26)',
+        !!(last[0] || {}).closePending, false);
+      // The closure itself is untouched — it still gates on the protecting strike and still
+      // ends on the clear step + open lag. Only the "still to come" claim is withdrawn.
+      check('closed: …and the period still ends on the clear step + east open lag',
+        (last[0] || {}).end, iso(T + 200000 + 40000));
     }
   } finally {
     logger.logHeld = realLogHeld;
@@ -2836,6 +2890,91 @@ console.log('  -- 2026-10-26 step 2: a queued train counts down from its own (qu
       sig(world(holdOnly(SHIPPED), steps)._closeTimeInfo(W, now)), `${iso(T + 61000)}/false/-`);
     check('west, queued at its strike: its own median (0003 + 175 - 92)',
       sig(world(withQ(SHIPPED), steps)._closeTimeInfo(W, now)), `${iso(T + 83000)}/false/-`);
+  }
+}
+
+// ---- 2026-10-26: a train that has CROSSED is not still queued -----------------------------
+//
+// FIELD MEASUREMENT, the `how:"gone"` holds. Over 2026-10-10..19, 99 held episodes ended by the
+// train leaving the merged list at the 3-minute sighting grace rather than by the hold being
+// released. They were 8% of episodes but 52.8% of all held time (mean 536s, ~9/day).
+//
+// scripts/gone-holds.js joined each one to the crossing clear step in the TD log. EVERY ONE of
+// the 99 trains crossed — none failed to run — so this is not a false alarm (goal 2) but real
+// closures being shown wrong (goal 1). In 61 of them the train crossed a median 212s BEFORE the
+// hold ended: the app went on advertising "Train held, closure still to come" for three and a
+// half minutes after that closure had been and gone, ~19 min/day of it.
+//
+// The cause is here. `_crossedAheadSinceStrike` exists because an anchor that struck while we
+// were queued is too early to trust. Once WE have performed the clear step we have crossed, so
+// there is no close left to hold — and its own comment says "once we have crossed, this is
+// moot". But the guard only returned null when our clear step predated the anchor STRIKE; a
+// train that crossed after its strike kept matching a leader inside the narrowed window and
+// stayed flagged queued until it was dropped. `if (mine) return null` is what the comment
+// already described.
+//
+// NOT a fix for the queued close being early (the uncalibrated lag, CLAUDE.md step 2). Once
+// released, the period starts at strike + offset, still ~73s early. What it stops is the hold
+// outliving the train.
+console.log('  -- 2026-10-26: a train that has crossed is not still queued --');
+{
+  const SHIPPED = JSON.parse(require('fs').readFileSync(
+    require('path').join(__dirname, '..', 'config', 'crossings.json'), 'utf8')).portslade;
+  const T = BASE;
+  const step = (st, hc, to, from, ts) => {
+    st.recordTdSighting(hc, new Date(ts));
+    st.recordTdBerth({ headcode: hc, to, from, ts: iso(ts), event: 'CA' });
+    st.recordTdClearStep({ headcode: hc, to, from, ts: iso(ts) });
+    st.recordTdCloseStrike({ headcode: hc, to, from, ts: iso(ts) });
+  };
+  // 1H01 is east `stopping` (anchor 0008 + 55s), queued behind 1L01 when its anchor struck.
+  const F = { ...mkT({ dir: 'east', headcode: '1H01', bestTimeMs: T + 260000 }),
+              callsAtStation: true, callsAtApproach: false };
+  // `upTo` lets each assertion see only the TD that had happened by then.
+  const build = (upTo) => {
+    const st = new CrossingState('portslade', SHIPPED);
+    const ev = [['1L01','0006','0008',T], ['1H01','0008','0010',T+5000],
+                ['1L01','0004','0006',T+60000], ['1L01','0002','0004',T+120000],
+                ['1H01','0006','0008',T+150000], ['1H01','0004','0006',T+200000],
+                ['1H01','0002','0004',T+260000]];
+    for (const [hc, to, from, ts] of ev) if (ts <= upTo) step(st, hc, to, from, ts);
+    return st;
+  };
+
+  // Premise: while it really is behind the leader, it is held — the rule must still work.
+  {
+    const st = build(T + 130000), now = new Date(T + 130000);
+    check('premise: the follower is class stopping', st._classOf(F), 'stopping');
+    checkTruthy('premise: before it crosses, the leader having cleared keeps it queued',
+      !!st._crossedAheadSinceStrike(F, now, 2));
+    checkTruthy('premise: …and the close is held', !!st._closeTimeInfo(F, now).held);
+  }
+
+  // The fix: its own clear step has landed, so it has crossed.
+  {
+    const now = new Date(T + 300000), st = build(T + 300000);
+    checkTruthy('premise: our own clear step is recorded', !!st._freshClearStep(F, now));
+    check('premise: nothing is ahead of it any more', st._blockedByAhead(F, now, 2), null);
+    check('a train that has crossed is no longer queued',
+      st._crossedAheadSinceStrike(F, now, 2), null);
+    const ci = st._closeTimeInfo(F, now);
+    check('…so its close is no longer held', !!ci.held, false);
+    check('…and reads the plain anchor arithmetic, 0008 + 55s',
+      ci.at.toISOString(), iso(T + 5000 + 55000));
+    const p = st._computeClosures([F], now)[0];
+    check('…and the period is a closure, not a pending hold', !!p.closePending, false);
+    check('…ending on its own clear step + the east open lag',
+      p.end, iso(T + 260000 + 40000));
+  }
+
+  // The older guard still has to work: crossed BEFORE the anchor struck (a stale strike).
+  {
+    const st = new CrossingState('portslade', SHIPPED);
+    step(st, '1H01', '0002', '0004', T);            // crossed first
+    step(st, '1H01', '0008', '0010', T + 60000);    // then a later strike
+    const now = new Date(T + 70000);
+    check('crossed before the strike: still not queued (the pre-existing guard)',
+      st._crossedAheadSinceStrike(F, now, 2), null);
   }
 }
 
