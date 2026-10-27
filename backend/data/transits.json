@@ -925,6 +925,227 @@
      "n": 39
     }
    }
+  },
+  "queued": {
+   "_comment": "Queued-at-strike medians (step 2): the B>XING row measured only on runs with a same-direction train within maxAhead berths ahead when they struck B (lib/td-runs.markAhead). Read by crossing-state._queuedEstimate. Cells with n<15 are omitted rather than guessed.",
+   "generatedAt": "2026-10-27T20:36:31.610Z",
+   "until": "2026-07-26",
+   "days": 78,
+   "runs": 15196,
+   "maxAhead": {
+    "east": 2,
+    "west": 2
+   },
+   "east": {
+    "stopping": {
+     "0010>XING": {
+      "secs": 383,
+      "sdSecs": 47,
+      "n": 302
+     },
+     "0006>XING": {
+      "secs": 139,
+      "sdSecs": 28,
+      "n": 271
+     },
+     "0014>XING": {
+      "secs": 527,
+      "sdSecs": 60,
+      "n": 93
+     },
+     "0012>XING": {
+      "secs": 448,
+      "sdSecs": 55,
+      "n": 84
+     },
+     "0008>XING": {
+      "secs": 234,
+      "sdSecs": 42,
+      "n": 174
+     },
+     "0004>XING": {
+      "secs": 79,
+      "sdSecs": 20,
+      "n": 97
+     },
+     "0016>XING": {
+      "secs": 673,
+      "sdSecs": 86,
+      "n": 87
+     }
+    },
+    "ecs": {
+     "0014>XING": {
+      "secs": 560,
+      "sdSecs": 82,
+      "n": 254
+     },
+     "0012>XING": {
+      "secs": 474,
+      "sdSecs": 76,
+      "n": 250
+     },
+     "0010>XING": {
+      "secs": 374,
+      "sdSecs": 76,
+      "n": 286
+     },
+     "0006>XING": {
+      "secs": 188,
+      "sdSecs": 47,
+      "n": 308
+     },
+     "0016>XING": {
+      "secs": 658,
+      "sdSecs": 85,
+      "n": 207
+     },
+     "0008>XING": {
+      "secs": 282,
+      "sdSecs": 71,
+      "n": 265
+     },
+     "0004>XING": {
+      "secs": 103,
+      "sdSecs": 20,
+      "n": 148
+     }
+    },
+    "fast": {
+     "0016>XING": {
+      "secs": 683,
+      "sdSecs": 75,
+      "n": 16
+     },
+     "0014>XING": {
+      "secs": 559,
+      "sdSecs": 83,
+      "n": 24
+     },
+     "0012>XING": {
+      "secs": 475,
+      "sdSecs": 88,
+      "n": 24
+     },
+     "0010>XING": {
+      "secs": 393,
+      "sdSecs": 76,
+      "n": 32
+     },
+     "0008>XING": {
+      "secs": 288,
+      "sdSecs": 63,
+      "n": 29
+     },
+     "0006>XING": {
+      "secs": 186,
+      "sdSecs": 56,
+      "n": 38
+     },
+     "0004>XING": {
+      "secs": 115,
+      "sdSecs": 23,
+      "n": 15
+     }
+    },
+    "stoppingLocal": {
+     "0016>XING": {
+      "secs": 750,
+      "sdSecs": 132,
+      "n": 287
+     },
+     "0014>XING": {
+      "secs": 609,
+      "sdSecs": 118,
+      "n": 303
+     },
+     "0012>XING": {
+      "secs": 527,
+      "sdSecs": 119,
+      "n": 311
+     },
+     "0010>XING": {
+      "secs": 467,
+      "sdSecs": 95,
+      "n": 418
+     },
+     "0008>XING": {
+      "secs": 324,
+      "sdSecs": 73,
+      "n": 287
+     },
+     "0006>XING": {
+      "secs": 229,
+      "sdSecs": 78,
+      "n": 330
+     },
+     "0004>XING": {
+      "secs": 101,
+      "sdSecs": 54,
+      "n": 152
+     }
+    },
+    "freight": {
+     "0014>XING": {
+      "secs": 675,
+      "sdSecs": 68,
+      "n": 17
+     },
+     "0010>XING": {
+      "secs": 484,
+      "sdSecs": 54,
+      "n": 16
+     }
+    }
+   },
+   "west": {
+    "stopping": {
+     "T677>XING": {
+      "secs": 369,
+      "sdSecs": 79,
+      "n": 547
+     },
+     "0001>XING": {
+      "secs": 262,
+      "sdSecs": 51,
+      "n": 401
+     },
+     "0003>XING": {
+      "secs": 171,
+      "sdSecs": 38,
+      "n": 187
+     }
+    },
+    "ecs": {
+     "0001>XING": {
+      "secs": 203,
+      "sdSecs": 39,
+      "n": 67
+     },
+     "0003>XING": {
+      "secs": 138,
+      "sdSecs": 25,
+      "n": 46
+     },
+     "T677>XING": {
+      "secs": 283,
+      "sdSecs": 115,
+      "n": 35
+     }
+    },
+    "freight": {
+     "T677>XING": {
+      "secs": 313,
+      "sdSecs": 32,
+      "n": 15
+     },
+     "0001>XING": {
+      "secs": 213,
+      "sdSecs": 37,
+      "n": 21
+     }
+    }
+   }
   }
  }
 }
