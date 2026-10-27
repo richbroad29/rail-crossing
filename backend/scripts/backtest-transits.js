@@ -583,8 +583,10 @@ const out = cells => console.log('  ' + cells.map(([v, w]) => (w < 0 ? String(v)
     console.log('\n=== 7. STEP 2 RULE — a train queued at its freshest strike counts down from its OWN (queued) median.');
     console.log('  Replayed every 10 s from the first chain strike to the protecting strike, test window (%d days), N = east %s / west %s,',
       testDays, QN.east, QN.west);
-    console.log('  exempt: %s. "Train held" train-s/day, the part that can be on screen:',
-      ['east', 'west'].map(d => `${d} ${[...EXEMPT[d]].join(',') || '-'}`).join(', '));
+    console.log('  exempt: %s. Scored for BOTH directions whatever td.<dir>.queuedEstimate says (config: %s) — this is',
+      ['east', 'west'].map(d => `${d} ${[...EXEMPT[d]].join(',') || '-'}`).join(', '),
+      ['east', 'west'].map(d => `${d} ${(tdAll[dkey(d)] || {}).queuedEstimate === true ? 'on' : 'off'}`).join(', '));
+    console.log('  the evidence for that switch. "Train held" train-s/day, the part that can be on screen:');
     out([['', -5], ['today: queued', 14], ['unstruck', 9], ['either', 8], ['step 2: held', 13], ['change', 8], ['queued countdown shown', 23]]);
     for (const d of ['east', 'west']) {
       const T0 = tot[d];

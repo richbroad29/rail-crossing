@@ -1042,7 +1042,11 @@ class CrossingState {
     const spec = this._closeAnchor(t);
     if (!spec || typeof spec.offsetSecs !== 'number') return null;
     const cfg = this.config.td && this.config.td[t.direction === 'east' ? 'eastbound' : 'westbound'];
-    const chain = cfg && cfg.approachChain;
+    // Opt-in per direction (td.<dir>.queuedEstimate). The trade is not the same both ways:
+    // backtest section 7 has east queued countdowns as often early as east clear ones, but
+    // west ones four times as often as west clear ones, for a 12% cut. See the config comment.
+    if (!cfg || cfg.queuedEstimate !== true) return null;
+    const chain = cfg.approachChain;
     if (!Array.isArray(chain)) return null;
     const prot = cfg.clear && cfg.clear.from;
     if (prot && this._freshStrike(t, now, prot)) return null;
@@ -1352,9 +1356,9 @@ class CrossingState {
         // projection carries error, so this stops a close landing on top of, or before, the
         // strike that anchored it. It BINDS for fast (2s -> 10s), which is deliberate: at that
         // margin our own pipeline latency is the larger term anyway.
-        // Step 2 applies westbound too — one rule for both directions. There is no queued HOLD
-        // here (queuedBound is east-only), so a queued westbound train used to run past its
-        // clear-run projection and go 'unstruck'; it now counts down from its own median.
+        // Step 2, westbound — the same rule, when td.westbound.queuedEstimate is on (it is OFF at
+        // Portslade: see the config). There is no queued HOLD here (queuedBound is east-only), so
+        // a queued westbound train runs past its clear-run projection and goes 'unstruck'.
         const info = anchored(struck, anchor.offsetSecs, c.minAfterStrikeSecs);
         return withQueuedEstimate(info, null) || info;
       }

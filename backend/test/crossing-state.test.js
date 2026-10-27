@@ -2882,14 +2882,24 @@ console.log('  -- 2026-10-26 step 2: a queued train counts down from its own (qu
     checkTruthy('…and never before the countdown now shown', conf >= st._closeTimeInfo(F, now).at.getTime());
   }
 
-  // One rule, both directions.
+  // Opt-in per direction (td.<dir>.queuedEstimate). Portslade ships east ON, west OFF — backtest
+  // section 7: west queued countdowns would be 22.5% early against 5.9% for west clear trains.
   {
+    const sw = (east, west) => { const c = JSON.parse(JSON.stringify(SHIPPED));
+      c.td.eastbound.queuedEstimate = east; c.td.westbound.queuedEstimate = west; return c; };
+    check('premise: shipped east on, west off',
+      `${SHIPPED.td.eastbound.queuedEstimate}/${SHIPPED.td.westbound.queuedEstimate}`, 'true/undefined');
+    check('east switched off: identical to no cells',
+      sig(world(withQ(sw(false, undefined)), ONE_AHEAD)._closeTimeInfo(F, now)),
+      sig(world(holdOnly(SHIPPED), ONE_AHEAD)._closeTimeInfo(F, now)));
     const W = { ...mkT({ dir: 'west', headcode: '1W01', bestTimeMs: T + 300000 }), callsAtStation: true };
     const steps = [['1W00', '0003', '0005', T - 5000], ['1W01', '0001', '0003', T]];
     check('west premise: without the cells, the clear-run close (0003 + 153 - 92)',
       sig(world(holdOnly(SHIPPED), steps)._closeTimeInfo(W, now)), `${iso(T + 61000)}/false/-`);
-    check('west, queued at its strike: its own median (0003 + 175 - 92)',
-      sig(world(withQ(SHIPPED), steps)._closeTimeInfo(W, now)), `${iso(T + 83000)}/false/-`);
+    check('west as shipped (off): the clear-run close, cells or not',
+      sig(world(withQ(SHIPPED), steps)._closeTimeInfo(W, now)), `${iso(T + 61000)}/false/-`);
+    check('west switched on: the same rule, its own median (0003 + 175 - 92)',
+      sig(world(withQ(sw(true, true)), steps)._closeTimeInfo(W, now)), `${iso(T + 83000)}/false/-`);
   }
 }
 
