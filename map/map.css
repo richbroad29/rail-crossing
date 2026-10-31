@@ -1,0 +1,102 @@
+/* Sussex train map. Same palette as the crossing app (shared/crossing.css) so the two read as
+   one product; nothing is shared with it because the map loads none of its markup. */
+:root{
+  --bg:#0F172A; --panel:rgba(15,23,42,.92); --card:#1E293B; --line:#334155;
+  --text:#E2E8F0; --muted:#94A3B8;
+  --c-express:#60A5FA; --c-stopping:#34D399; --c-ecs:#94A3B8; --c-freight:#F59E0B;
+  --c-special:#C084FC; --c-other:#E2E8F0;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+/* `hidden` must win over the display rules below (.layers is flex) or closed panels show. */
+[hidden]{display:none!important}
+html,body{height:100%}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'SF Pro',system-ui,sans-serif;-webkit-font-smoothing:antialiased;overflow:hidden}
+#map{position:fixed;inset:0;background:#0b1220}
+
+/* Dark basemap without a third-party dark tile service: the standard OSM tiles, inverted. Only
+   the BASE pane is filtered — the railway overlay and the trains keep their real colours. */
+.dark .leaflet-tile-pane .basemap{filter:invert(1) hue-rotate(180deg) brightness(.85) contrast(.9) saturate(.6)}
+.leaflet-container{background:#0b1220;font-family:inherit}
+.light .leaflet-container,.light #map{background:#e5e7eb}
+.leaflet-control-attribution{background:rgba(15,23,42,.75)!important;color:var(--muted)!important;font-size:10px}
+.leaflet-control-attribution a{color:#cbd5e1!important}
+.light .leaflet-control-attribution{background:rgba(255,255,255,.8)!important;color:#334155!important}
+.light .leaflet-control-attribution a{color:#1e40af!important}
+.leaflet-control-zoom{border:none!important;margin-bottom:calc(12px + env(safe-area-inset-bottom,0px))!important}
+.leaflet-control-zoom a{background:var(--panel)!important;color:var(--text)!important;border-color:var(--line)!important}
+
+/* ---- top bar ---- */
+.bar{position:fixed;top:0;left:0;right:0;z-index:1000;padding:calc(8px + env(safe-area-inset-top,0px)) 12px 8px;background:linear-gradient(to bottom,rgba(15,23,42,.95),rgba(15,23,42,.85));border-bottom:1px solid rgba(51,65,85,.6);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
+.bar-row{display:flex;align-items:center;gap:10px;max-width:960px;margin:0 auto}
+.bar-home{color:var(--muted);display:flex;width:28px;height:28px;align-items:center;justify-content:center;border-radius:8px;flex:none}
+.bar-home svg{width:20px;height:20px}
+.bar-home:active{background:var(--card)}
+.bar-title{flex:1;min-width:0}
+.bar-name{font-size:15px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bar-status{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
+.bar-status .live{display:inline-block;width:7px;height:7px;border-radius:50%;background:#22C55E;margin-right:5px;vertical-align:1px;box-shadow:0 0 0 0 rgba(34,197,94,.6);animation:pulse 2s infinite}
+.bar-status .warn{color:#FBBF24}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(34,197,94,.6)}70%{box-shadow:0 0 0 6px rgba(34,197,94,0)}100%{box-shadow:0 0 0 0 rgba(34,197,94,0)}}
+@media (prefers-reduced-motion:reduce){.bar-status .live{animation:none}}
+.search input{width:84px;background:var(--card);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:7px 9px;font-size:14px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;text-transform:uppercase;letter-spacing:.5px}
+.search input::placeholder{color:#475569;text-transform:none}
+.search input:focus{outline:2px solid var(--c-express);outline-offset:0;border-color:transparent}
+.search.miss input{outline:2px solid #EF4444}
+.chips{display:flex;gap:6px;overflow-x:auto;max-width:960px;margin:8px auto 0;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+.chips::-webkit-scrollbar{display:none}
+.chip{flex:none;display:inline-flex;align-items:center;gap:6px;background:var(--card);border:1px solid var(--line);color:var(--text);border-radius:999px;padding:5px 10px;font-size:12px;cursor:pointer;font-variant-numeric:tabular-nums;font-family:inherit}
+.chip .sw{width:9px;height:9px;border-radius:50%}
+.chip .n{color:var(--muted)}
+.chip[aria-pressed="false"]{opacity:.45}
+.chip[aria-pressed="false"] .sw{background:transparent!important;box-shadow:inset 0 0 0 1.5px var(--muted)}
+
+.demo-banner{position:fixed;left:50%;transform:translateX(-50%);top:calc(98px + env(safe-area-inset-top,0px));z-index:1000;background:#7C2D12;color:#FED7AA;border:1px solid #C2410C;font-size:12px;font-weight:600;padding:5px 12px;border-radius:999px;white-space:nowrap}
+
+/* ---- map tools ---- */
+.tools{position:fixed;right:12px;top:calc(104px + env(safe-area-inset-top,0px));z-index:1000;display:flex;flex-direction:column;gap:8px;align-items:flex-end}
+.tool{width:38px;height:38px;border-radius:10px;background:var(--panel);border:1px solid var(--line);color:var(--text);display:flex;align-items:center;justify-content:center;cursor:pointer}
+.tool svg{width:20px;height:20px}
+.tool[aria-expanded="true"]{border-color:var(--c-express)}
+.layers{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 10px;display:flex;flex-direction:column;gap:6px;font-size:13px}
+.layers label{display:flex;gap:8px;align-items:center;cursor:pointer;white-space:nowrap}
+.layers input{accent-color:var(--c-express);width:16px;height:16px}
+
+/* ---- train markers ---- */
+.train{background:none;border:none}
+.train .tm{position:absolute;left:0;top:0;width:26px;height:26px;transition:opacity .4s}
+.train svg{width:26px;height:26px;display:block;filter:drop-shadow(0 1px 1.5px rgba(0,0,0,.7))}
+.train .lbl{position:absolute;left:24px;top:3px;font:600 11px/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:#F8FAFC;background:rgba(15,23,42,.82);border:1px solid rgba(148,163,184,.35);border-radius:4px;padding:2px 4px;white-space:nowrap;pointer-events:none}
+.light .train .lbl{color:#0F172A;background:rgba(255,255,255,.9);border-color:rgba(15,23,42,.25)}
+.no-labels .train .lbl{display:none}
+.zoomed-out .train .lbl{display:none}
+/* Zoomed out, the whole county is on screen and full-size markers pile up on each other. */
+.zoomed-out .train .tm{transform:scale(.72)}
+.train.stale .tm{opacity:.45}
+.train.est .lbl{border-style:dashed}
+.train.sel svg{filter:drop-shadow(0 0 4px #fff) drop-shadow(0 0 2px #fff)}
+.train.sel .lbl{display:block!important;border-color:#F8FAFC}
+.trail{pointer-events:none}
+
+.berth-dot{pointer-events:auto}
+
+/* ---- detail sheet ---- */
+.sheet{position:fixed;z-index:1001;left:50%;transform:translateX(-50%);bottom:calc(30px + env(safe-area-inset-bottom,0px));width:min(440px,calc(100% - 24px));background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px 14px 10px;box-shadow:0 10px 30px rgba(0,0,0,.45);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
+.sheet-close{position:absolute;top:6px;right:8px;background:none;border:none;color:var(--muted);font-size:24px;line-height:1;width:32px;height:32px;cursor:pointer;border-radius:8px}
+.sheet-close:active{background:var(--card)}
+.sheet-head{display:flex;align-items:center;gap:8px;padding-right:30px}
+.sheet-dot{width:12px;height:12px;border-radius:50%;flex:none}
+.sheet-hc{font:700 22px/1.1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.5px}
+.sheet-class{font-size:12px;color:var(--muted)}
+.sheet-route{font-size:15px;font-weight:600;margin:6px 0 10px;min-height:1.3em}
+.sheet-route .op{display:block;font-size:12px;font-weight:400;color:var(--muted);margin-top:2px}
+.sheet-route.none{color:var(--muted);font-weight:400;font-size:13px}
+.sheet-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 12px}
+.sheet-grid .k{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:2px}
+.sheet-grid .v{font-size:13px;font-variant-numeric:tabular-nums}
+.sheet-follow{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:13px;color:var(--muted);cursor:pointer}
+.sheet-follow input{accent-color:var(--c-express);width:16px;height:16px}
+
+@media (max-width:420px){
+  .search input{width:70px}
+  .bar-name{font-size:14px}
+}

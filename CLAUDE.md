@@ -28,6 +28,7 @@ shared/apps-script-feedback.gs   Copy of the Google Apps Script behind the feedb
 shared/icon-180.png, icon.svg    Icons
 README.md                        Almost empty
 portslade/observe/               Barrier-observation PWA — field data-collection tool (separate app, /portslade/observe/)
+map/                             Sussex live train map — proof of concept (/map/, not linked yet; see below)
 ```
 
 ### `shared/predict.js` — read this before touching either front-end
@@ -114,6 +115,33 @@ side. The token makes the pairing impossible: old HTML asks for the old URL, new
 The observer PWA is deliberately **not** stamped — its service worker already fetches code with
 `cache: 'reload'` and matches its precached shell on the exact URL, so a token would miss that
 cache and break the offline launch it exists for.
+
+## Live train map (`/map/`, proof of concept, 2026-10-31)
+
+A flightradar-style map of every train in Sussex, placed from TD berths. Independent of the
+crossing apps: it loads none of `shared/` and the crossing code does not depend on it.
+
+- **Frontend** `map/` (main): Leaflet 1.9.4 from unpkg with SRI, OSM tiles (CSS-inverted for the
+  dark theme — no third-party dark tile service) and the OpenRailwayMap overlay. Polls
+  `GET /map/live` every 5 s, paused while the tab is hidden. `?demo` runs `map/demo.js` —
+  SIMULATED trains on real Sussex lines, bannered as such — so the UI can be seen without the
+  backend. `?api=http://localhost:3000` points it at a local backend. `bump-assets.sh` stamps it.
+- **Backend** (backend-v2, `src/train-map.js`, `berth-geo.js`, `map-services.js`, `map-setup.js`,
+  `smart-fetcher.js`; config `config/map.json`, `config/map-stations.json`). `td-listener` emits
+  every C-Class message as `cclass`; the map keeps the areas it derives from SMART + the region box.
+  State is berth occupancy (CA step / CB cancel / CC interpose, as verified on the real feed).
+- **Where a berth is** — nobody publishes it, so: SMART ties station steps to a STANOX → CORPUS →
+  CRS → `map-stations.json` coordinates (ODbL, regenerate with `scripts/build-map-stations.js`).
+  Other berths are interpolated by hop count between the nearest station berths either side,
+  along a graph seeded from SMART and learned from live steps (2+ sightings per edge), saved to
+  `data/map/berth-graph.json`. Trains move along the straight line between stations — snapping
+  to track geometry is the obvious next step. An unplaceable berth is counted, never drawn.
+- **Isolation:** the `cclass` emit and the CIF parser's `onSchedule` hook are both wrapped so a
+  map fault cannot reach the Portslade path; tests assert it (`test/train-map.test.js`).
+- **First deploy:** watch for `Train map: areas …; N berths anchored` in the journal, then
+  `GET /map/berths` for coverage. Expect estimated positions to fill in over the first hour as
+  the graph learns. Not yet checked against real SMART — the file format and the A/B/C/D event
+  semantics are from NROD's documentation, not from a download.
 
 ## Working from the phone or the web (cloud sessions)
 
