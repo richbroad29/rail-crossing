@@ -31,5 +31,13 @@ FILES="index.html portslade/index.html"
 
 perl -pi -e "s{((?:src|href)=\")((?:\.\./)*shared/[A-Za-z0-9._-]+\.(?:js|css))(?:\?v=[^\"]*)?\"}{\$1\$2?v=$TOKEN\"}g" $FILES
 
+# The train map (map/) keeps its code beside its page, so its tags name a bare file — map.js, not
+# shared/map.js. Same-directory names only: anything with a slash (the pinned Leaflet CDN URLs,
+# which carry their own version and SRI hash) is left alone. map.js passes its own token on to
+# demo.js, which it loads at runtime.
+MAP_FILES="map/index.html"
+perl -pi -e "s{((?:src|href)=\")([A-Za-z0-9_-]+\.(?:js|css))(?:\?v=[^\"]*)?\"}{\$1\$2?v=$TOKEN\"}g" $MAP_FILES
+
 echo "asset token -> $TOKEN"
 grep -hoE '(src|href)="(\.\./)*shared/[A-Za-z0-9._-]+\.(js|css)\?v=[0-9]+"' $FILES | sort -u
+grep -hoE '(src|href)="[A-Za-z0-9_-]+\.(js|css)\?v=[0-9]+"' $MAP_FILES | sort -u
