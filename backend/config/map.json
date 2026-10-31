@@ -1,0 +1,16 @@
+{
+  "_comment": "Live train map (proof of concept). Positions come from TD berth steps: SMART ties a berth to a station (CRS via CORPUS, coordinates via config/map-stations.json); berths between stations are interpolated along the berth graph, which is seeded from SMART and then learned from the live feed. See src/berth-geo.js.",
+  "region": {
+    "id": "sussex",
+    "name": "Sussex",
+    "_comment_bbox": "[south, west, north, east] in degrees. A train is listed only if its resolved position is inside this box. TD areas are NOT listed here: every area with a SMART row at a station inside the box is subscribed automatically, so the area set follows the data rather than a hand-kept list. Set `areas` to override.",
+    "bbox": [50.72, -0.96, 51.17, 0.87]
+  },
+  "_comment_maxAgeSecs": "A berth keeps its description until the train steps out or the signaller cancels it, so a train standing in a platform is still shown. This bounds descriptions that are never cleared (stabled units, signaller housekeeping) — they drop off after this long without a step.",
+  "maxAgeSecs": 2700,
+  "_comment_staleSecs": "After this long without a step the client draws the train faded: it is probably standing, not lost.",
+  "staleSecs": 600,
+  "_comment_interpolation": "A berth with no station of its own is placed between the nearest station-anchored berths behind and ahead of it, by hop count, searching at most maxHops each way. Edges seen fewer than minEdgeCount times are ignored when searching, so one mis-stepped description can't bend the line.",
+  "interpolation": { "maxHops": 14, "minEdgeCount": 2 },
+  "graphPersistSecs": 600
+}

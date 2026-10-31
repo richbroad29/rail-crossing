@@ -364,8 +364,13 @@ async function streamScheduleRecords(filePath, onRecord) {
 
 // Parse the CIF file and extract trains for configured crossings
 // Uses streaming to stay within memory limits
-async function parseScheduleFile(filePath, crossingsConfig) {
+//
+// `hooks.onSchedule(fields, locations)`, optional, sees every schedule active today — the live
+// train map indexes headcodes from it in this same pass. It is isolated: a throw there is
+// counted and logged once, and can never stop or alter the crossing parse.
+async function parseScheduleFile(filePath, crossingsConfig, hooks = {}) {
   const results = {}; // crossingId → array of trains
+  let hookErrors = 0;
 
   for (const id of Object.keys(crossingsConfig)) {
     results[id] = [];
@@ -437,6 +442,11 @@ async function parseScheduleFile(filePath, crossingsConfig) {
     skipped.crLocations += crHere;
 
     const fields = extractTrainFields(sched);
+
+    if (hooks.onSchedule) {
+      try { hooks.onSchedule(fields, locations); }
+      catch (e) { if (hookErrors++ === 0) console.error('Schedule hook failed (crossing parse unaffected):', e.message); }
+    }
 
     // Check each crossing
     let traversed = false;

@@ -11,6 +11,7 @@ const sclassRotation = require('./sclass-rotation');
 const cifFetcher = require('./cif-fetcher');
 const corpusFetcher = require('./corpus-fetcher');
 const { computeRunRates } = require('./run-rate');
+const { setupTrainMap } = require('./map-setup');
 const { parseLondonWallClock, londonDateStamp } = require('./time-utils');
 
 // Load config
@@ -29,6 +30,22 @@ const UPDATE_INTERVAL_MS = 3600000; // 1 hour — daily UPDATE extract apply cad
 // UPDATE-extract apply overlays onto a clone of this, so each application is
 // idempotent from a clean baseline. Null until the first full parse completes.
 let baseScheduleByCrossing = null;
+
+// Live train map (proof of concept, /map/live). Null until setupTrainMap resolves, and stays
+// null if it fails — nothing on the crossing path depends on it.
+let trainMapCtx = null;
+
+// The map's headcode → service index is filled during the same CIF pass as the crossings.
+function mapScheduleHooks() {
+  if (!trainMapCtx) return {};
+  trainMapCtx.services.begin();
+  return { onSchedule: (fields, locations) => trainMapCtx.services.collect(fields, locations) };
+}
+function mapScheduleDone(ok) {
+  if (!trainMapCtx) return;
+  if (!ok) { trainMapCtx.services.abort(); return; }
+  console.log(`Train map: ${trainMapCtx.services.commit()} region services indexed by headcode`);
+}
 
 // Build auth config — RDM takes priority
 let auth;
@@ -135,13 +152,15 @@ async function loadSchedule() {
 
   console.log(`Loading schedule from: ${file}`);
   try {
-    const scheduleTrains = await parseScheduleFile(file, crossingsConfig);
+    const scheduleTrains = await parseScheduleFile(file, crossingsConfig, mapScheduleHooks());
+    mapScheduleDone(true);
     annotateRunRates(scheduleTrains);
     baseScheduleByCrossing = scheduleTrains;
     for (const [id, trains] of Object.entries(scheduleTrains)) {
       crossingStates[id].updateScheduleTrains(trains);
     }
   } catch (err) {
+    mapScheduleDone(false);
     console.error('Failed to load schedule:', err.message);
   }
 }
@@ -189,11 +208,14 @@ function scheduleDailyCifRefresh() {
       console.error('CORPUS refresh failed (keeping previous map):', err.message);
     }
 
+    if (trainMapCtx) await trainMapCtx.refresh(true);   // SMART — non-fatal, logs its own failure
+
     try {
       console.log('CIF refresh: starting daily fetch');
       const res = await cifFetcher.downloadCif();
       console.log(`CIF refresh: downloaded ${res.bytes} bytes`);
-      const trains = await parseScheduleFile(cifFetcher.latestFilePath(), crossingsConfig);
+      const trains = await parseScheduleFile(cifFetcher.latestFilePath(), crossingsConfig, mapScheduleHooks());
+      mapScheduleDone(true);
       annotateRunRates(trains);
       baseScheduleByCrossing = trains;
       for (const [id, t] of Object.entries(trains)) {
@@ -201,6 +223,7 @@ function scheduleDailyCifRefresh() {
       }
       console.log('CIF refresh: in-memory schedules updated');
     } catch (err) {
+      mapScheduleDone(false);
       console.error('CIF refresh failed (keeping previous data):', err.message);
     }
     // Schedule next 24h out
@@ -261,6 +284,15 @@ async function main() {
   // Awaiting keeps the order correct; ~770KB gzipped → typically sub-second.
   await loadCorpus();
 
+  // Live train map — after CORPUS (it joins SMART's STANOXes through it) and before the schedule
+  // (whose parse fills the map's service index). Non-fatal by construction; see map-setup.js.
+  try {
+    trainMapCtx = await setupTrainMap({ corpus: corpusFetcher, tdListener });
+  } catch (err) {
+    console.error('Train map disabled (crossing service unaffected):', err.message);
+    trainMapCtx = null;
+  }
+
   // Load schedule (non-blocking — LDB starts immediately). Once the full-parse
   // baseline is in place, apply the daily UPDATE extract straight away so any
   // already-issued same-day cancellations take effect at startup.
@@ -278,7 +310,7 @@ async function main() {
   scheduleDailyCifRefresh();
 
   // Start API server
-  createApi(crossingStates, PORT);
+  createApi(crossingStates, PORT, { trainMap: trainMapCtx });
 
   // Start TD feed listener and daily log rotation (additive — does not affect LDB/state path).
   // Route every TD sighting into each crossing-state so that CIF-sourced freight
@@ -309,12 +341,16 @@ async function main() {
 }
 
 // Graceful shutdown
+// The map's learned berth graph is saved every few minutes; a restart is the moment it would
+// otherwise lose what it learned since the last save.
 process.on('SIGINT', () => {
   console.log('\nShutting down...');
+  if (trainMapCtx) trainMapCtx.save();
   process.exit(0);
 });
 process.on('SIGTERM', () => {
   console.log('\nShutting down...');
+  if (trainMapCtx) trainMapCtx.save();
   process.exit(0);
 });
 

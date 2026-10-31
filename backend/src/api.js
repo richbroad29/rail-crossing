@@ -1,7 +1,9 @@
 const http = require('http');
 const tdListener = require('./td-listener');
 
-function createApi(crossingStates, port = 3000) {
+// `extras.trainMap` (optional): the live train map — { trainMap, geo, config, services }.
+// Absent ⇒ the /map routes 404 like any unknown path.
+function createApi(crossingStates, port = 3000, extras = {}) {
   const server = http.createServer((req, res) => {
     // CORS headers
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -143,6 +145,43 @@ function createApi(crossingStates, port = 3000) {
         return;
       }
 
+      // Live train map (proof of concept): every train in the region, placed from TD berths.
+      // See src/train-map.js. Polled by /map/ every few seconds, so it stays compact: the
+      // client decodes the train class from the headcode itself.
+      const map = extras.trainMap;
+      if (map && path === '/map/live') {
+        const snap = map.trainMap.snapshot();
+        const td = tdListener.feedHealth();
+        res.writeHead(200);
+        res.end(JSON.stringify({
+          region: { id: map.config.region.id, name: map.config.region.name, bbox: map.config.region.bbox },
+          serverTime: Date.now(),
+          staleSecs: map.config.staleSecs || 600,
+          feed: { connected: td.connected, stale: td.stale, staleSecs: td.staleSecs },
+          areas: [...map.trainMap.areas].sort(),
+          stats: snap.stats,
+          trains: snap.trains
+        }));
+        return;
+      }
+
+      // Every berth the map knows and where it puts it — for checking coverage, not for polling.
+      if (map && path === '/map/berths') {
+        const berths = map.geo.listBerths().map(b => b.pos
+          ? { area: b.area, berth: b.berth, lat: +b.pos.lat.toFixed(5), lon: +b.pos.lon.toFixed(5),
+              placement: b.pos.placement, station: b.pos.station || null }
+          : { area: b.area, berth: b.berth, lat: null, lon: null, placement: null, station: null });
+        res.writeHead(200);
+        res.end(JSON.stringify({
+          serverTime: Date.now(),
+          graph: map.geo.stats(),
+          counters: map.trainMap.counters(),
+          services: map.services ? { indexed: map.services.size(), builtAt: map.services.builtAt } : null,
+          berths
+        }));
+        return;
+      }
+
       // Legacy compatibility: /api?station=PLD (for existing frontend)
       if (path === '/api') {
         const station = url.searchParams.get('station');
@@ -176,6 +215,8 @@ function createApi(crossingStates, port = 3000) {
           'GET /crossing/:id/closures',
           'GET /crossing/:id/live',
           'GET /crossing/:id/triggers',
+          'GET /map/live',
+          'GET /map/berths',
           'GET /api?station=PLD  (legacy compat)'
         ]
       }));

@@ -55,6 +55,7 @@ let cclassExtraLogged = 0;
 let sclassRawLogged = 0;
 let sclassEventsLogged = 0;
 let connectAttempts = 0;
+let mapListenerErrors = 0;
 let lastSummaryAt = Date.now();
 
 // ---- feed liveness (register #21) --------------------------------------------------------
@@ -247,6 +248,14 @@ function processMessage(body) {
       // LA C-Class capture/sighting flow exactly as it was.
       if (S_CLASS_MSG_TYPES.has(type)) { handleSClass(type, msg); continue; }
 
+      // Live train map: every C-Class message from EVERY area, raw — the map keeps only its own
+      // areas (see train-map.js). Additive and isolated: a throw in a map listener is caught here
+      // so it can never stop the LA capture and sightings below, which drive the crossing.
+      if (RELEVANT_MSG_TYPES.has(type) && msg && emitter.listenerCount('cclass')) {
+        try { emitter.emit('cclass', type, msg); }
+        catch (e) { if (mapListenerErrors++ === 0) console.error('TD map listener failed (LA path unaffected):', e.message); }
+      }
+
       // C-Class berth steps for the extra S-Class areas (BM): separate, area-
       // tagged log only — no 'sighting', never the LA td log. TARGET_AREA is
       // excluded from the set, so LA falls through to the unchanged block below.
@@ -408,5 +417,8 @@ module.exports = {
   // needs the STOMP library. Injecting a stub keeps the socket out of the test without
   // weakening what is asserted: whether a reconnect is ATTEMPTED is the behaviour under test,
   // not whether a TCP connection opens.
-  _setStompitForTest(stub) { stompit = stub; }
+  _setStompitForTest(stub) { stompit = stub; },
+  // The map's 'cclass' event is isolated from the LA path; the test proves a throwing map
+  // listener cannot stop a sighting.
+  _processMessageForTest: processMessage
 };
