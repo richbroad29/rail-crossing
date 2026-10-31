@@ -20,6 +20,10 @@ const TARGET = path.join(DATA_DIR, 'corpus-latest.json.gz');
 const TEMP    = path.join(DATA_DIR, 'corpus-latest.json.gz.tmp');
 
 const tiplocMap = new Map();
+// For the live train map (berth-geo / map-services): SMART names a STANOX, the station table is
+// keyed by CRS, and CIF schedules by TIPLOC. These join the three. Built in the same pass.
+const stanoxIndex = new Map(); // STANOX → { crs, tiplocs: [] }
+const crsTiplocs = new Map();  // CRS → [TIPLOC]
 
 function ensureDir(dir) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -100,11 +104,12 @@ function cleanDisplayName(raw) {
 
 // Read TARGET, gunzip, parse JSON, build the in-memory map.
 // Atomic: builds a fresh Map first and only swaps into tiplocMap on success.
-async function loadCorpusFromDisk() {
-  if (!fs.existsSync(TARGET)) throw new Error(`CORPUS file not on disk at ${TARGET}`);
+// `file` defaults to the managed download; tests pass a fixture so they never touch data/.
+async function loadCorpusFromDisk(file = TARGET) {
+  if (!fs.existsSync(file)) throw new Error(`CORPUS file not on disk at ${file}`);
 
   const raw = await new Promise((resolve, reject) => {
-    fs.readFile(TARGET, (err, data) => {
+    fs.readFile(file, (err, data) => {
       if (err) return reject(err);
       zlib.gunzip(data, (gErr, out) => {
         if (gErr) return reject(gErr);
@@ -117,8 +122,23 @@ async function loadCorpusFromDisk() {
   const list = parsed.TIPLOCDATA || [];
 
   const next = new Map();
+  const nextStanox = new Map();
+  const nextCrs = new Map();
   let skipped = 0;
   for (const entry of list) {
+    const stanox = String(entry.STANOX || '').trim();
+    const tipRaw = (entry.TIPLOC || '').trim();
+    const crsRaw = (entry['3ALPHA'] || '').trim();
+    if (stanox) {
+      if (!nextStanox.has(stanox)) nextStanox.set(stanox, { crs: null, tiplocs: [] });
+      const st = nextStanox.get(stanox);
+      if (crsRaw && !st.crs) st.crs = crsRaw;
+      if (tipRaw) st.tiplocs.push(tipRaw);
+    }
+    if (crsRaw && tipRaw) {
+      if (!nextCrs.has(crsRaw)) nextCrs.set(crsRaw, []);
+      nextCrs.get(crsRaw).push(tipRaw);
+    }
     const tip = (entry.TIPLOC || '').trim();
     if (!tip) { skipped++; continue; }
     const nlc = cleanDisplayName(entry.NLCDESC);
@@ -130,6 +150,10 @@ async function loadCorpusFromDisk() {
 
   tiplocMap.clear();
   for (const [k, v] of next) tiplocMap.set(k, v);
+  stanoxIndex.clear();
+  for (const [k, v] of nextStanox) stanoxIndex.set(k, v);
+  crsTiplocs.clear();
+  for (const [k, v] of nextCrs) crsTiplocs.set(k, v);
 
   console.log(`CORPUS: loaded ${tiplocMap.size} TIPLOCs (${skipped} skipped, ${list.length} total entries)`);
   return tiplocMap.size;
@@ -148,6 +172,22 @@ function resolveTiploc(tip) {
   return tiplocMap.get(tip) || tip;
 }
 
+// STANOX → CRS (null for a timing point that is not a station, e.g. a junction).
+function stanoxToCrs(stanox) {
+  if (!stanox) return null;
+  const e = stanoxIndex.get(String(stanox).trim());
+  return e ? e.crs : null;
+}
+
+function tiplocsForStanox(stanox) {
+  const e = stanox ? stanoxIndex.get(String(stanox).trim()) : null;
+  return e ? e.tiplocs : [];
+}
+
+function tiplocsForCrs(crs) {
+  return crsTiplocs.get(crs) || [];
+}
+
 function latestFileExists() {
   return fs.existsSync(TARGET);
 }
@@ -156,6 +196,9 @@ module.exports = {
   downloadCorpus,
   loadCorpusFromDisk,
   resolveTiploc,
+  stanoxToCrs,
+  tiplocsForStanox,
+  tiplocsForCrs,
   latestFileExists,
   _cleanDisplayName: cleanDisplayName
 };

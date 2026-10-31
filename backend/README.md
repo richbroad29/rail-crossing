@@ -39,6 +39,8 @@ See `.env.example` for the full list. At minimum set `RDM_API_KEY` (LDBSVWS) and
 | `GET /crossing/:id` | Full state for a crossing (closures, trains, timing) |
 | `GET /crossing/:id/closures` | Upcoming closure periods with train details |
 | `GET /crossing/:id/live` | B1 live train positions in area LA (feeds the observer app) |
+| `GET /map/live` | Live train map: every train in the region (`config/map.json`) with a map position from its TD berth — see `src/train-map.js` |
+| `GET /map/berths` | Every berth the map knows and where it places it (station / interpolated / approx), plus graph stats — for checking coverage |
 
 ## Deployment on VPS
 
