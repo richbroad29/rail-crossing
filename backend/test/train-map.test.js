@@ -134,6 +134,7 @@ function stepChain(g, times) {
     const hdg = bearingDeg(g.position('LA', '0012'), g.position('LA', '0010'));
     check('...heading is from the berth it left (eastbound ≈ east)', t && t.heading, Math.round(hdg));
     check('...which is roughly east', hdg > 45 && hdg < 135, true);
+    check('...and names the stations it is between', t && t.between.join(' > '), 'Southwick > Portslade');
 
     clock += 30000;
     m.handle(...msg('CA', { descr: '1H15', from: '0010', to: '0008' }));

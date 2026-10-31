@@ -185,7 +185,10 @@ class TrainMap {
           placement: c.pos.placement
         };
         if (c.pos.station) t.station = c.pos.station;
-        if (c.pos.between) t.between = c.pos.between;
+        if (c.pos.between) {
+          const st = this.geo.stations || {};
+          t.between = c.pos.between.map(crs => (st[crs] && st[crs].name) || crs);
+        }
         const svc = this.services ? this.services.lookup(descr, now) : null;
         if (svc) t.service = svc;
         trains.push(t);
