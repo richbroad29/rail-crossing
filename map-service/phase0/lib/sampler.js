@@ -19,8 +19,10 @@ const round1 = n => Math.round(n * 10) / 10;
 const round2 = n => Math.round(n * 100) / 100;
 
 // Stop if the machine's available memory (which already has OUR usage taken out of it) falls
-// below the floor of the memory-fit verdict. That is the same condition the verdict would call
-// FAIL, so there is nothing more to learn by carrying on and something to lose.
+// below the same 150 MB floor the memory-fit verdict uses. This is the live safety stop, not the
+// verdict: the verdict also adds an allowance for what td-measure does not model, so it can call
+// FAIL long before this fires. This fires only when carrying on would eat into the headroom the
+// crossing service needs — something to lose, and nothing more to learn.
 const MEMORY_FLOOR_MB = WARN_RESERVE_MB;
 // Stop before V8 does it for us: at the heap limit the process aborts with no report. The run
 // command sets --max-old-space-size=256, so the limit is real and finite.

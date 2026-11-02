@@ -25,7 +25,8 @@ const base = (over = {}) => ({
     peakSecond: { at: '2026-11-02T10:12:31.000Z', events: 31, frames: 10 }
   },
   growth: { enough: true, edgesAtThird: 100, edgesAtTwoThirds: 140, edgesAtEnd: 141, lastThirdGrowthPct: 0.7, stillGrowing: false },
-  mem: { peakRssMB: 120, availableForVerdictMB: 520, cpu: { percentOfOneCoreMean: 3.2 } },
+  // measured 120 + 100 allowance = 220 projected, leaving 600 - 220 = 380: a comfortable PASS.
+  mem: { peakRssMB: 120, availableForVerdictMB: 600, cpu: { percentOfOneCoreMean: 3.2 } },
   ctx: { host: undefined, port: undefined, envFile: '/x/.env' },
   ...over
 });
@@ -155,13 +156,13 @@ test('TD_VOLUME / MEMORY_FIT: no data means "not measured" (WARN), never a made-
   }
 });
 
-test('MEMORY_FIT: the thresholds apply to available - peak RSS (300 PASS, 150 WARN, below FAIL)', () => {
+test('MEMORY_FIT: the thresholds apply to available - (measured peak RSS + 100 MB allowance): 300 PASS, 150 WARN, below FAIL', () => {
   const fit = (avail, peak) => by(buildChecks(base({ mem: { peakRssMB: peak, availableForVerdictMB: avail, cpu: { percentOfOneCoreMean: 1 } } })), 'MEMORY_FIT');
-  assert.equal(fit(450, 150).status, 'PASS');
-  assert.equal(fit(449, 150).status, 'WARN');
-  assert.equal(fit(300, 150).status, 'WARN');
-  assert.equal(fit(299, 150).status, 'FAIL');
-  assert.match(fit(299, 150).message, /use a second machine/);
+  assert.equal(fit(550, 150).status, 'PASS');     // 550 - (150 + 100) = 300
+  assert.equal(fit(549, 150).status, 'WARN');     // 299
+  assert.equal(fit(400, 150).status, 'WARN');     // 150
+  assert.equal(fit(399, 150).status, 'FAIL');     // 149
+  assert.match(fit(399, 150).message, /^measured 150 MB \+ 100 MB allowance for parts not modelled = 250 MB; that would leave 149 MB free of 399 MB available \(the floor is 150 MB\) - use a second machine/);
 });
 
 test('MEMORY_FIT: a short run cannot PASS, and a graph still growing is called a floor', () => {
@@ -170,10 +171,12 @@ test('MEMORY_FIT: a short run cannot PASS, and a graph still growing is called a
   assert.match(short.message, /only 5 min were measured/);
   const growing = by(buildChecks(base({ growth: { enough: true, stillGrowing: true, lastThirdGrowthPct: 8.4 } })), 'MEMORY_FIT');
   assert.equal(growing.status, 'PASS');
-  assert.match(growing.message, /still growing at the end: \+8\.4% over the final third, so treat the peak as a floor/);
+  assert.match(growing.message, /still growing at the end: \+8\.4% over the final third, so treat the measured part as a floor/);
+  assert.match(growing.message, /^measured 120 MB \+ 100 MB allowance for parts not modelled = 220 MB; that would leave 380 MB free of 600 MB available/);
   const guarded = by(buildChecks(base({ outcome: { ...base().outcome, endedBy: 'guard', detail: { rule: 'memory-floor', message: 'x' } }, mem: { peakRssMB: 200, availableForVerdictMB: 300, cpu: { percentOfOneCoreMean: 1 } } })), 'MEMORY_FIT');
-  assert.equal(guarded.status, 'FAIL');
+  assert.equal(guarded.status, 'FAIL');                      // 300 - (200 + 100) = 0
   assert.match(guarded.message, /stopped early by the memory-floor guard/);
+  assert.match(guarded.message, /measured 200 MB \+ 100 MB allowance for parts not modelled = 300 MB/);
 });
 
 test('MEMORY_FIT: unknown availability (no /proc) is "could not judge", not a verdict', () => {
@@ -204,4 +207,17 @@ test('--help names the exact command to run, every option, and what the safety c
   assert.match(HELP, /disconnects at once/);
   assert.match(HELP, /04:00 London/);
   assert.match(HELP, /DANGEROUS/);
+});
+
+test('--help puts this code in the map service\'s own checkout, and only READS the crossing back end', () => {
+  // The map service lives in ~/rail-map (a separate worktree); ~/rail-crossing is the live crossing
+  // back end and is never somewhere these scripts are run from.
+  assert.match(HELP, /^ {2}cd ~\/rail-map\/map-service\/phase0$/m);
+  assert.ok(!/rail-crossing\/map-service/.test(HELP), 'no command that cds into the crossing checkout');
+  // Every remaining ~/rail-crossing mention is a DEFAULT that points at the crossing back end.
+  const mentions = HELP.match(/~\/rail-crossing\S*/g) || [];
+  assert.deepEqual(mentions.sort(), ['~/rail-crossing/backend/.env)', '~/rail-crossing/backend/data/logs/td)']);
+  assert.match(HELP, /\(default http:\/\/127\.0\.0\.1:3000\/health\)/);
+  // The test-only flag says exactly where the login may go.
+  assert.match(HELP, /HOST may only be localhost, 127\.0\.0\.1, ::1 or publicdatafeeds\.networkrail\.co\.uk/);
 });

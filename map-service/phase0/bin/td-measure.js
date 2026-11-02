@@ -19,7 +19,7 @@ const { fetchHealth } = require('../lib/health');
 const { StopController, holdTopic } = require('../lib/hold');
 const { TdStats, growthSummary } = require('../lib/td-stats');
 const { ResourceSampler } = require('../lib/sampler');
-const { memoryFit } = require('../lib/memory-fit');
+const { memoryFit, NOT_MODELLED_ALLOWANCE_MB } = require('../lib/memory-fit');
 const { machineFacts } = require('../lib/machine');
 const { overlapsDailyReload, utcStamp } = require('../lib/london');
 const { round1, clock, interlockCheck, afterRunAdvice } = require('../lib/verdicts');
@@ -44,7 +44,7 @@ writes nothing except its report.
 
 Run it exactly like this, so it cannot starve the crossing service of CPU or memory:
 
-  cd ~/rail-crossing/map-service/phase0
+  cd ~/rail-map/map-service/phase0
   nice -n 19 node --max-old-space-size=256 bin/td-measure.js
 
 Options
@@ -61,8 +61,10 @@ Options
   --debug            show technical detail if something goes wrong
   --help             this text
 
-For testing against a fake server (not for real runs):
+For testing against a fake server on this machine (not for real runs):
   --stomp-host HOST  --stomp-port PORT
+                     HOST may only be localhost, 127.0.0.1, ::1 or publicdatafeeds.networkrail.co.uk:
+                     the NROD login is never sent anywhere else.
 
 The safety check: every 15 seconds this reads the crossing service's health check, and it
 disconnects at once, writes the report and exits with an error if the crossing service's own feed
@@ -175,10 +177,10 @@ function tdVolume(r) {
 function memoryCheck(r) {
   const t = r.tdSummary;
   if (!t || t.frames === 0) return { id: 'MEMORY_FIT', status: 'WARN', message: 'not measured: no TD data arrived, so there was no state to size', data: null };
-  const fit = memoryFit({ availableMB: r.mem.availableForVerdictMB, projectedMB: r.mem.peakRssMB, minutes: r.ranMs / 60000 });
+  const fit = memoryFit({ availableMB: r.mem.availableForVerdictMB, peakRssMB: r.mem.peakRssMB, minutes: r.ranMs / 60000 });
   let message = fit.message;
   if (r.growth && r.growth.enough && r.growth.stillGrowing) {
-    message += ` (the berth graph was still growing at the end: +${r.growth.lastThirdGrowthPct}% over the final third, so treat the peak as a floor)`;
+    message += ` (the berth graph was still growing at the end: +${r.growth.lastThirdGrowthPct}% over the final third, so treat the measured part as a floor)`;
   }
   if (r.outcome && r.outcome.endedBy === 'guard') message += ` (the run was stopped early by the ${r.outcome.detail.rule} guard)`;
   return { id: 'MEMORY_FIT', status: fit.status, message, data: { ...fit.data, growth: r.growth } };
@@ -214,6 +216,15 @@ async function run(opts, deps = {}) {
     interlockConfig: undefined, forceExit: code => process.exit(code),
     ...deps
   };
+
+  // FIRST, before the credentials are even read: whichever way run() was reached, the NROD login
+  // must not be able to go to a host nobody intended (the command line already checks this at parse
+  // time; this is the same rule for any other caller).
+  const stompHost = opts.stomp && opts.stomp.host;
+  if (stompHost !== undefined && !stomp.isAllowedStompHost(stompHost)) {
+    d.stderr.write(`${stomp.hostRefusal(stompHost)}\n`);
+    return 2;
+  }
 
   let creds;
   try { creds = feedCredentials(loadEnvFile(opts.envFile), opts.envFile); }
@@ -360,7 +371,7 @@ async function run(opts, deps = {}) {
     report.check(c.id, c.status, c.message, c.data);
   }
   report.note(`This run: ${utcStamp(runStartedAt)} to ${utcStamp(endedAt)} (measured for ${cli.fmtDuration(ranMs)}).`);
-  report.note('Peak RSS is a floor for the map service, not a ceiling: the real service adds its HTTP server, SMART/CORPUS tables and per-client state on top of this state.');
+  report.note(`MEMORY_FIT adds ${NOT_MODELLED_ALLOWANCE_MB} MB to the measured peak RSS for what this script does not model: the timetable index, the SMART/CORPUS/station tables, and the web server and its clients. That figure is a judgement call, not a measurement: replace it with real numbers once those parts exist. The measured part is itself only a floor if the berth graph was still growing.`);
   report.note('"Available memory" used for MEMORY_FIT is the lowest of MemAvailable at the start and (MemAvailable + this process\'s RSS) at every sample: the least room a map service would have had.');
   const journal = cli.journalCheckLines(runStartedAt, endedAt);
   for (const line of journal) report.note(line);

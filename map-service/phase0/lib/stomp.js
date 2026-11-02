@@ -16,6 +16,8 @@
 //     connection on this login costs; holding a third would muddy the answer and double the risk.
 //   * DISCONNECT is sent and awaited (bounded) on finish, so NROD sees us leave rather than
 //     time out.
+//   * The login only ever goes to loopback or the real NROD host (ALLOWED_STOMP_HOSTS below):
+//     the --stomp-host test flag cannot be used to send it anywhere else.
 //   * Credentials never leave this module in an error: stompit attaches the connect options —
 //     login and passcode included — to the errors it raises (`error.connectArgs`), and ERROR
 //     frames echo the login. Both are removed/redacted before anything is thrown or emitted.
@@ -28,6 +30,27 @@ const { EventEmitter } = require('events');
 const { redact, secretsFor } = require('./env');
 
 const NROD = Object.freeze({ host: 'publicdatafeeds.networkrail.co.uk', port: 61618 });
+
+// Where the NROD login may be sent. The scripts' --stomp-host flag exists so they can be pointed at a
+// fake server on this machine for testing; it must never be a way to send the real login to a host
+// nobody intended. EXACT, case-sensitive matches only — "LOCALHOST", "localhost.", "127.0.0.2",
+// "127.0.0.1.evil.com" and anything with a port, a user or brackets are all refused, because the
+// point is that there is no cleverness to get wrong. Enforced three times, because each is a
+// different way in: at the command line (exit 2, before the credentials are read), at the top of each
+// script's run() (any other caller, also before the credentials are read), and in openSession, where
+// the login is actually put on the wire.
+const ALLOWED_STOMP_HOSTS = Object.freeze(['localhost', '127.0.0.1', '::1', NROD.host]);
+
+function isAllowedStompHost(host) {
+  return typeof host === 'string' && ALLOWED_STOMP_HOSTS.includes(host);
+}
+
+/** The refusal, in plain words, for every place that has to say it. */
+function hostRefusal(host) {
+  return `--stomp-host must be localhost, 127.0.0.1, ::1 or ${NROD.host} (you gave "${host}"). `
+    + 'It exists so the scripts can be tested against a fake server on this machine, and the NROD login is never sent anywhere else.';
+}
+
 const CONNECT_TIMEOUT_MS = 30 * 1000;
 const DISCONNECT_TIMEOUT_MS = 5 * 1000;
 const HEARTBEAT = '15000,15000';
@@ -69,6 +92,7 @@ const clip = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
  *         server-error    an ERROR frame that is none of the above — shown verbatim
  *         protocol        a STOMP-level problem
  *         aborted         we gave up on purpose (interlock trip, signal)
+ *         refused         we would not send the login to that host (see ALLOWED_STOMP_HOSTS)
  *         busy            a connection is already open in this process
  *         unknown
  * `serverMessage`/`serverDetail` are NROD's own words, redacted: never over-classify what we
@@ -146,6 +170,7 @@ function explain(info, ctx = {}) {
     case 'aborted':
       return `Stopped before the connection was ready (${said}).`;
     case 'busy':
+    case 'refused':
       return said;
     default:
       return `Unexpected STOMP problem (${said}).`;
@@ -432,6 +457,14 @@ async function openSession(o) {
   const secrets = [...secretsFor(creds), ...(o.secrets || [])];
   const now = o.now || Date.now;
 
+  // The last line of defence for the login: refuse BEFORE anything is opened or reserved.
+  if (!isAllowedStompHost(host)) {
+    throw new StompError({
+      kind: 'refused', phase: 'connect', topic: null, code: null, serverMessage: null, serverDetail: null,
+      message: hostRefusal(host)
+    });
+  }
+
   if (active) {
     throw new StompError({
       kind: 'busy', phase: 'connect', topic: null, code: null, serverMessage: null, serverDetail: null,
@@ -481,6 +514,7 @@ function killActive() {
 function _resetForTest() { active = null; }
 
 module.exports = {
-  NROD, CONNECT_TIMEOUT_MS, DISCONNECT_TIMEOUT_MS, HEARTBEAT,
-  openSession, classifyError, explain, makeClientId, killActive, StompError, StompSession, _resetForTest
+  NROD, ALLOWED_STOMP_HOSTS, CONNECT_TIMEOUT_MS, DISCONNECT_TIMEOUT_MS, HEARTBEAT,
+  openSession, isAllowedStompHost, hostRefusal, classifyError, explain, makeClientId, killActive,
+  StompError, StompSession, _resetForTest
 };

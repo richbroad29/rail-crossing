@@ -279,3 +279,12 @@ test('cli: the journal check names the window, in UTC, with a minute of slack be
   assert.match(lines, /grep -E "TD \(STOMP\|subscribe\|reconnecting\|feed silent\)"/);
   assert.match(lines, /No output means/);
 });
+
+test('cli: the journal command Rich is told to run starts with sudo (reading the journal needs it)', () => {
+  const lines = cli.journalCheckLines(Date.parse('2026-11-02T10:15:00Z'), Date.parse('2026-11-02T11:15:20Z'));
+  const commands = lines.filter(l => /journalctl/.test(l));
+  assert.equal(commands.length, 1, 'exactly one command is printed');
+  assert.match(commands[0], /^ {2}sudo journalctl -u rail-crossing --since "/);
+  // Prose that mentions the journal must not look like a second, un-sudo'd command.
+  for (const l of lines.filter(l => !/journalctl/.test(l))) assert.ok(!/^\s*journalctl\b/.test(l), l);
+});

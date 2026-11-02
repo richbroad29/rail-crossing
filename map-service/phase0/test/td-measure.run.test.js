@@ -86,7 +86,7 @@ test('a clean run: planted frames counted exactly, report written, no secret any
   assert.match(text, /fact\s+eventsPerSecMean = /);
   assert.match(text, /fact\s+peakRssMB = /);
   assert.match(text, /fact\s+memAvailableMB = /);
-  assert.match(text, /journalctl -u rail-crossing --since/);
+  assert.match(text, /^ {2}sudo journalctl -u rail-crossing --since/m);
   assert.deepEqual(fs.readdirSync(r.opts.outDir).filter(f => /^td-measure-.*\.(json|txt)$/.test(f)).length, 2);
 
   noSecrets(text);

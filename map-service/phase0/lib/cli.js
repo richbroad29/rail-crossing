@@ -12,6 +12,7 @@ const fs = require('fs');
 const path = require('path');
 const { expandHome, redact } = require('./env');
 const { utcClock } = require('./london');
+const { isAllowedStompHost, hostRefusal } = require('./stomp');
 
 const PHASE0_DIR = path.resolve(__dirname, '..');
 
@@ -29,7 +30,8 @@ class UsageError extends Error {
 }
 
 // Options both scripts take. --stomp-host/--stomp-port exist so the scripts can be run against a
-// fake server; they are listed under "for testing" in --help and default to NROD.
+// fake server on this machine; they are listed under "for testing" in --help and default to NROD.
+// --stomp-host is restricted to loopback or the real NROD host (see resolveCommon).
 const COMMON_OPTIONS = Object.freeze({
   env: { type: 'string' },
   'health-url': { type: 'string' },
@@ -77,6 +79,11 @@ function webAddress(name, text) {
 
 /** The paths and switches both scripts share, resolved and validated. */
 function resolveCommon(values) {
+  // The NROD login goes to whatever host this names, so it is checked first and strictly (see
+  // ALLOWED_STOMP_HOSTS in lib/stomp.js). This runs at parse time, before run() reads any credentials.
+  // An empty string is "anything else" too, not "use the default".
+  const stompHost = values['stomp-host'];
+  if (stompHost !== undefined && !isAllowedStompHost(stompHost)) throw new UsageError(hostRefusal(stompHost));
   const port = intOption('stomp-port', values['stomp-port'], { min: 1, max: 65535, def: undefined });
   return {
     envFile: expandHome(values.env || DEFAULTS.env),
@@ -84,7 +91,7 @@ function resolveCommon(values) {
     tdLogDir: expandHome(values['td-log-dir'] || DEFAULTS.tdLogDir),
     outDir: values.out ? path.resolve(expandHome(values.out)) : DEFAULTS.out,
     interlock: !values['no-interlock'],
-    stomp: { host: values['stomp-host'] || undefined, port },
+    stomp: { host: stompHost, port },
     debug: !!values.debug
   };
 }

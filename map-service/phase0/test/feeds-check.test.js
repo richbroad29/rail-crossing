@@ -182,6 +182,17 @@ test('--help lists every option the brief names, the verdicts, and the exact com
   assert.match(HELP, /AFTER switching the TRUST and VSTP feeds on/);
 });
 
+test('--help puts this code in the map service\'s own checkout, and only READS the crossing back end', () => {
+  // The map service lives in ~/rail-map (a separate worktree); ~/rail-crossing is the live crossing
+  // back end and is never somewhere these scripts are run from.
+  assert.match(HELP, /^ {2}cd ~\/rail-map\/map-service\/phase0$/m);
+  assert.ok(!/rail-crossing\/map-service/.test(HELP), 'no command that cds into the crossing checkout');
+  const mentions = HELP.match(/~\/rail-crossing\S*/g) || [];
+  assert.deepEqual(mentions.sort(), ['~/rail-crossing/backend/.env)', '~/rail-crossing/backend/data/logs/td)']);
+  assert.match(HELP, /\(default http:\/\/127\.0\.0\.1:3000\/health\)/);
+  assert.match(HELP, /HOST may only be localhost, 127\.0\.0\.1, ::1 or publicdatafeeds\.networkrail\.co\.uk/);
+});
+
 // ---- end to end ------------------------------------------------------------------------------------------------
 
 test('both feeds deliver: two connections, one after the other, each non-durable, each left cleanly', async () => {
@@ -231,7 +242,7 @@ test('both feeds deliver: two connections, one after the other, each non-durable
   assert.match(text, /===== feeds-check .* paste from here =====/);
   assert.match(text, /PASS\s+TRUST_FEED\s+subscribed, and 2 messages arrived/);
   assert.match(text, /fact\s+trustMessages = 2/);
-  assert.match(text, /journalctl -u rail-crossing --since/);
+  assert.match(text, /^ {2}sudo journalctl -u rail-crossing --since/m);
   noSecrets(text);
   noSecrets(r.filesText());
 });

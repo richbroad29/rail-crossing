@@ -1,78 +1,130 @@
 'use strict';
 
-// MEMORY_FIT thresholds, on and either side of each boundary, and the machine-facts reader.
+// MEMORY_FIT: the thresholds, the allowance for parts not modelled, and the machine-facts reader.
+// reserve = available - (measured + allowance), so every boundary below is stated in terms of the
+// MEASURED peak, with the allowance's 100 MB worked into the arithmetic in the comments.
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { memoryFit, PASS_RESERVE_MB, WARN_RESERVE_MB, MIN_MINUTES_FOR_VERDICT } = require('../lib/memory-fit');
+const { memoryFit, PASS_RESERVE_MB, WARN_RESERVE_MB, NOT_MODELLED_ALLOWANCE_MB, MIN_MINUTES_FOR_VERDICT } = require('../lib/memory-fit');
 const { parseMeminfo, parseHealthMemoryMB, machineFacts, osName } = require('../lib/machine');
 
-const fit = (availableMB, projectedMB, minutes = 60) => memoryFit({ availableMB, projectedMB, minutes });
+const fit = (availableMB, peakRssMB, minutes = 60) => memoryFit({ availableMB, peakRssMB, minutes });
 
-test('the thresholds are 300 and 150 MB of reserve', () => {
+test('the thresholds are 300 and 150 MB of reserve; the allowance for parts not modelled is 100 MB', () => {
   assert.equal(PASS_RESERVE_MB, 300);
   assert.equal(WARN_RESERVE_MB, 150);
+  assert.equal(NOT_MODELLED_ALLOWANCE_MB, 100);
 });
 
-test('PASS needs MemAvailable - projected >= 300 MB: exactly 300 passes, a hair under does not', () => {
-  assert.equal(fit(450, 150).status, 'PASS');
-  assert.equal(fit(450, 150.1).status, 'WARN');
-  assert.equal(fit(500, 100).status, 'PASS');
-  assert.equal(fit(300, 0).status, 'PASS');
+test('PASS needs MemAvailable - (measured + 100) >= 300 MB: exactly 300 passes, a hair under does not', () => {
+  assert.equal(fit(450, 50).status, 'PASS');       // 450 - 150 = 300
+  assert.equal(fit(450, 50.1).status, 'WARN');     // 299.9
+  assert.equal(fit(550, 150).status, 'PASS');      // 550 - 250 = 300
+  assert.equal(fit(549.9, 150).status, 'WARN');    // 299.9
+  assert.equal(fit(400, 0).status, 'PASS');        // 400 - 100 = 300
+  assert.equal(fit(399.9, 0).status, 'WARN');      // 299.9
+  assert.equal(fit(1000, 300).status, 'PASS');     // 1000 - 400 = 600
 });
 
 test('WARN is >= 150 MB (and under 300): exactly 150 is WARN, a hair under is FAIL', () => {
-  assert.equal(fit(300, 150).status, 'WARN');
-  assert.equal(fit(300, 150.1).status, 'FAIL');
-  assert.equal(fit(449.9, 150).status, 'WARN');
+  assert.equal(fit(400, 150).status, 'WARN');      // 400 - 250 = 150
+  assert.equal(fit(400, 150.1).status, 'FAIL');    // 149.9
+  assert.equal(fit(250, 0).status, 'WARN');        // 250 - 100 = 150
+  assert.equal(fit(249.9, 0).status, 'FAIL');      // 149.9
+  assert.equal(fit(549.9, 150).status, 'WARN');    // 299.9: the top of the WARN band
+});
+
+test('the allowance is part of the projection: a pair that fitted on the measurement alone can fail with it', () => {
+  // Measurement alone: 450 - 150 = 300 left (PASS). With 100 MB allowed for what is not modelled: 200 (WARN).
+  const warn = fit(450, 150);
+  assert.equal(warn.status, 'WARN');
+  assert.equal(warn.reserveMB, 200);
+  assert.equal(warn.data.measuredMB, 150);
+  assert.equal(warn.data.allowanceMB, 100);
+  assert.equal(warn.data.projectedMB, 250);
+  // Measurement alone: 350 - 150 = 200 left (WARN). With the allowance: 100 (FAIL).
+  assert.equal(fit(350, 150).status, 'FAIL');
 });
 
 test('FAIL means use a second machine, and a negative reserve is FAIL not an error', () => {
-  const r = fit(200, 250);
+  const r = fit(200, 250);                         // projected 350 -> reserve -150
   assert.equal(r.status, 'FAIL');
-  assert.equal(r.reserveMB, -50);
+  assert.equal(r.reserveMB, -150);
   assert.match(r.message, /use a second machine/);
-  assert.match(r.message, /only|leave -50 MB/);
+  assert.match(r.message, /that would leave -150 MB free of 200 MB available/);
 });
 
-test('messages carry the figures, and a 299.96 MB reserve is never shown as "300"', () => {
-  const pass = fit(512, 120);
-  assert.match(pass.message, /about 120 MB would leave 392 MB free of 512 MB available/);
-  assert.match(pass.message, /fits next to the crossing service/);
-  const edge = fit(449.96, 150);
+test('every message shows both parts: "measured X MB + 100 MB allowance for parts not modelled = Y MB"', () => {
+  // The worked example: 70 measured + 100 allowance = 170 projected, leaving 470 - 170 = 300.
+  assert.equal(fit(470, 70).message,
+    'measured 70 MB + 100 MB allowance for parts not modelled = 170 MB; that would leave 300 MB free of 470 MB available (need 300): it fits next to the crossing service');
+  assert.equal(fit(400, 70).message,
+    'measured 70 MB + 100 MB allowance for parts not modelled = 170 MB; that would leave 230 MB free of 400 MB available (comfortable is 300 MB): it fits, but tightly - check the crossing service\'s memory at its 04:00 reload before deciding');
+  assert.equal(fit(300, 70).message,
+    'measured 70 MB + 100 MB allowance for parts not modelled = 170 MB; that would leave 130 MB free of 300 MB available (the floor is 150 MB) - use a second machine for the map service');
+  assert.equal(fit(800, 70, 1).message,
+    'measured 70 MB + 100 MB allowance for parts not modelled = 170 MB; that would leave 630 MB free of 800 MB available - but only 1 min were measured and the state is still filling; run at least 15 (default 60) before trusting this');
+  // A measured figure with a decimal carries it through to the sum.
+  assert.match(fit(512, 69.1).message, /^measured 69\.1 MB \+ 100 MB allowance for parts not modelled = 169\.1 MB; that would leave 342\.9 MB free of 512 MB available/);
+});
+
+test('a 299.96 MB reserve is never shown as "300" beside a WARN', () => {
+  const edge = fit(549.96, 150);                   // 549.96 - 250 = 299.96
   assert.equal(edge.status, 'WARN');
   assert.equal(edge.reserveMB, 299.9, 'floored');
-  assert.match(edge.message, /299\.9 MB/);
+  assert.match(edge.message, /would leave 299\.9 MB/);
+});
+
+test('the displayed reserve is exact for every one-decimal input (binary floating point must not shave 0.1 MB off)', () => {
+  // 512 - (69.1 + 100) is 342.89999999999998 in binary; a bare Math.floor(x * 10) / 10 shows 342.8.
+  // About a quarter of one-decimal inputs were wrong that way before the epsilon.
+  let checked = 0;
+  for (let availT = 2000; availT <= 2400; availT++) {
+    for (let peakT = 100; peakT <= 700; peakT += 7) {
+      const r = fit(availT / 10, peakT / 10);
+      const exactTenths = availT - peakT - 1000;
+      assert.equal(r.reserveMB, exactTenths / 10, `available ${availT / 10}, measured ${peakT / 10}`);
+      checked++;
+    }
+  }
+  assert.ok(checked > 30000);
 });
 
 test('a WARN tells the reader what to check next (the 04:00 reload)', () => {
-  assert.match(fit(400, 150).message, /04:00 reload/);
+  assert.match(fit(500, 150).message, /04:00 reload/);      // 500 - 250 = 250
 });
 
 test('a short run cannot PASS: the state is still filling, so the projection is not evidence', () => {
   assert.equal(MIN_MINUTES_FOR_VERDICT, 15);
-  const short = fit(800, 100, 1);
+  const short = fit(800, 100, 1);                           // 800 - 200 = 600: would pass on size
   assert.equal(short.status, 'WARN');
   assert.match(short.message, /only 1 min were measured/);
   assert.equal(fit(800, 100, 14.9).status, 'WARN');
   assert.equal(fit(800, 100, 15).status, 'PASS');
-  // ...but a short run cannot talk its way OUT of a FAIL: projected can only grow.
-  assert.equal(fit(200, 100, 1).status, 'FAIL');
-  assert.equal(fit(300, 100, 1).status, 'WARN');
+  // ...but a short run cannot talk its way OUT of a FAIL: the measured part can only grow.
+  assert.equal(fit(300, 100, 1).status, 'FAIL');            // 300 - 200 = 100
+  assert.equal(fit(450, 100, 1).status, 'WARN');            // 450 - 200 = 250: the tight WARN, not the short-run one
+  assert.match(fit(450, 100, 1).message, /fits, but tightly/);
 });
 
 test('unknown inputs are "could not judge" (WARN), never a crash and never a PASS', () => {
-  for (const args of [{ availableMB: null, projectedMB: 100 }, { availableMB: 500, projectedMB: null }, { availableMB: NaN, projectedMB: 1 }, {}, undefined]) {
+  for (const args of [{ availableMB: null, peakRssMB: 100 }, { availableMB: 500, peakRssMB: null }, { availableMB: NaN, peakRssMB: 1 }, {}, undefined]) {
     const r = memoryFit(args);
     assert.equal(r.status, 'WARN');
     assert.equal(r.reserveMB, null);
     assert.match(r.message, /could not judge/);
   }
+  // The allowance is reported even when nothing could be judged.
+  assert.equal(memoryFit({}).data.allowanceMB, 100);
 });
 
-test('the data block records everything the verdict was computed from', () => {
-  const r = fit(512.04, 120.06, 60);
-  assert.deepEqual(r.data, { availableMB: 512, projectedMB: 120.1, minutes: 60, passReserveMB: 300, warnReserveMB: 150, reserveMB: 391.9 });
+test('the data block records everything the verdict was computed from, allowance included', () => {
+  const r = fit(512.04, 20.06, 60);                         // projected 120.06 -> reserve 391.98 -> 391.9
+  assert.deepEqual(r.data, {
+    availableMB: 512, measuredMB: 20.1, allowanceMB: 100, projectedMB: 120.1, minutes: 60,
+    passReserveMB: 300, warnReserveMB: 150, reserveMB: 391.9
+  });
 });
 
 // ---- machine facts --------------------------------------------------------------------------------

@@ -41,7 +41,7 @@ For each it reports whether the subscription was accepted, whether messages arri
 each type, and how many carry the fields the map plans to use. It only listens, and it writes
 nothing except its report.
 
-  cd ~/rail-crossing/map-service/phase0
+  cd ~/rail-map/map-service/phase0
   nice -n 19 node bin/feeds-check.js
 
 Options
@@ -60,8 +60,10 @@ Options
   --debug            show technical detail if something goes wrong
   --help             this text
 
-For testing against a fake server (not for real runs):
+For testing against a fake server on this machine (not for real runs):
   --stomp-host HOST  --stomp-port PORT
+                     HOST may only be localhost, 127.0.0.1, ::1 or publicdatafeeds.networkrail.co.uk:
+                     the NROD login is never sent anywhere else.
 
 What the verdicts mean
   PASS  subscribed, and messages arrived
@@ -197,6 +199,15 @@ async function run(opts, deps = {}) {
     settleMs: 3000, windowsMs: {}, interlockConfig: undefined, forceExit: code => process.exit(code),
     ...deps
   };
+
+  // FIRST, before the credentials are even read: whichever way run() was reached, the NROD login
+  // must not be able to go to a host nobody intended (the command line already checks this at parse
+  // time; this is the same rule for any other caller).
+  const stompHost = opts.stomp && opts.stomp.host;
+  if (stompHost !== undefined && !stomp.isAllowedStompHost(stompHost)) {
+    d.stderr.write(`${stomp.hostRefusal(stompHost)}\n`);
+    return 2;
+  }
 
   let creds;
   try { creds = feedCredentials(loadEnvFile(opts.envFile), opts.envFile); }
