@@ -97,6 +97,9 @@ Best started on a weekday between 16:00 and 17:00, so the hour covers the evenin
 
 When it finishes it prints a `td-measure` block. **Copy it back.**
 
+A `MEMORY_FIT` of WARN or FAIL is not an error. It is the answer to "does a map service fit next to
+the crossing service on this machine?": FAIL means the map gets its own (free) machine.
+
 **If it says `INTERLOCK TRIPPED`:** it has already disconnected. Do **not** restart anything. The
 crossing service reconnects by itself within about 5 minutes. Run the `curl` command it prints, then
 copy everything it printed back to Claude.
