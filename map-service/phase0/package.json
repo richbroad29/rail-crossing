@@ -1,0 +1,17 @@
+{
+  "name": "rail-map-phase0",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Phase 0 data checks for the live train map: SMART, TD volume, second connection, TRUST and VSTP",
+  "license": "UNLICENSED",
+  "engines": { "node": ">=20.0.0" },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "smart-check": "node bin/smart-check.js",
+    "td-measure": "node bin/td-measure.js",
+    "feeds-check": "node bin/feeds-check.js"
+  },
+  "dependencies": {
+    "stompit": "1.0.0"
+  }
+}
