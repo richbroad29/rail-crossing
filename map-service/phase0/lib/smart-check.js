@@ -77,7 +77,7 @@ Usage: node bin/smart-check.js [options]
   -h, --help           this text
 
 On the VPS:
-  cd ~/rail-crossing/map-service/phase0
+  cd ~/rail-map/map-service/phase0
   nice -n 19 node --max-old-space-size=256 bin/smart-check.js
 
 It prints a block between "paste from here" and "end smart-check": copy that block back.
@@ -260,6 +260,11 @@ async function runChecks(ctx) {
         report.fact('semantics.oursExactPct', res.pct.oursExact, { summary: true });
         report.fact('semantics.oursAdjacentPct', res.pct.oursAdjacent, { summary: true });
         report.fact('semantics.reversedExactPct', res.pct.reversedExact, { summary: true });
+        // by row, beside the group-level shares: the group test is existential, so lenient at big multi-platform stations
+        report.fact('semantics.rowOursArrivalPct', res.rowLevel.pct.oursArrival, { summary: true });
+        report.fact('semantics.rowOursDeparturePct', res.rowLevel.pct.oursDeparture, { summary: true });
+        report.fact('semantics.rowReversedArrivalPct', res.rowLevel.pct.reversedArrival, { summary: true });
+        report.fact('semantics.rowReversedDeparturePct', res.rowLevel.pct.reversedDeparture, { summary: true });
       }
     }
   }

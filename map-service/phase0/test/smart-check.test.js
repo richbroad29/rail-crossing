@@ -75,6 +75,13 @@ test('the synthetic fixtures give the planted answer in every check, in order, w
   assert.equal(c.SMART_SEMANTICS.data.pct.oursExact, 85.7);
   assert.equal(c.SMART_SEMANTICS.data.pct.oursAdjacent, 7.1);
   assert.equal(c.SMART_SEMANTICS.data.pct.reversedExact, 0);
+  // every testable group here has exactly one arrival row and one departure row, so by row it is the same
+  // 12 of 14 (85.7%) each way; Hove's split platform and Brighton's mismatch are the two that do not match
+  assert.deepEqual(c.SMART_SEMANTICS.data.rowLevel, {
+    arrivalRows: 14, departureRows: 14,
+    ours: { arrivalMatched: 12, departureMatched: 12 }, reversed: { arrivalMatched: 0, departureMatched: 0 },
+    pct: { oursArrival: 85.7, oursDeparture: 85.7, reversedArrival: 0, reversedDeparture: 0 }
+  });
 
   // 10 STANOX: 9 stations, 8 with coordinates; the ninth (NOWHERE, CRS ZZZ) is the one unresolved
   assert.equal(c.STATION_RESOLUTION.data.stanoxes, 10);
@@ -84,7 +91,9 @@ test('the synthetic fixtures give the planted answer in every check, in order, w
 
   assert.equal(c.PORTSLADE_KNOWN_ANSWER.data.stations.PLD.rows, 4);
   assert.deepEqual(c.PORTSLADE_KNOWN_ANSWER.data.stations.PLD.berths, ['0001', '0002', '0003', '0004', '0005', '0006']);
-  assert.equal(c.PORTSLADE_KNOWN_ANSWER.data.southwick.ok, true);
+  assert.equal(c.PORTSLADE_KNOWN_ANSWER.data.southwick.outcome, 'confirmed');
+  assert.deepEqual(c.PORTSLADE_KNOWN_ANSWER.data.southwick.arrivalTo, ['0006', '0007'], 'Southwick: the up arrival ends at 0006, the down one at 0007');
+  assert.match(c.PORTSLADE_KNOWN_ANSWER.message, /Southwick \(SWK\) arrives into berth 0006 as expected\.$/);
   assert.equal(c.PORTSLADE_KNOWN_ANSWER.data.stations.PLD.rowsDetail, undefined, 'raw rows go in the notes, not the JSON data');
 
   // 15 anchors in 3 areas, 16 hints, one conflict (Shoreham 2 claims vs Edinburgh 1) 600 km apart
@@ -114,7 +123,8 @@ test('the paste-back block has the verdicts and the key facts, and every message
   assert.match(block, /===== smart-check · 2026-11-02T10:15:00\.000Z · paste from here =====/);
   for (const id of ORDER) assert.match(block, new RegExp(`(PASS|WARN|FAIL|INFO)\\s+${id}\\s+\\S`), id);
   for (const key of ['smart.rows = 31', 'smart.tdAreas = 3', 'anchors.berths = 15', 'semantics.oursExactPct = 85.7', 'semantics.oursAdjacentPct = 7.1',
-    'semantics.reversedExactPct = 0', 'la.berthsSeen = 17', 'la.anchoredPct = 52.9', 'la.within1Pct = 88.2', 'la.within2Pct = 88.2', 'la.within3Pct = 88.2']) {
+    'semantics.reversedExactPct = 0', 'semantics.rowOursArrivalPct = 85.7', 'semantics.rowOursDeparturePct = 85.7',
+    'semantics.rowReversedArrivalPct = 0', 'semantics.rowReversedDeparturePct = 0', 'la.berthsSeen = 17', 'la.anchoredPct = 52.9', 'la.within1Pct = 88.2', 'la.within2Pct = 88.2', 'la.within3Pct = 88.2']) {
     assert.ok(block.includes(`fact  ${key}`), key);
   }
   assert.match(block, /fact {2}heap\.peakUsedMB = [\d.]+/);
@@ -123,6 +133,7 @@ test('the paste-back block has the verdicts and the key facts, and every message
     assert.ok(!/[\r\n]/.test(ch.message), `${ch.id} message has a newline`);
     assert.ok(ch.message.length < 420, `${ch.id} message is ${ch.message.length} characters`);
   }
+  assert.match(r.report.checks.find(c => c.id === 'SMART_SEMANTICS').message, /By row: 85\.7% of arrival rows end where some departure starts, and 85\.7% of departure rows start where some arrival ends \(reversed reading: 0% and 0%\)\.$/);
   assert.match(r.stdout, /Full report: .*smart-check-.*\.txt/);
   assert.match(r.stdout, /Anchor table \(for phase 1\): .*smart-anchors-.*\.json/);
 });
@@ -191,6 +202,25 @@ test('--help prints the usage and exits 0; unknown options and bad values exit 2
     assert.equal(r.stdout, '');
   }
   assert.match((await run(['--td-days', '0'], {}, { base: false })).stderr, /--td-days must be a whole number of days from 1 to 366\./);
+});
+
+test('the HELP puts this code at ~/rail-map on the VPS, while the defaults still read the crossing back end under ~/rail-crossing', async () => {
+  const help = await run(['--help'], {}, { base: false });
+  // the map service is its own worktree; ~/rail-crossing is the live crossing checkout and is never a place to run it from
+  assert.match(help.stdout, /\n {2}cd ~\/rail-map\/map-service\/phase0\n {2}nice -n 19 node --max-old-space-size=256 bin\/smart-check\.js\n/);
+  assert.ok(!/rail-crossing\/map-service/.test(help.stdout));
+  // the files of the crossing back end are read where they are
+  assert.match(help.stdout, /\(default ~\/rail-crossing\/backend\/\.env\)/);
+  assert.match(help.stdout, /\(default ~\/rail-crossing\/backend\/data\/corpus\/corpus-latest\.json\.gz;/);
+  assert.match(help.stdout, /TD logs \(default ~\/rail-crossing\/backend\/data\/logs\/td\)/);
+});
+
+test('no source file in the map service points at ~/rail-crossing/map-service: that checkout is the live crossing back end', () => {
+  const root = path.join(__dirname, '..', '..');
+  const folders = [path.join(root, 'phase0', 'lib'), path.join(root, 'phase0', 'bin'), path.join(root, 'scripts')];
+  const files = folders.flatMap(dir => fs.readdirSync(dir).filter(f => f.endsWith('.js')).map(f => path.join(dir, f)));
+  assert.ok(files.length > 15, 'the scan really covers the code');
+  for (const file of files) assert.ok(!/rail-crossing\/map-service/.test(fs.readFileSync(file, 'utf8')), `${path.relative(root, file)} mentions rail-crossing/map-service`);
 });
 
 test('as a real process: --help is 0, a bad flag is 2', () => {
@@ -283,6 +313,46 @@ test('SMART_FORMAT can WARN (a different wrapper) and the analyses still run on 
   assert.equal(c.SMART_SEMANTICS.status, 'PASS');
   assert.equal(c.ANCHORS.data.totals.anchors, 15);
   assert.equal(r.code, 0, 'a WARN does not fail the run');
+});
+
+// Southwick (STANOX 90102) in the fixture: up arrival 0008>0006, up departure 0006>0004, down arrival 0005>0007,
+// down departure 0007>(blank). Portslade's rows are untouched in all three runs below.
+const fixtureRows = () => JSON.parse(fs.readFileSync(SMART, 'utf8')).BERTHDATA;
+const smartFileOf = rows => writeText(tmpdir(), 'smart.json', JSON.stringify({ BERTHDATA: rows }));
+
+test('Southwick CASE 2 end to end: arrivals that end elsewhere make PORTSLADE_KNOWN_ANSWER a WARN naming the berths, and a WARN does not fail the run', async () => {
+  const rows = fixtureRows().map(x => (x.STANOX === '90102' && x.EVENT === 'A' ? { ...x, TOBERTH: '0004' } : x));
+  const r = await run(['--smart-file', smartFileOf(rows)]);
+  const c = checkMap(r);
+  assert.equal(c.PORTSLADE_KNOWN_ANSWER.status, 'WARN');
+  assert.equal(c.PORTSLADE_KNOWN_ANSWER.message,
+    'Portslade (PLD) has 4 SMART rows in LA, and every berth they mention is on the known chains (0001, 0002, 0003, 0004, 0005, 0006). '
+    + 'Southwick (SWK) is known to sit in berth 0006, but none of its 2 arrival rows in LA ends there (arrivals end at 0004, 0007; departures leave from 0006, 0007).');
+  assert.equal(c.PORTSLADE_KNOWN_ANSWER.data.southwick.outcome, 'contradicted');
+  assert.match(r.text, /Southwick: expected berth 0006\. Rows in LA: 4 \(2 arrival, 2 departure\); arrivals end at 0004, 0007; departures leave from 0006, 0007\. Result: CONTRADICTED/);
+  assert.equal(r.code, 0, 'a WARN never fails the run');
+});
+
+test('Southwick CASE 3 end to end: no Southwick rows in SMART leaves PORTSLADE_KNOWN_ANSWER a PASS and says so plainly', async () => {
+  const r = await run(['--smart-file', smartFileOf(fixtureRows().filter(x => x.STANOX !== '90102'))]);
+  const c = checkMap(r);
+  assert.equal(c.PORTSLADE_KNOWN_ANSWER.status, 'PASS');
+  assert.match(c.PORTSLADE_KNOWN_ANSWER.message, /Southwick \(SWK\) has no SMART rows in area LA, so berth 0006 could not be checked \(it may simply have none\)\.$/);
+  assert.equal(c.PORTSLADE_KNOWN_ANSWER.data.southwick.outcome, 'absent');
+  assert.equal(r.code, 0);
+});
+
+test('Southwick CASE 1 with the directions the other way round: it is the arrival that counts, not which of A and C it is', async () => {
+  // Swap which direction ends at 0006: the down arrival (C) now ends there and the up arrival (A) ends at 0007.
+  const rows = fixtureRows().map(x => {
+    if (x.STANOX !== '90102') return x;
+    if (x.EVENT === 'A') return { ...x, TOBERTH: '0007' };
+    if (x.EVENT === 'C') return { ...x, TOBERTH: '0006' };
+    return x;
+  });
+  const r = await run(['--smart-file', smartFileOf(rows)]);
+  assert.equal(checkMap(r).PORTSLADE_KNOWN_ANSWER.status, 'PASS');
+  assert.equal(checkMap(r).PORTSLADE_KNOWN_ANSWER.data.southwick.outcome, 'confirmed');
 });
 
 test('a version key ahead of the data does not stop the wrapper being recognised, and the keys seen are in the message', async () => {

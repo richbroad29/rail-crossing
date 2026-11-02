@@ -15,6 +15,13 @@ function semanticsNotes(r) {
     `  reversed reading (arrival FROMBERTH = departure TOBERTH): exact ${fmtInt(r.reversed.exact)} (${p.reversedExact}%), one step apart ${fmtInt(r.reversed.adjacent)} (${p.reversedAdjacent}%), neither ${fmtInt(r.reversed.none)} (${p.reversedNone}%)`,
     `  ours/reversed, group counts: ${JSON.stringify(r.cross)}`
   ];
+  const rl = r.rowLevel;
+  if (rl) {
+    // The group test is "some arrival, some departure", which is lenient at a big multi-platform station; this counts every row.
+    lines.push(`  by row, within those ${fmtInt(r.groups)} groups (${fmtInt(rl.arrivalRows)} arrival rows, ${fmtInt(rl.departureRows)} departure rows; exact berth match inside the group, no one-step tolerance):`,
+      `    our reading: ${fmtInt(rl.ours.arrivalMatched)} arrival rows end at a berth some departure leaves from (${rl.pct.oursArrival}%); ${fmtInt(rl.ours.departureMatched)} departure rows leave from a berth some arrival ends at (${rl.pct.oursDeparture}%)`,
+      `    reversed reading: ${fmtInt(rl.reversed.arrivalMatched)} arrival rows start at a berth some departure ends at (${rl.pct.reversedArrival}%); ${fmtInt(rl.reversed.departureMatched)} departure rows end at a berth some arrival starts from (${rl.pct.reversedDeparture}%)`);
+  }
   for (const d of ['up', 'down']) {
     const b = r.byDirection[d];
     lines.push(`  ${d} (${d === 'up' ? 'A/B' : 'C/D'}): ${fmtInt(b.groups)} groups; ours exact ${fmtInt(b.ours.exact)}, adjacent ${fmtInt(b.ours.adjacent)}, neither ${fmtInt(b.ours.none)}; reversed exact ${fmtInt(b.reversed.exact)}`);

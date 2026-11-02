@@ -19,8 +19,16 @@ const { fmtInt, fmtPct, pct, listCap, isAre } = require('./format');
 const SEP = '\u0001';                                   // cannot occur in a berth, area or STANOX
 const stepKey = (td, a, b) => td + SEP + a + SEP + b;
 
-function addDistinct(list, value) {
-  if (value && !list.includes(value)) list.push(value);
+/** Count one more row at `berth`. A blank berth is not counted, so it can never match anything. */
+function bump(counts, berth) {
+  if (berth) counts.set(berth, (counts.get(berth) || 0) + 1);
+}
+
+/** The rows of X (berth -> row count) whose berth also occurs in Y: the sum of X's counts over the shared berths. */
+function rowsMatched(X, Y) {
+  let n = 0;
+  for (const [berth, count] of X) if (Y.has(berth)) n += count;
+  return n;
 }
 
 // ---- SMART_SEMANTICS --------------------------------------------------------------------------------
@@ -37,8 +45,21 @@ function addDistinct(list, value) {
  * apart: some row in the same area steps from one to the other, in either direction), else 'none'.
  * `adjacent` therefore means "not exact, but a platform that spans two berths would look like this".
  *
+ * The group-level test is existential ("SOME arrival, SOME departure"), which is lenient at a large
+ * multi-platform station: one shared berth passes the whole group however many other rows disagree. So the
+ * same groups are also counted ROW BY ROW (`rowLevel`), exact berth equality only, within the same group:
+ *
+ *   ours      arrival rows whose TOBERTH is the FROMBERTH of some departure row;
+ *             departure rows whose FROMBERTH is the TOBERTH of some arrival row
+ *   reversed  arrival rows whose FROMBERTH is the TOBERTH of some departure row;
+ *             departure rows whose TOBERTH is the FROMBERTH of some arrival row
+ *
+ * each as a share of the arrival (or departure) rows of the groups that have both kinds. Rows of a group
+ * with only arrivals, or only departures, are not in the denominators: they could not match whatever the
+ * reading, so they would only dilute the share.
+ *
  * Berths that are blank on a row (an interpose has no FROMBERTH, a clear has no TOBERTH) are ignored,
- * not matched against each other.
+ * not matched against each other; such a row still counts in its denominator.
  */
 function analyseSemantics(rows) {
   const steps = new Set();
@@ -53,19 +74,21 @@ function analyseSemantics(rows) {
     const key = r.td + SEP + r.stanox + SEP + cls.dir;
     let g = groups.get(key);
     if (!g) {
-      g = { td: r.td, dir: cls.dir, arrivals: 0, departures: 0, arrTo: [], arrFrom: [], depFrom: [], depTo: [] };
+      // berth -> number of rows, per side; arrivals / departures count every row, blank berths included
+      g = { td: r.td, dir: cls.dir, arrivals: 0, departures: 0, arrTo: new Map(), arrFrom: new Map(), depFrom: new Map(), depTo: new Map() };
       groups.set(key, g);
     }
-    if (cls.kind === 'arrival') { g.arrivals++; addDistinct(g.arrTo, r.to); addDistinct(g.arrFrom, r.from); }
-    else { g.departures++; addDistinct(g.depFrom, r.from); addDistinct(g.depTo, r.to); }
+    if (cls.kind === 'arrival') { g.arrivals++; bump(g.arrTo, r.to); bump(g.arrFrom, r.from); }
+    else { g.departures++; bump(g.depFrom, r.from); bump(g.depTo, r.to); }
   }
 
   const compare = (td, A, D) => {
-    for (const a of A) if (D.includes(a)) return 'exact';
-    for (const a of A) for (const d of D) if (steps.has(stepKey(td, a, d)) || steps.has(stepKey(td, d, a))) return 'adjacent';
+    for (const a of A.keys()) if (D.has(a)) return 'exact';
+    for (const a of A.keys()) for (const d of D.keys()) if (steps.has(stepKey(td, a, d)) || steps.has(stepKey(td, d, a))) return 'adjacent';
     return 'none';
   };
   const tally = () => ({ exact: 0, adjacent: 0, none: 0 });
+  const rowLevel = { arrivalRows: 0, departureRows: 0, ours: { arrivalMatched: 0, departureMatched: 0 }, reversed: { arrivalMatched: 0, departureMatched: 0 } };
   const result = {
     groupsTotal: groups.size, groups: 0, arrivalOnly: 0, departureOnly: 0, withoutBerthData: 0,
     ours: tally(), reversed: tally(), cross: {}, byDirection: { up: null, down: null }, byAreaAll: new Map(), ignored
@@ -81,7 +104,13 @@ function analyseSemantics(rows) {
     result.ours[ours]++;
     result.reversed[reversed]++;
     result.cross[`${ours}/${reversed}`] = (result.cross[`${ours}/${reversed}`] || 0) + 1;
-    if (!g.arrTo.length || !g.depFrom.length) result.withoutBerthData++;
+    if (!g.arrTo.size || !g.depFrom.size) result.withoutBerthData++;
+    rowLevel.arrivalRows += g.arrivals;
+    rowLevel.departureRows += g.departures;
+    rowLevel.ours.arrivalMatched += rowsMatched(g.arrTo, g.depFrom);
+    rowLevel.ours.departureMatched += rowsMatched(g.depFrom, g.arrTo);
+    rowLevel.reversed.arrivalMatched += rowsMatched(g.arrFrom, g.depTo);
+    rowLevel.reversed.departureMatched += rowsMatched(g.depTo, g.arrFrom);
     const bd = result.byDirection[g.dir];
     bd.groups++; bd.ours[ours]++; bd.reversed[reversed]++;
     let a = result.byAreaAll.get(g.td);
@@ -100,6 +129,13 @@ function analyseSemantics(rows) {
     reversedAdjacent: pct(result.reversed.adjacent, n),
     reversedNone: pct(result.reversed.none, n)
   };
+  rowLevel.pct = {
+    oursArrival: pct(rowLevel.ours.arrivalMatched, rowLevel.arrivalRows),
+    oursDeparture: pct(rowLevel.ours.departureMatched, rowLevel.departureRows),
+    reversedArrival: pct(rowLevel.reversed.arrivalMatched, rowLevel.arrivalRows),
+    reversedDeparture: pct(rowLevel.reversed.departureMatched, rowLevel.departureRows)
+  };
+  result.rowLevel = rowLevel;
   // The whole per-area distribution can be 100+ rows; keep the largest areas and the worst-fitting
   // ones (among areas with enough groups to mean anything).
   const areas = [...result.byAreaAll.values()].map(a => ({ ...a, oursExactPct: pct(a.oursExact, a.groups), reversedExactPct: pct(a.reversedExact, a.groups) }));
@@ -119,7 +155,7 @@ const SEMANTICS_CLEAR_BY = 20;     // ... provided it beats the reversed reading
 const SEMANTICS_WARN_AT = 30;      // below PASS but at or above this is WARN; below this is FAIL
 
 /**
- * SMART_SEMANTICS verdict.
+ * SMART_SEMANTICS verdict, on the GROUP-LEVEL numbers only (the row-level shares are reported beside them).
  *   PASS  ours >= 60% exact AND at least 20 points above the reversed reading's exact share
  *   WARN  ours 30% to under 60%; or >= 60% but the reversed reading is within 20 points (cannot tell them apart)
  *   FAIL  ours under 30%, or there is no group with both an arrival and a departure to test
@@ -143,8 +179,13 @@ function judgeSemantics(res, ctx = {}) {
     status = 'WARN';
     if (ours >= SEMANTICS_PASS_AT * n) tail = ' The reversed reading is nearly as good, so the data cannot tell them apart.';
   }
+  // The row-level shares are reported beside the group-level ones; the verdict above does not use them.
+  const rl = res.rowLevel && res.rowLevel.pct;
+  const byRow = rl
+    ? ` By row: ${rl.oursArrival}% of arrival rows end where some departure starts, and ${rl.oursDeparture}% of departure rows start where some arrival ends (reversed reading: ${rl.reversedArrival}% and ${rl.reversedDeparture}%).`
+    : '';
   const message = `Our reading (arrival at TOBERTH, departure at FROMBERTH) holds exactly for ${o}% of ${fmtInt(res.groups)} station/direction groups `
-    + `(a further ${res.pct.oursAdjacent}% are one SMART step apart); the reversed reading holds for ${r}%.${tail}`;
+    + `(a further ${res.pct.oursAdjacent}% are one SMART step apart); the reversed reading holds for ${r}%.${tail}${byRow}`;
   return { status, thresholds, message };
 }
 

@@ -54,10 +54,107 @@ test('SEMANTICS: 3 of 4 consistent groups is exactly 75%, and the reversed readi
   assert.equal(r.areas.biggest[0].td, 'LA');
   assert.equal(r.areas.biggest[0].oursExactPct, 75);
 
+  // One arrival row and one departure row per testable group, so here the row-level shares equal the group-level
+  // ones. The arrival-only, departure-only, odd-EVENT and no-STANOX rows are in neither denominator.
+  assert.deepEqual(r.rowLevel, {
+    arrivalRows: 4, departureRows: 4,
+    ours: { arrivalMatched: 3, departureMatched: 3 },
+    reversed: { arrivalMatched: 1, departureMatched: 1 },
+    pct: { oursArrival: 75, oursDeparture: 75, reversedArrival: 25, reversedDeparture: 25 }
+  });
+
   const v = judgeSemantics(r);
   assert.equal(v.status, 'PASS');
   assert.match(v.message, /holds exactly for 75% of 4 station\/direction groups \(a further 0% are one SMART step apart\); the reversed reading holds for 25%\./);
+  assert.match(v.message, / By row: 75% of arrival rows end where some departure starts, and 75% of departure rows start where some arrival ends \(reversed reading: 25% and 25%\)\.$/);
   assert.equal(v.thresholds.firstPass, true);
+});
+
+// A big multi-platform station is where the group-level test is lenient: ONE shared berth passes the whole
+// group however many other rows disagree. So the same groups are also counted row by row.
+//   G1  stanox 1, up    four arrivals end at P1 (twice), P2 and P3; five departures leave from P1 (three times) and X (twice)
+//   G2  stanox 2, down  a plain one-platform station: arrive b1>Q, depart Q>b2
+//   G3  stanox 3, up    a reversing one: arrivals start at r1 and r2 and end at s1; two departures (s2>r1, s3>r1) end at r1
+//   G4  stanox 4, up    arrivals only: its three rows are in neither denominator
+//
+// Group level: G1 and G2 follow our reading (2 of 3 = 66.7%); only G3 follows the reversed one (1 of 3 = 33.3%).
+// Row level, over G1-G3's 7 arrival rows and 8 departure rows:
+//   ours      arrival rows ending at a berth some departure leaves from: P1 twice in G1, Q in G2         = 3 of 7 = 42.9%
+//             departure rows leaving from a berth some arrival ends at:  P1 three times in G1, Q in G2    = 4 of 8 = 50%
+//   reversed  arrival rows starting at a berth some departure ends at:   r1 in G3                        = 1 of 7 = 14.3%
+//             departure rows ending at a berth some arrival starts from: r1 twice in G3                   = 2 of 8 = 25%
+// Every matched count and every share is different from the others, and from the group-level 66.7 / 33.3, so a
+// swapped numerator or denominator cannot pass by coincidence.
+const MULTI = [
+  row('LA', '1', 'A', 'a1', 'P1'), row('LA', '1', 'A', 'a2', 'P1'), row('LA', '1', 'A', 'a3', 'P2'), row('LA', '1', 'A', 'a4', 'P3'),
+  row('LA', '1', 'B', 'P1', 'd1'), row('LA', '1', 'B', 'P1', 'd2'), row('LA', '1', 'B', 'P1', 'd3'), row('LA', '1', 'B', 'X', 'd4'), row('LA', '1', 'B', 'X', 'd5'),
+  row('LA', '2', 'C', 'b1', 'Q'), row('LA', '2', 'D', 'Q', 'b2'),
+  row('LA', '3', 'A', 'r1', 's1'), row('LA', '3', 'A', 'r2', 's1'), row('LA', '3', 'B', 's2', 'r1'), row('LA', '3', 'B', 's3', 'r1'),
+  row('LA', '4', 'A', 'n1', 'n2'), row('LA', '4', 'A', 'n3', 'n4'), row('LA', '4', 'A', 'n5', 'n6')
+];
+
+test('SEMANTICS: row-level shares differ from the group-level ones at a multi-platform station, each over its own rows', () => {
+  const r = analyseSemantics(MULTI);
+  assert.equal(r.groups, 3);
+  assert.deepEqual(r.ours, { exact: 2, adjacent: 0, none: 1 });
+  assert.deepEqual(r.reversed, { exact: 1, adjacent: 0, none: 2 });
+  assert.equal(r.pct.oursExact, 66.7);
+  assert.equal(r.pct.reversedExact, 33.3);
+  assert.equal(r.arrivalOnly, 1);
+
+  assert.deepEqual(r.rowLevel, {
+    arrivalRows: 7, departureRows: 8,                              // G4's three arrival rows are not counted
+    ours: { arrivalMatched: 3, departureMatched: 4 },
+    reversed: { arrivalMatched: 1, departureMatched: 2 },
+    pct: { oursArrival: 42.9, oursDeparture: 50, reversedArrival: 14.3, reversedDeparture: 25 }
+  });
+  // the four row-level shares and the two group-level ones are six different numbers (and the matched counts differ too)
+  const shares = new Set([r.rowLevel.pct.oursArrival, r.rowLevel.pct.oursDeparture, r.rowLevel.pct.reversedArrival, r.rowLevel.pct.reversedDeparture, r.pct.oursExact, r.pct.reversedExact]);
+  assert.equal(shares.size, 6);
+  assert.notEqual(r.rowLevel.ours.arrivalMatched, r.rowLevel.ours.departureMatched);
+  assert.notEqual(r.rowLevel.reversed.arrivalMatched, r.rowLevel.reversed.departureMatched);
+
+  const v = judgeSemantics(r);
+  assert.equal(v.status, 'PASS');
+  assert.match(v.message, /holds exactly for 66\.7% of 3 station\/direction groups.*the reversed reading holds for 33\.3%\. By row: 42\.9% of arrival rows end where some departure starts, and 50% of departure rows start where some arrival ends \(reversed reading: 14\.3% and 25%\)\.$/);
+});
+
+test('SEMANTICS: the verdict stays on the group-level numbers however the row-level ones move', () => {
+  // Ten more arrival rows at G1 that end at berths nobody leaves from: the row-level arrival share collapses
+  // (3 of 17), but the groups are classified exactly as before, so the verdict does not move.
+  const diluted = [...MULTI];
+  for (let i = 0; i < 10; i++) diluted.push(row('LA', '1', 'A', 'm' + i, 'Z' + i));
+  const before = analyseSemantics(MULTI), after = analyseSemantics(diluted);
+  assert.deepEqual(after.ours, before.ours);
+  assert.deepEqual(after.reversed, before.reversed);
+  assert.equal(after.rowLevel.arrivalRows, 17);
+  assert.equal(after.rowLevel.pct.oursArrival, 17.6);
+  assert.equal(judgeSemantics(after).status, judgeSemantics(before).status);
+  assert.equal(judgeSemantics(after).status, 'PASS');
+});
+
+test('SEMANTICS: at row level a blank berth never matches, still counts in its denominator, and duplicates count once each', () => {
+  const blank = analyseSemantics([row('LA', '1', 'A', 'x', ''), row('LA', '1', 'B', '', 'y')]);
+  assert.deepEqual(blank.rowLevel, {
+    arrivalRows: 1, departureRows: 1,
+    ours: { arrivalMatched: 0, departureMatched: 0 }, reversed: { arrivalMatched: 0, departureMatched: 0 },
+    pct: { oursArrival: 0, oursDeparture: 0, reversedArrival: 0, reversedDeparture: 0 }
+  });
+  // two identical arrival rows are two rows: both match the one departure
+  const twice = analyseSemantics([row('LA', '1', 'A', 'a', 'P'), row('LA', '1', 'A', 'a', 'P'), row('LA', '1', 'B', 'P', 'd')]);
+  assert.equal(twice.rowLevel.arrivalRows, 2);
+  assert.equal(twice.rowLevel.ours.arrivalMatched, 2);
+  assert.equal(twice.rowLevel.ours.departureMatched, 1);
+  // a row of another group never matches: same berths, different STANOX or different direction
+  const apart = analyseSemantics([row('LA', '1', 'A', 'a', 'P'), row('LA', '1', 'B', 'P', 'd'), row('LA', '2', 'A', 'a', 'P'), row('LA', '2', 'D', 'P', 'd')]);
+  assert.equal(apart.groups, 1, 'only stanox 1 has an arrival and a departure of the same direction');
+  assert.equal(apart.rowLevel.arrivalRows, 1);
+});
+
+test('SEMANTICS: the verdict message omits the row sentence only when there is no row-level result to report', () => {
+  const none = judgeSemantics({ groups: 10, ours: { exact: 7, adjacent: 0, none: 3 }, reversed: { exact: 0, adjacent: 0, none: 10 }, pct: { oursExact: 70, oursAdjacent: 0, reversedExact: 0 } });
+  assert.equal(none.status, 'PASS');
+  assert.ok(!/By row/.test(none.message));
 });
 
 test('SEMANTICS: the verdict depends on the rule, so swapping the reading flips the answer', () => {
