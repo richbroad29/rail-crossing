@@ -78,6 +78,9 @@ your account. It does not change the crossing service, which keeps using only th
 
 ## 4. Second connection and national load: 60 minutes
 
+**Deploy the crossing-service fix in PR #4 first.** If Network Rail answers a second connection by
+sending the first one an error, the crossing service without that fix crashes instead of reconnecting.
+
 Start it in a `tmux` session, so a dropped SSH connection doesn't end the run:
 
 ```bash
