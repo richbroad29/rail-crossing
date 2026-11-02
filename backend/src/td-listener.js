@@ -17,6 +17,9 @@ const emitter = new EventEmitter();
 // Credentials travel in the clear; this is the documented NROD design.
 const HOST = 'publicdatafeeds.networkrail.co.uk';
 const PORT = 61618;
+// Where connect() goes. Only `_setEndpointForTest` changes it, so a test can point the real stompit
+// at a fake STOMP server on this machine.
+let endpoint = { host: HOST, port: PORT };
 const TOPIC = '/topic/TD_ALL_SIG_AREA';
 const TARGET_AREA = 'LA';
 const LOG_DIR = path.join(__dirname, '..', 'data', 'logs', 'td');
@@ -298,10 +301,54 @@ function processMessage(body) {
   }
 }
 
+// ---- stompit 1.0.0 ERROR-frame crash -----------------------------------------------------------
+//
+// stompit's own ERROR handler, for a frame with `content-type: text/plain` and a body of 4096 bytes
+// or less, reads the body and then calls `this.destroy(error)` inside a plain-function stream
+// callback, where `this` is the FRAME, not the client. The error is emitted on the frame, which has no
+// listener, so Node throws it as an uncaught exception and THIS PROCESS EXITS. The connect callback
+// and `client.on('error')` below never see it. NROD answers a rejected login and a topic the account
+// is not subscribed to with ERROR frames, so before this a password change or a revoked subscription
+// could take the crossing service down, followed by a ~90 s timetable reparse on restart (goal 1).
+// Reproduced against the real stompit in test/td-stomp-error.test.js.
+//
+// The fix uses only stompit's public API. It sets its command handlers through `setCommandHandlers`,
+// at CONNECT and again at CONNECTED, so wrapping that method on each new client substitutes this
+// handler every time. It does what stompit meant to do: read the body (bounded) and destroy the
+// CLIENT with the error, which reaches the connect callback or `client.on('error')` and so the
+// ordinary reconnect path. A longer or non-text body already took stompit's working branch; this
+// handles both shapes the same way.
+const ERROR_BODY_MAX = 4096;
+
+function safeErrorHandler(frame) {
+  const client = this;                                 // stompit calls handlers with the client as `this`
+  const message = (frame.headers && frame.headers.message) || 'server sent ERROR frame';
+  const error = client.createApplicationError(message);
+  let done = false;
+  const finish = text => {
+    if (done) return;
+    done = true;
+    if (text) error.longMessage = text;
+    client.destroy(error);
+  };
+  const chunks = [];
+  let size = 0;
+  frame.on('data', c => { if (size < ERROR_BODY_MAX) { chunks.push(c); size += c.length; } });
+  frame.on('end', () => finish(Buffer.concat(chunks).toString('utf8').slice(0, ERROR_BODY_MAX)));
+  frame.on('error', () => finish(''));
+}
+
+function hardenClient(client) {
+  if (!client || typeof client.setCommandHandlers !== 'function') return;   // a test stand-in
+  const original = client.setCommandHandlers.bind(client);
+  client.setCommandHandlers = handlers =>
+    original(handlers && handlers.ERROR ? { ...handlers, ERROR: safeErrorHandler } : handlers);
+}
+
 function connect() {
   const connectOptions = {
-    host: HOST,
-    port: PORT,
+    host: endpoint.host,
+    port: endpoint.port,
     connectHeaders: {
       'host': '/',
       'login': process.env.NR_FEED_USER,
@@ -327,7 +374,9 @@ function connect() {
     scheduleReconnect(backoff, 'connect timeout');
   }, CONNECT_TIMEOUT_MS);
 
-  stompit.connect(connectOptions, (err, client) => {
+  // stompit returns the client synchronously and only sends CONNECT once the socket is up, so
+  // hardening it here is in time for the very first frame (see safeErrorHandler).
+  const pending = stompit.connect(connectOptions, (err, client) => {
     if (settled) { try { client && client.destroy(); } catch (_) {} return; }
     settled = true;
     clearTimeout(timer);
@@ -366,6 +415,7 @@ function connect() {
       scheduleReconnect(2000, 'socket error');
     });
   });
+  hardenClient(pending);
 }
 
 function start() {
@@ -408,5 +458,9 @@ module.exports = {
   // needs the STOMP library. Injecting a stub keeps the socket out of the test without
   // weakening what is asserted: whether a reconnect is ATTEMPTED is the behaviour under test,
   // not whether a TCP connection opens.
-  _setStompitForTest(stub) { stompit = stub; }
+  _setStompitForTest(stub) { stompit = stub; },
+  // The ERROR-frame test drives the REAL stompit against a fake server: these point connect() at it
+  // and run one attempt, without start()'s watchdog.
+  _setEndpointForTest(host, port) { endpoint = { host, port }; },
+  _connectForTest() { connect(); }
 };
