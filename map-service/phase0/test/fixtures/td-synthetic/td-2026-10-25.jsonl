@@ -1,0 +1,14 @@
+{"ts":"2026-10-25T10:00:00.000Z","area":"LA","event":"CA","desc":"1H15","from":"0016","to":"0014","trust_uid":null}
+{"ts":"2026-10-25T10:01:00.000Z","area":"LA","event":"CA","desc":"1H15","from":"0014","to":"0012","trust_uid":null}
+{"ts":"2026-10-25T10:02:00.000Z","area":"LA","event":"CA","desc":"1H15","from":"0012","to":"0010","trust_uid":null}
+{"ts":"2026-10-25T10:03:00.000Z","area":"LA","event":"CA","desc":"1H15","from":"0010","to":"0008","trust_uid":null}
+{"ts":"2026-10-25T10:04:00.000Z","area":"LA","event":"CA","desc":"1H15","from":"0008","to":"0006","trust_uid":null}
+{"ts":"2026-10-25T10:05:00.000Z","area":"LA","event":"CA","desc":"1H15","from":"0006","to":"0004","trust_uid":null}
+{"ts":"2026-10-25T10:06:00.000Z","area":"LA","event":"CA","desc":"1H15","from":"0004","to":"0002","trust_uid":null}
+{"ts":"2026-10-25T10:10:00.000Z","area":"LA","event":"CA","desc":"1H16","from":"T682","to":"T677","trust_uid":null}
+{"ts":"2026-10-25T10:11:00.000Z","area":"LA","event":"CA","desc":"1H16","from":"T677","to":"0001","trust_uid":null}
+{"ts":"2026-10-25T10:12:00.000Z","area":"LA","event":"CA","desc":"1H16","from":"0001","to":"0003","trust_uid":null}
+{"ts":"2026-10-25T10:13:00.000Z","area":"LA","event":"CA","desc":"1H16","from":"0003","to":"0005","trust_uid":null}
+{"ts":"2026-10-25T10:14:00.000Z","area":"LA","event":"CA","desc":"1H16","from":"0005","to":"0007","trust_uid":null}
+{"ts":"2026-10-25T10:30:00.000Z","area":"LA","event":"CB","desc":"2A22","from":"0104","to":null,"trust_uid":null}
+{"ts":"2026-10-25T23:59:59.000Z","area":"LA","event":"CA","desc":"9Z99","from":"00
