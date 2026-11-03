@@ -22,3 +22,16 @@ at zoom 14, 16 and 18 and a selected moving one (look for ONE train body with a 
 its heading, no overlaid shapes, no label on top of another); **e2e** checks keyboard search, deep
 links, follow, share, chips, theme, reduced motion, tab order and the loopback-only `?api=`; **perf**
 prints frame times at five views and again with the CPU throttled 4x.
+
+**Against the real service** (`real.js`): the page with real data, through a loopback CORS dev proxy
+(the service itself sends no CORS headers; Caddy adds them in production). From the repo root, in
+separate terminals:
+
+    cd map-service && npm ci
+    node dev/fake-nrod.js --mode=replay --file=/path/td-2026-11-01.jsonl --speed=15 --loop
+    node bin/rail-map.js --fake=127.0.0.1:61613 --ref-dir=/path/to/reference/files     # port 3100
+    node map/dev/cors-proxy.js                                                        # 3101 -> 3100
+    node map/test/visual/real.js        # checks the real responses, shoots Sussex z9 and z12 with a real train's panel
+
+Or by hand: open `map/index.html` through any static server with `?api=http://localhost:3101`.
+`node map/test/visual/run.js basemap` compares the candidate base maps (positron / liberty / dark).

@@ -6,6 +6,7 @@
 //   node map/test/visual/run.js shots      phone + desktop, light + dark: map, panel, search, stale; national
 //   node map/test/visual/run.js probes     close-zoom train probes (14, 16, 18)
 //   node map/test/visual/run.js e2e        behaviour checks (keyboard, deep links, share, theme ...)
+//   node map/test/visual/run.js basemap    positron vs liberty vs dark base maps, Sussex z9 and z12
 //   node map/test/visual/run.js perf       frame times
 //   node map/test/visual/run.js shots d-dark   only shots whose name contains "d-dark"
 // Exit code is non-zero if a check failed or the page logged a console error.
@@ -23,6 +24,7 @@ const L = require('./lib.js');
     if (what === 'all' || what === 'shots') failed += await require('./shots.js')(browser, only);
     if (what === 'all' || what === 'probes') failed += await require('./probes.js')(browser);
     if (what === 'all' || what === 'e2e') failed += await require('./e2e.js')(browser);
+    if (what === 'all' || what === 'basemap') failed += await require('./basemap.js')(browser);
     if (what === 'all' || what === 'perf') failed += await require('./perf.js')(browser);
   } finally {
     await browser.close();

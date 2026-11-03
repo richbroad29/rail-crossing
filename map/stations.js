@@ -92,8 +92,22 @@
     return out;
   }
 
+  // The service's station list is NaPTAN-based: some entries have no CRS code (a second TIPLOC for the
+  // same station, heritage lines) and a few CRS codes could in principle repeat. The page keys stations
+  // by CRS (deep links, search, selection), so keep only usable, unique ones.
+  var CRS = /^[A-Z]{3}$/;
+  function cleanStations(list) {
+    var seen = Object.create(null), out = [];
+    (list || []).forEach(function (s) {
+      if (!s || typeof s.crs !== 'string' || !CRS.test(s.crs) || !s.name || seen[s.crs]) return;
+      if (typeof s.lat !== 'number' || typeof s.lon !== 'number' || !isFinite(s.lat) || !isFinite(s.lon)) return;
+      seen[s.crs] = 1; out.push(s);
+    });
+    return out;
+  }
+
   var api = {
-    TIER1: TIER1, TIER2: TIER2, tierOf: tierOf, nameMinZoom: nameMinZoom, dotMinZoom: dotMinZoom,
+    cleanStations: cleanStations, TIER1: TIER1, TIER2: TIER2, tierOf: tierOf, nameMinZoom: nameMinZoom, dotMinZoom: dotMinZoom,
     norm: norm, searchStations: searchStations, searchTrains: searchTrains
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
