@@ -1,0 +1,26 @@
+[Unit]
+Description=Live train map service (rail-map)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/rail-map/map-service
+# 192 MB V8 old space inside a 300 MB cgroup limit; the service's own budget is RSS <= 220 MB.
+ExecStart=/usr/bin/node --max-old-space-size=192 bin/rail-map.js
+Environment=MAP_ENV_FILE=/home/ubuntu/rail-crossing/backend/.env
+Environment=MAP_DATA_DIR=/home/ubuntu/rail-map-data
+Environment=PORT=3100
+# Share the box politely with the crossing service, which is the one that matters.
+MemoryMax=300M
+CPUWeight=50
+Nice=10
+Restart=on-failure
+RestartSec=10
+# The service handles SIGTERM itself (disconnects from NROD, saves the learned graph); give it time.
+TimeoutStopSec=20
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target
