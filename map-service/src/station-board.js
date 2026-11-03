@@ -22,6 +22,7 @@
 
 const { london, hhmm } = require('./time');
 const { derive } = require('./progress');
+const { round5 } = require('./geo');
 
 const AHEAD_MIN = 120, BEHIND_MIN = 30, GRACE_MIN = 5;
 
@@ -30,7 +31,7 @@ function buildBoard(app, crs, nowMs) {
   if (!st) return null;
   const ctx = app.ctx();
   const cif = ctx.cif;
-  const station = { crs: st.crs, name: st.name, lat: st.lat, lon: st.lon };
+  const station = { crs: st.crs, name: st.name, lat: round5(st.lat), lon: round5(st.lon) };
   const out = { station, board: [], recent: [] };
   if (!cif) return out;
   const tiplocs = app.stationTiplocs(st);
@@ -41,7 +42,7 @@ function buildBoard(app, crs, nowMs) {
   const board = [], recent = [];
 
   for (const day of cif.days) {
-    const nowMin = (l.dayNum - day.dayNum) * 1440 + l.minutes;
+    const nowMin = (l.dayNum - day.dayNum) * 1440 + Math.floor(l.minutes);
     for (const rec of cif.eachRec(day)) {
       let hit = -1;
       for (let i = 0; i < rec.n; i++) if (tiplocs.has(cif.tiplocAt(rec, i))) {

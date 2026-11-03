@@ -5,6 +5,7 @@ const os = require('os');
 const path = require('path');
 const zlib = require('zlib');
 const http = require('http');
+require('../src/deps').requireDeps();          // no node_modules: fail here, at once, not as a hang
 const log = require('../src/log');
 const { BerthGraph } = require('../src/berth-graph');
 const { TrainModel, ChangeSet } = require('../src/model');

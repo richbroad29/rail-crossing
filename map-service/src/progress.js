@@ -27,7 +27,7 @@ function derive(ctx, rec, act, trust, nowMs, runDay) {
   const n = rec.n, cif = ctx.cif;
   const day = act ? act.runDay : runDay;
   const l = london(nowMs);
-  const nowMin = (l.dayNum - day) * 1440 + l.minutes;
+  const nowMin = (l.dayNum - day) * 1440 + Math.floor(l.minutes);       // whole minutes: what the clock shows
   const pts = new Array(n);
   const stanox = new Array(n);
   for (let i = 0; i < n; i++) { pts[i] = cif.point(rec, i); stanox[i] = ctx.stanoxOf(pts[i].tiploc); }
@@ -51,7 +51,7 @@ function derive(ctx, rec, act, trust, nowMs, runDay) {
       if (bestI < 0) continue;
       const c = calls[bestI], p = pts[bestI];
       const passOnly = p.arr < 0 && p.dep < 0 && p.pass >= 0;
-      const hm = hhmm(e.actualSec / 60);
+      const hm = hhmm(Math.floor(e.actualSec / 60));          // a clock time shows its minute, it does not round up
       const sec = e.actualSec;
       if (e.dep) { if (passOnly) { c.actualPass = hm; c._pass = sec; } else { c.actualDep = hm; c._dep = sec; } }
       else { c.actualArr = hm; c._arr = sec; }
@@ -60,6 +60,8 @@ function derive(ctx, rec, act, trust, nowMs, runDay) {
       reportedAt[bestI] = true;
       if (bestI > lastIdx) lastIdx = bestI;
     }
+  }
+  if (act && trust) {
     // cancellation: from the cancellation point on (AT ORIGIN: everything); change of origin: everything before the new origin
     const cx = act.cancel;
     if (cx) {

@@ -117,7 +117,8 @@ function makeRec(spec, addedAt) {
 const dow = dn => (new Date(dn * 86400000).getUTCDay() + 6) % 7;
 
 class VstpOverlay {
-  constructor({ maxSchedules = 6000, maxPoints = 400, now = Date.now } = {}) {
+  constructor({ maxSchedules = 6000, maxPoints = 400, now = Date.now, onChange = null } = {}) {
+    this.onChange = onChange;                 // () => void, after any change to the merged timetable
     this.maxSchedules = maxSchedules; this.maxPoints = maxPoints; this.now = now;
     this.recs = [];                     // insertion order
     this.version = 0;
@@ -194,7 +195,11 @@ class VstpOverlay {
     return n;
   }
 
-  _changed() { this.version++; this.dirty = true; if (this._days.size > 8) this._days.clear(); }
+  _changed() {
+    this.version++; this.dirty = true;
+    if (this._days.size > 8) this._days.clear();
+    if (this.onChange) { try { this.onChange(); } catch (_) { this.counts.errors++; } }
+  }
 
   // ---- the merge --------------------------------------------------------------------------------------
 

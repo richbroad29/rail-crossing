@@ -54,7 +54,7 @@ class App {
       maxHops: config.placement.maxHops, minEdgeCount: config.placement.minEdgeCount,
       maxKeys: config.model.maxBerthKeys, maxLearnedEdges: config.placement.maxLearnedEdges
     });
-    this.vstp = new VstpOverlay({ maxSchedules: config.vstp.maxSchedules, maxPoints: config.vstp.maxPoints, now });
+    this.vstp = new VstpOverlay({ maxSchedules: config.vstp.maxSchedules, maxPoints: config.vstp.maxPoints, now, onChange: () => this.model && this.model.invalidateServices() });
     this.transit = new TransitStore(config.transit);
     this.trust = new TrustState({ config: config.trust, now, context: () => this.ctx(), onChange: (act, kind) => this._onTrust(act, kind) });
     this._ctxBase = { areaStanox: new Map(), stanoxOf: () => 0, tiplocsOfStanox: () => [], isStation: () => false };
@@ -422,7 +422,7 @@ class App {
     const last = ref.act && ref.act.last;
     if (last && d.lastIdx >= 0) {
       const x = d.calls[d.lastIdx];
-      lastReport = { name: det.calls[d.lastIdx].name, event: x.actualPass && !x.actualDep && !x.actualArr ? 'pass' : last.dep ? 'dep' : 'arr', time: hhmm(last.actualSec / 60), at: last.actual };
+      lastReport = { name: det.calls[d.lastIdx].name, event: x.actualPass && !x.actualDep && !x.actualArr ? 'pass' : last.dep ? 'dep' : 'arr', time: hhmm(Math.floor(last.actualSec / 60)), at: last.actual };
     }
     det.lastReport = lastReport;
     return det;

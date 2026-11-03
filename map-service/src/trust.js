@@ -280,9 +280,9 @@ class TrustState {
       if (act.ev[b] === e.stanox && (act.ev[b + 3] & F_DEP) === (e.dep ? F_DEP : 0) && act.ev[b + 1] === plannedSec) { slot = i; break; }
     }
     if (slot < 0) {
+      if (act.evN >= 400) return;                      // a pathological train: bounded
       if (!act.ev) act.ev = new Int32Array(8 * W);
       else if ((act.evN + 1) * W > act.ev.length) {
-        if (act.evN >= 400) return;                    // a pathological train: bounded
         const n = new Int32Array(act.ev.length * 2); n.set(act.ev); act.ev = n;
       }
       slot = act.evN++;
