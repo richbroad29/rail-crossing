@@ -1,0 +1,79 @@
+name: track-pack
+
+# Builds the railway track pack from OpenStreetMap (Geofabrik's UK extract) and NaPTAN, and publishes it
+# as a GitHub Release asset tagged track-pack-<yyyymmdd> together with its manifest and the two network
+# overview layers. Monthly, and on demand from the Actions tab ("Run workflow").
+#
+# No secrets: the inputs are public (OSM, NaPTAN) and the only credential used is the workflow's own
+# GITHUB_TOKEN, to create the release. SMART never comes near this; it stays on the server. The builder
+# has no npm dependencies, so there is no install step.
+#
+# Scheduled workflows only run from the default branch.
+
+on:
+  schedule:
+    - cron: '17 3 2 * *'          # 03:17 UTC on the 2nd of every month
+  workflow_dispatch:
+    inputs:
+      date:
+        description: 'Pack date yyyymmdd (default: the OSM extract date)'
+        required: false
+
+permissions:
+  contents: write                 # create the release and upload its assets
+
+concurrency:
+  group: track-pack
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Offline tests (the track model, on planted ways and a real fixture)
+        working-directory: map-service
+        run: node --test test/track.test.js
+
+      - name: Download inputs and build the pack
+        working-directory: map-service
+        env:
+          DATE_INPUT: ${{ github.event.inputs.date }}
+        run: |
+          mkdir -p ../dist
+          ARGS="--download --cache ${RUNNER_TEMP}/track-cache --out ${GITHUB_WORKSPACE}/dist"
+          if [ -n "${DATE_INPUT}" ]; then
+            echo "${DATE_INPUT}" | grep -Eq '^[0-9]{8}$' || { echo "date must be yyyymmdd"; exit 1; }
+            ARGS="$ARGS --date ${DATE_INPUT}"
+          fi
+          node track/build.js $ARGS
+
+      - name: Smoke-check the built pack (load, memory, route latency)
+        working-directory: map-service
+        run: node --expose-gc track/measure.js ../dist/track-pack-*.bin --pairs 300
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          MANIFEST=$(ls dist/track-pack-*.manifest.json)
+          DATE=$(node -p "require('./${MANIFEST}').packDate")
+          SHA=$(node -p "require('./${MANIFEST}').sha256")
+          TAG="track-pack-${DATE}"
+          OSM=$(node -p "require('./${MANIFEST}').sources.osm.dataTimestamp")
+          NAPTAN=$(node -p "require('./${MANIFEST}').sources.naptan.newestModification")
+          printf 'Track pack built from OpenStreetMap data of %s and NaPTAN rail stations (newest record %s).\n\nSHA-256 of the pack: `%s`\n\nFormat: see map-service/track/FORMAT.md. Overview layers: network-lo (zoom <= 7) and network-hi (zoom 8-11).\n\n(c) OpenStreetMap contributors, ODbL. This is a derived database; credit OpenStreetMap wherever it is shown.\n' "$OSM" "$NAPTAN" "$SHA" > notes.md
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+            gh release edit "$TAG" --notes-file notes.md
+          else
+            gh release create "$TAG" dist/* --title "Track pack ${DATE}" --notes-file notes.md --target "${GITHUB_SHA}"
+          fi
+          echo "published ${TAG}"

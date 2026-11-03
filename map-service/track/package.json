@@ -1,0 +1,13 @@
+{
+  "name": "rail-map-track-builder",
+  "private": true,
+  "description": "Build-time tooling for the track pack. The builder itself has no dependencies; playwright-core is only for the visual proofs (viz/render.js). Nothing here is needed by the service at runtime.",
+  "license": "UNLICENSED",
+  "engines": { "node": ">=20.0.0" },
+  "scripts": {
+    "build": "node build.js --download",
+    "measure": "node --expose-gc measure.js",
+    "viz": "node viz/render.js"
+  },
+  "devDependencies": { "playwright-core": "1.64.1" }
+}
