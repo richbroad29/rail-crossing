@@ -8,6 +8,7 @@ const http = require('http');
 const { parseBbox, inBbox } = require('./geo');
 const { gzip } = require('./snapshot');
 const log = require('./log');
+const { serveDebugRecord } = require('./record');
 
 const PREFIX = '/map/v1/';
 
@@ -72,6 +73,9 @@ function createServer(app) {
     if (rest === 'stations') return stations(req, res, q);
     if (rest === 'search') return search(req, res, q);
     if (rest.startsWith('train/')) return train(req, res, rest.slice(6));
+    if (rest.startsWith('station/')) return station(req, res, rest.slice(8));
+    if (rest.startsWith('span/')) return span(req, res, rest.slice(5));
+    if (rest === 'debug/record') return serveDebugRecord(app, req, res, q, sendJson);
     sendJson(req, res, 404, { error: 'No such endpoint.' });
   }
 
@@ -123,6 +127,24 @@ function createServer(app) {
     const d = app.trainDetail(id);
     if (!d) { sendJson(req, res, 404, { error: 'No train with that id.' }); return; }
     await sendJson(req, res, 200, d);
+  }
+
+  async function station(req, res, raw) {
+    let crs;
+    try { crs = decodeURIComponent(raw).toUpperCase(); } catch (_) { sendJson(req, res, 400, { error: 'That station code is not valid.' }); return; }
+    if (!/^[A-Z]{3}$/.test(crs)) { sendJson(req, res, 404, { error: 'No station with that code.' }); return; }
+    const b = app.stationBoard(crs);
+    if (!b) { sendJson(req, res, 404, { error: 'No station with that code.' }); return; }
+    await sendJson(req, res, 200, b);
+  }
+
+  async function span(req, res, raw) {
+    let id;
+    try { id = decodeURIComponent(raw); } catch (_) { sendJson(req, res, 400, { error: 'That span id is not valid.' }); return; }
+    const sp = /^sp_[0-9a-f]{6,16}$/.test(id) && app.spans ? app.spans.get(id) : null;
+    if (!sp) { sendJson(req, res, 404, { error: 'No span with that id.' }); return; }
+    // Immutable per id: a span that changes is issued under a new id.
+    await sendJson(req, res, 200, sp, { cache: 'public, max-age=604800, immutable' });
   }
 
   return server;

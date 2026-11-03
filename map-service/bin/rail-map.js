@@ -3,12 +3,15 @@
 
 // Entry point. Run as:  node --max-old-space-size=192 bin/rail-map.js [--fake[=host:port] --ref-dir=DIR]
 
+const { requireDeps } = require('../src/deps');
 const { loadConfig } = require('../src/config');
 const { App } = require('../src/app');
 const stomp = require('../src/stomp');
 const log = require('../src/log');
 
 async function main() {
+  try { requireDeps(); }
+  catch (e) { log.error(`start: ${log.errText(e)}`); process.exit(2); }
   let cfg;
   try { cfg = loadConfig(); }
   catch (e) { log.error(`start: ${log.errText(e)}`); process.exit(2); }

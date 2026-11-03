@@ -59,5 +59,59 @@
     "retryMaxSecs": 3600,
     "minRows": { "smart": 1000, "corpus": 1000, "naptan": 500, "cif": 1000 }
   },
+  "trust": {
+    "topic": "/topic/TRAIN_MVT_ALL_TOC",
+    "enabled": true,
+    "maxBodyBytes": 4194304,
+    "maxActivations": 60000,
+    "maxOrphanTrains": 5000,
+    "orphanKeepSecs": 900,
+    "finishedKeepSecs": 3600,
+    "expireHourNextDay": 4,
+    "matchWindowMins": 90,
+    "ambiguityMins": 2,
+    "inferPerSecond": 20,
+    "inferNegativeSecs": 600,
+    "maxUnknownKeys": 60,
+    "disableOnRefusedSecs": 3600
+  },
+  "vstp": {
+    "topic": "/topic/VSTP_ALL",
+    "enabled": true,
+    "maxBodyBytes": 2097152,
+    "maxSchedules": 6000,
+    "maxPoints": 400,
+    "saveIntervalSecs": 600
+  },
+  "transit": {
+    "ringSize": 200,
+    "minSamples": 5,
+    "maxSeconds": 1800,
+    "maxEntries": 60000,
+    "saveIntervalSecs": 3600
+  },
+  "motion": {
+    "heldMinGraceSecs": 30,
+    "fallbackSpeedMps": { "express": 30, "stopping": 20, "ecs": 15, "freight": 12, "other": 15 }
+  },
+  "spans": {
+    "enabled": true,
+    "maxChainBerths": 14,
+    "maxStationSnapM": 300,
+    "recomputeFraction": 0.1,
+    "replanSecs": 600,
+    "stepBudgetMs": 15,
+    "routeCacheEntries": 300,
+    "maxSpans": 120000
+  },
+  "record": {
+    "enabled": true,
+    "bbox": [50.7, -0.95, 51.2, 0.85],
+    "segmentSecs": 600,
+    "keepSegments": 7,
+    "maxSegmentBytes": 12582912,
+    "maxDebugClients": 2,
+    "maxDebugSecs": 3600
+  },
   "log": { "summarySecs": 300 }
 }

@@ -68,6 +68,7 @@ class BerthGraph {
 
     this.stations = [];        // station objects {key,name,lat,lon,crs}
     this.anchors = new Map();  // id -> station index
+    this.anchorKind = new Map(); // id -> 'arr' | 'dep' | 'both'
     this.hints = new Map();
     this.smartEdgeCount = 0;
     this.learnedEdges = 0;     // edges seen live at least once
@@ -137,6 +138,17 @@ class BerthGraph {
     return out.reverse();
   }
 
+  /** The usable edge out of (or into) `id` seen most often (SMART edges first on a tie), as a berth id, or -1. */
+  bestNext(id, forward = true) {
+    let best = -1, bc = -1, bs = false;
+    for (let e = forward ? this.headOut[id] : this.headIn[id]; e >= 0; e = forward ? this.eNextOut[e] : this.eNextIn[e]) {
+      if (!this._usableEdge(e)) continue;
+      const smart = (this.eFlag[e] & SMART) !== 0, c = this.eCnt[e], n = forward ? this.eTo[e] : this.eFrom[e];
+      if (c > bc || (c === bc && smart && !bs) || (c === bc && smart === bs && n < best)) { best = n; bc = c; bs = smart; }
+    }
+    return best;
+  }
+
   _reset() {
     this.headOut.fill(-1); this.headIn.fill(-1);
     this.edgeCount = 0; this.smartEdgeCount = 0; this.learnedEdges = 0;
@@ -155,7 +167,7 @@ class BerthGraph {
     for (let e = 0; e < this.edgeCount; e++) if (this.eCnt[e] > 0) learned.push(this.eFrom[e], this.eTo[e], this.eCnt[e]);
     this._reset();
 
-    const votes = new Map(), hintVotes = new Map();
+    const votes = new Map(), hintVotes = new Map(), kindVotes = new Map();
     const stationIdx = new Map();
     const stations = [];
     const idxOf = st => {
@@ -182,7 +194,11 @@ class BerthGraph {
       const st = smart.stanox[r] ? resolve(smart.stanox[r]) : null;
       if (!st) continue;
       const i = idxOf(st);
-      if (strong >= 0) vote(votes, strong, i);
+      if (strong >= 0) {
+        vote(votes, strong, i);
+        let kv = kindVotes.get(strong); if (!kv) { kv = [0, 0]; kindVotes.set(strong, kv); }
+        kv[ARRIVE.has(ev) ? 0 : 1]++;
+      }
       if (weak >= 0) vote(hintVotes, weak, i);
       used++;
     }
@@ -203,6 +219,13 @@ class BerthGraph {
     this.anchors = new Map(); this.hints = new Map();
     pick(votes, this.anchors); pick(hintVotes, this.hints);
     for (const id of this.anchors.keys()) this.hints.delete(id);
+    // How each anchored berth is used (SMART events): trains ARRIVE there (the span ends at the stop),
+    // DEPART from there (it starts at the stop), or both.
+    this.anchorKind = new Map();
+    for (const id of this.anchors.keys()) {
+      const kv = kindVotes.get(id) || [0, 0];
+      this.anchorKind.set(id, kv[0] && kv[1] ? 'both' : kv[0] ? 'arr' : 'dep');
+    }
     this._bumpVersion();
     return { rowsUsed: used, anchored: this.anchors.size, hinted: this.hints.size, stations: stations.length };
   }

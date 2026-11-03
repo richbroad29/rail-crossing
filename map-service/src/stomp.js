@@ -366,7 +366,13 @@ function hardenClient(client) {
 
 function defaultConnect(options, callback) {
   // Required lazily, as td-listener.js does: `--help` and the pure modules work without it.
-  return require('stompit').connect(options, callback);
+  let stompit;
+  try { stompit = require('stompit'); }
+  catch (e) {
+    // Not a network problem: retrying cannot help. TdIngest treats this kind as fatal.
+    throw Object.assign(new Error('the "stompit" package is not installed (run "npm ci")'), { stompKind: 'missing-dependency' });
+  }
+  return stompit.connect(options, callback);
 }
 
 /**

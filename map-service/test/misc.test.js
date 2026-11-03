@@ -180,5 +180,5 @@ test('nothing in src/ imports from backend/ or writes outside MAP_DATA_DIR by co
   }
   // The only writers: refdata (under <dataDir>/ref), the graph (the state file), download (its dest + .tmp).
   const writers = fs.readdirSync(dir).filter(f => /writeFile|createWriteStream|renameSync|mkdirSync/.test(fs.readFileSync(path.join(dir, f), 'utf8')));
-  assert.deepEqual(writers.sort(), ['app.js', 'berth-graph.js', 'download.js', 'refdata.js']);
+  assert.deepEqual(writers.sort(), ['app.js', 'berth-graph.js', 'download.js', 'record.js', 'refdata.js', 'transit.js', 'vstp.js']);
 });
