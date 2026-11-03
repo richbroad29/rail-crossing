@@ -1,0 +1,6 @@
+{
+  "name": "map-visual-checks",
+  "private": true,
+  "description": "Browser checks for the map page (see README.md). Not part of the unit tests.",
+  "dependencies": { "playwright-core": "1.64.1" }
+}
