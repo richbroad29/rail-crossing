@@ -152,7 +152,10 @@
     var before = null;
     (style.layers || []).some(function (l) { if (l.type === 'symbol') { before = l.id; return true; } return false; });
     var T = THEME[theme];
-    var filter = ['all', ['==', ['get', 'class'], 'rail'], ['!', ['has', 'service']], ['!=', ['get', 'brunnel'], 'tunnel']];
+    // Tunnels are drawn exactly like open track. A train in a tunnel is still on the railway; leaving
+    // tunnels out made trains in Clayton Tunnel and on the Elizabeth line look as if they ran along
+    // the road above (owner's report, 2026-11-03).
+    var filter = ['all', ['==', ['get', 'class'], 'rail'], ['!', ['has', 'service']]];
     RAIL_IDS.forEach(function (id) { if (map.getLayer(id)) map.removeLayer(id); });
     map.addLayer({
       id: 'rm-rail-case', type: 'line', source: src, 'source-layer': 'transportation', filter: filter, minzoom: RAIL_MIN_ZOOM,
