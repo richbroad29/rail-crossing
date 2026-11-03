@@ -31,5 +31,12 @@ FILES="index.html portslade/index.html"
 
 perl -pi -e "s{((?:src|href)=\")((?:\.\./)*shared/[A-Za-z0-9._-]+\.(?:js|css))(?:\?v=[^\"]*)?\"}{\$1\$2?v=$TOKEN\"}g" $FILES
 
+# The live train map (map/) keeps its code beside its page, so its tags name a bare file
+# (geo.js, api.js, map.css), not shared/…. Same-directory names only: anything with a slash
+# (the pinned unpkg URLs, which carry their own exact version and SRI hash) is left alone.
+MAP_FILES="map/index.html"
+perl -pi -e "s{((?:src|href)=\")([A-Za-z0-9_-]+\.(?:js|css))(?:\?v=[^\"]*)?\"}{\$1\$2?v=$TOKEN\"}g" $MAP_FILES
+
 echo "asset token -> $TOKEN"
 grep -hoE '(src|href)="(\.\./)*shared/[A-Za-z0-9._-]+\.(js|css)\?v=[0-9]+"' $FILES | sort -u
+grep -hoE '(src|href)="[A-Za-z0-9_-]+\.(js|css)\?v=[0-9]+"' $MAP_FILES | sort -u
