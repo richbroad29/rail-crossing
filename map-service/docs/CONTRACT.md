@@ -178,3 +178,121 @@ station name or CRS.
 - The page runs against the service locally and against the fake, with no console errors, at
   390 px and desktop, light and dark.
 - The service stays inside its memory budget with the national TD rate measured in phase 0.
+
+---
+
+# Phase 2 — real track, smooth movement, TRUST
+
+Phase 1 is live (service `rail-map` on the VPS, page at railcrossing.uk/map). Phase 2 is additive:
+every phase-1 field keeps its meaning; new fields are optional to old clients.
+
+## 8. Track pack (built offline, loaded by the service)
+
+`map-service/track/` holds the builder. **Input:** Geofabrik's UK extract (`united-kingdom-latest.osm.pbf`,
+~2.3 GB) plus NaPTAN and SMART. **Output:** one versioned file `track-pack-<yyyymmdd>.bin` (+ a small
+JSON manifest with the source dates, counts and a SHA-256), produced by `node track/build.js`.
+It runs on a Mac or a GitHub Actions runner, never on the VPS. The VPS downloads the published file.
+
+- **Graph:** OSM `railway=rail` (and `light_rail` where it carries Network Rail services), split at
+  junctions. Nodes = junctions/ends; edges = track sections with their true polyline (simplified
+  to ≤ 2 m deviation), length in metres, `usage`/`service` (main, branch, siding, yard, crossover),
+  electrification, `maxspeed` where tagged, line name/ref where tagged. Disconnected fragments
+  under 200 m are dropped.
+- **Station snaps:** for each NaPTAN rail station (by TIPLOC) the nearest point on a non-siding
+  edge within 300 m, per platform track where OSM separates them; unsnapped stations listed.
+- **Network overview:** a simplified national line layer (main + branch, ≤ 50 m deviation) as
+  GeoJSON, served by the service at `GET /map/v1/network` (≈1–3 MB gz, `Cache-Control: public,
+  max-age=86400`, `ETag` = pack hash). The page draws it below zoom 8, where the base tiles have
+  no rail.
+- **Runtime library** `map-service/src/track/`: load the pack into typed arrays (memory budget for
+  the loaded pack: **≤ 40 MB RSS**), `nearestOnTrack(lat, lon, opts)`, `route(fromSnap, toSnap,
+  {avoidSidings})` (A* by length), `slice(route, d0, d1)` → polyline, `pointAt(route, d)` →
+  `{lat, lon, bearing}`.
+- Licence: OSM data is ODbL. The pack and the network layer are derived databases: credit
+  "© OpenStreetMap contributors" wherever they are shown, and keep the builder public.
+
+## 9. Berths on the track (service)
+
+Every berth the model knows gets a **span**: a polyline along the track graph from where trains
+enter it to where they leave it, for its most common (previous berth → this berth → next berth)
+path. Rules, in order:
+1. Station-anchored berths (SMART) are pinned to the station's snap point; arrival berths END at
+   the platform stop point, departure berths START there.
+2. Between two pinned points, `route()` gives the path; the berths in between are cut from it in
+   proportion to their **learned median transit time** for non-stopping trains (§10), falling back
+   to equal shares until learned.
+3. Where OSM tags a signal with a `ref` that matches the berth id within the same TD area, pin the
+   boundary there (validate per area; report the match rate).
+4. Spans get stable ids `sp_<hash>` and are recomputed when learning changes a berth materially
+   (> 10 % of its length); the id changes then.
+`GET /map/v1/span/:id` → `{id, length, path: [[lat, lon], …], stop: metresAlong | null}`
+(immutable per id: `Cache-Control: public, max-age=604800, immutable`).
+
+## 10. Learned transit times (service)
+
+Per berth, per class (`express`/`stopping`/`ecs`/`freight`/`other` from the headcode) and per
+behaviour (`calls` here / `passes`), a bounded streaming estimate of time-in-berth: median and
+p10/p90 over the last 200 samples (ring buffer), persisted to `MAP_DATA_DIR` hourly and on SIGTERM.
+Whether a train calls in a berth comes from its matched schedule (CIF/VSTP + TRUST) and the
+berth's SMART station. Outliers > 30 min are excluded (held trains).
+
+## 11. Motion plans (wire)
+
+`Train` gains, when the berth has a span:
+```
+mv: { sp: "sp_3f9a", t0: <epoch ms the train entered the berth>, eta: <expected exit, epoch ms>,
+      stop: metresAlong | null, dwell: secs | null, held: bool }
+```
+- `t0` is the **signalling time** of the step (TD `time`), not receive time.
+- `eta` = `t0` + learned median for this train's class/behaviour (with `dwell` included when it calls).
+- `held: true` once `now > eta + max(30 s, p90 − median)` with no step: the train is waiting.
+- Trains without a span keep phase-1 `lat/lon` only.
+
+## 12. Client motion (page) — the anti-jump rules (brief §"Continuous movement")
+
+- Render clock = server clock − **10 s** (configurable). Position = function of render time along
+  the current span: constant speed for a pass; decelerate → dwell at `stop` → accelerate for a call.
+- Never pass the span end before the next step is known: ease to a stop ~30 m short and wait.
+- On the next step: re-time the remaining distance so the train reaches the boundary at the step's
+  `t0` (it usually arrives inside the 10 s window, so this is a gentle speed change).
+- Step known late (train drawn behind): catch up at ≤ 1.5× current speed; never move backwards;
+  if > 2 km off, fade out and in.
+- Identity continuity (renumbering, area handover) is already the same `id`: keep the object.
+- **Replay harness** (`map/test/motion-replay.js`): runs recorded service output (§13) through
+  the same motion code and reports: share of steps absorbed by re-timing alone, catch-up speeds,
+  backward moves (must be 0), fades per train-hour. Targets: ≥ 90 %, ≤ 1.5×, 0, < 0.1.
+
+## 13. Recording for the harness
+
+`GET /map/v1/debug/record?secs=600&bbox=` (loopback only, never through Caddy): streams the
+service's own update events as JSONL for the harness. The service also keeps a rolling 1-hour
+JSONL of updates for the Sussex box in `MAP_DATA_DIR/record/` (bounded, rotated).
+
+## 14. TRUST and VSTP (service)
+
+- Own STOMP subscriptions to `/topic/TRAIN_MVT_ALL_TOC` and `/topic/VSTP_ALL` on the existing
+  connection (same hardened client; separate subscription handlers isolated by try/catch).
+- **Activation (0001):** `train_id`, `train_uid`, `schedule_start_date` → links a TRUST train to
+  its exact schedule. A TD headcode matches a TRUST activation when the headcode equals
+  `train_id[2..6)` and the TD area covers the activation's origin or a later movement's STANOX.
+  Exact UID beats the phase-1 time match.
+- **Movement (0003):** arrival/departure/pass at a STANOX → the schedule's calling point gets
+  `actual`, `variation` (minutes, signed), `platform`; the train gets `late` (minutes) and
+  `lastReport: {name, event, time}`.
+- **Cancellation (0002) / reinstatement (0005) / change of origin (0006) / identity (0007):**
+  applied to the train and its schedule.
+- **VSTP:** Create/Delete merged into the day's index with the same STP rules as CIF.
+- `Train.svc` gains `late` (signed minutes, absent if unknown) and `next: {name, time, exp}`
+  (the next station and its booked and expected time — the details panel's top line).
+- `GET /map/v1/train/:id` `service.calls[]` gains `actualArr/actualDep/actualPass`,
+  `expArr/expDep` (booked + current lateness, never earlier than now), `platformActual`, `cancelled`.
+- `GET /map/v1/station/:crs` → `{station, board: [{trainId|null, hc, uid, toc, o, d, kind:
+  "arr"|"dep"|"pass", booked, expected, actual, platform, late, cancelled}], recent: [{hc, kind,
+  time, late}]}`: next 2 h and last 30 min, freight and ECS included.
+
+## 15. Done means (phase 2)
+
+- Every placed train draws on real track at every zoom; the national view shows the network.
+- The motion replay meets §12's targets on a recorded hour of the live Sussex box.
+- TRUST: next station + time and lateness on every matched passenger train; station boards live.
+- Memory: service ≤ 220 MB steady, ≤ 260 MB peak during the daily CIF refresh, measured on the VPS.
