@@ -62,6 +62,24 @@
     return s[s.length - 1][1];
   }
 
+  // From this zoom up a train is drawn at its real-world length, in metres, so it keeps a believable
+  // scale against the street map (about a 4-car unit). Below it the pixel sizes above apply, and the
+  // two cross-fade over one zoom level so nothing pops.
+  var METRES_FROM = 15, FADE_ZOOMS = 1, TRAIN_LENGTH_M = 80, TRAIN_WIDTH_M = 8;   // width exaggerated x3 so it reads
+  function metresPerPixel(zoom, lat) {
+    return 40075016.686 * Math.cos(lat * Math.PI / 180) / (512 * Math.pow(2, zoom));   // MapLibre: 512 px tiles
+  }
+  // 0 = all pixel-sized, 1 = all metre-sized
+  function metreMix(zoom) {
+    var f = (zoom - (METRES_FROM - FADE_ZOOMS / 2)) / FADE_ZOOMS;
+    return f < 0 ? 0 : f > 1 ? 1 : f;
+  }
+  // On-screen length of a train in pixels, whichever mode it is in (labels and rings key off this).
+  function trainLenPx(zoom, lat) {
+    var f = metreMix(zoom), px = trainSizePx(zoom);
+    return f === 0 ? px : px * (1 - f) + (TRAIN_LENGTH_M / metresPerPixel(zoom, lat)) * f;
+  }
+
   function hexToRgb(hex) {
     var n = parseInt(hex.slice(1), 16);
     return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
@@ -111,7 +129,9 @@
         lat: t.lat, lon: t.lon, hdg: t.hdg == null ? null : t.hdg,
         area: t.area, berth: t.berth, at: t.at, pl: t.pl, svc: t.svc || null,
         fx: t.lon, fy: t.lat, fh: hdg, tx: t.lon, ty: t.lat, th: hdg, t0: now, dur: 0,
-        cx: t.lon, cy: t.lat, ch: hdg
+        cx: t.lon, cy: t.lat, ch: hdg,
+        lh: t.hdg == null ? NaN : t.hdg,     // last heading we were ever given: a stopped train keeps pointing the way it came
+        hf: NaN, hfX: NaN, hfY: NaN         // heading read from the railway line under it (set by the page), for trains with none
       };
     }
     function upsert(t, now) {
@@ -129,6 +149,7 @@
         if (dur > 0 && now + dur > animUntil) animUntil = now + dur;
       }
       if (r.hc !== t.hc) { r.hc = t.hc; r.cls = classes.classOf(t.hc); r.clsIdx = classes.indexOfClass(r.cls); }
+      if (t.hdg != null) r.lh = t.hdg;
       r.lat = t.lat; r.lon = t.lon; r.hdg = t.hdg == null ? null : t.hdg;
       r.area = t.area; r.berth = t.berth; r.at = t.at; r.pl = t.pl; r.svc = t.svc || null;
     }
@@ -186,7 +207,12 @@
           var i2 = n * 2;
           pos[i2] = r.cx; pos[i2 + 1] = r.cy;
           var k = 0;
-          if (r.ch !== r.ch) { ang[n] = 0; k |= KIND_NODIR; } else ang[n] = -r.ch;   // deck turns anticlockwise
+          // Which way to point: the live heading; else the last one we were told (it just stopped);
+          // else the line under it (a symmetric shape: the direction is only known up to 180 degrees).
+          var hd = r.ch === r.ch ? r.ch : r.lh === r.lh ? r.lh : NaN;
+          if (hd === hd) ang[n] = -hd;                                              // deck turns anticlockwise
+          else if (r.hf === r.hf) { ang[n] = -r.hf; k |= KIND_NODIR; }
+          else { ang[n] = 0; k |= KIND_NODIR; }
           if (r.pl === 'i' || r.pl === 'a') k |= KIND_EST;
           if (r.pl === 'a') { k |= KIND_APPROX; apos[na * 2] = r.cx; apos[na * 2 + 1] = r.cy; na++; }
           kind[n] = k;
@@ -203,7 +229,8 @@
 
   var api = {
     lerpAngle: lerpAngle, easeInOutSine: easeInOutSine, glideModel: glideModel,
-    trainSizePx: trainSizePx, createStore: createStore, hexToRgb: hexToRgb,
+    trainSizePx: trainSizePx, metresPerPixel: metresPerPixel, metreMix: metreMix, trainLenPx: trainLenPx,
+    METRES_FROM: METRES_FROM, TRAIN_LENGTH_M: TRAIN_LENGTH_M, TRAIN_WIDTH_M: TRAIN_WIDTH_M, createStore: createStore, hexToRgb: hexToRgb,
     KIND_NODIR: KIND_NODIR, KIND_EST: KIND_EST, KIND_APPROX: KIND_APPROX
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

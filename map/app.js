@@ -63,7 +63,11 @@
   }
   fitGB();
 
-  map.on('style.load', function () { L.addRailLayers(map, theme); });
+  map.on('style.load', function () {
+    placeIds = null;
+    L.addRailLayers(map, theme);
+    L.applyStylePlan(map, RM.style.planStyle(map.getStyle(), theme));
+  });
   // The OpenFreeMap tile server is the one thing the page cannot do without; say so plainly.
   map.on('error', function (e) {
     if (e && e.error && /Failed to fetch|NetworkError|Load failed/i.test(String(e.error.message || e.error))) tileTrouble();
@@ -91,7 +95,6 @@
   var viewBox = geo.GB_BBOX.slice();
   var stCache = { zb: -1, box: null, dots: [], names: [], theme: null };
   var pendingStation = null;
-  var ringPos = [0, 0];
   var debug = RM.debug = { keepAnimating: false, intervals: [], js: [], maxSamples: 600 };
 
   // ---- panel ----------------------------------------------------------------------------------------
@@ -113,34 +116,176 @@
       var s = stations[i];
       if (!geo.inBbox(box, s.lat, s.lon)) continue;
       if (s.dotMin <= zoom) dots.push(s);
-      if (s.nameMin <= zoom) names.push(s);
+      if (s.nameMin <= zoom && !basemapHasLabel(s)) { names.push(s); s.lo = [9, 0]; s.la = 'start'; s.lb = 'center'; }
     }
-    // Keep the most important names that do not overlap one another (screen positions as of now;
-    // a pan only translates them, a zoom change re-runs this).
-    var boxes = names.map(function (s) {
-      var p = map.project(s.pos), size = s.tier === 1 ? 14 : s.tier === 2 ? 12.5 : 11.5;
-      return { x: p.x + 9, y: p.y - size / 2 - 1, w: DC.textWidth(s.name, size), h: size + 2, prio: (4 - s.tier) * 100 - s.name.length * 0.01, ref: s };
-    });
-    stCache = { zb: zb, box: box, dots: dots, names: DC.place(boxes, 3), theme: theme };
+    // Below the label zoom: keep the most important names that do not overlap one another (screen
+    // positions as of now; a pan only translates them, a zoom change re-runs this). From the label
+    // zoom up, placeLabels() redoes it every frame so names also keep clear of trains.
+    var kept = names;
+    if (zoom < LABEL_MIN_ZOOM) {
+      kept = DC.place(names.map(function (s) {
+        var p = map.project(s.pos), size = nameSize(s);
+        return { x: p.x + 9, y: p.y - size / 2 - 1, w: DC.textWidth(s.name, size), h: size + 2, prio: (4 - s.tier) * 100 - s.name.length * 0.01, ref: s };
+      }), 3);
+    }
+    stCache = { zb: zb, box: box, dots: dots, names: kept, theme: theme };
     return stCache;
   }
+  // The base map labels towns itself; where it already prints this station's name beside the dot,
+  // ours would be the same word twice ("Chichester Chichester"), so we leave ours out and keep the dot.
+  var placeIds = null;
+  function placeLayerIds() {
+    if (placeIds) return placeIds;
+    var st = map.getStyle();
+    placeIds = ((st && st.layers) || []).filter(function (l) { return l['source-layer'] === 'place' && l.type === 'symbol'; })
+      .map(function (l) { return l.id; });
+    return placeIds;
+  }
+  function basemapHasLabel(s) {
+    var ids = placeLayerIds();
+    if (!ids.length) return false;
+    var p = map.project(s.pos), feats;
+    try { feats = map.queryRenderedFeatures([[p.x - 60, p.y - 24], [p.x + 130, p.y + 24]], { layers: ids }); } catch (e) { return false; }
+    var n = ST.norm(s.name);
+    for (var i = 0; i < feats.length; i++) {
+      var pn = ST.norm(feats[i].properties.name || '');
+      if (pn && (pn === n || (pn.length >= 4 && (n.indexOf(pn) === 0 || pn.indexOf(n) === 0)))) return true;
+    }
+    return false;
+  }
+  function nameSize(s) { return s.tier === 1 ? 14 : s.tier === 2 ? 12.5 : 11.5; }
+  function bearingOf(r) { return r.ch === r.ch ? r.ch : r.lh === r.lh ? r.lh : r.hf === r.hf ? r.hf : 0; }
 
-  var labelRecs = [];
+  // A train with no heading at all is turned to run along the railway line underneath it, read back
+  // from the map's own rail layer (a few per frame; the answer is kept until the train moves).
+  function railBearingAt(lon, lat) {
+    var p = map.project([lon, lat]);
+    var feats;
+    try { feats = map.queryRenderedFeatures([[p.x - 14, p.y - 14], [p.x + 14, p.y + 14]], { layers: ['rm-rail'] }); } catch (e) { return NaN; }
+    var cosLat = Math.cos(lat * Math.PI / 180), best = Infinity, brg = NaN;
+    for (var i = 0; i < feats.length; i++) {
+      var g = feats[i].geometry;
+      var lines = g.type === 'LineString' ? [g.coordinates] : g.type === 'MultiLineString' ? g.coordinates : [];
+      for (var k = 0; k < lines.length; k++) {
+        var ln = lines[k];
+        for (var j = 1; j < ln.length; j++) {
+          var ax = (ln[j - 1][0] - lon) * cosLat, ay = ln[j - 1][1] - lat, bx = (ln[j][0] - lon) * cosLat, by = ln[j][1] - lat;
+          var dx = bx - ax, dy = by - ay, len2 = dx * dx + dy * dy;
+          var t = len2 ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / len2)) : 0;
+          var px = ax + t * dx, py = ay + t * dy, d = px * px + py * py;
+          if (d < best) { best = d; brg = (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 180; }
+        }
+      }
+    }
+    return brg;
+  }
+  function updateRailHeadings(buf, zoom) {
+    if (zoom < 9) return;
+    var budget = 6;
+    for (var i = 0; i < buf.n && budget > 0; i++) {
+      var r = buf.order[i];
+      if (r.ch === r.ch || r.lh === r.lh) continue;
+      if (Math.abs(r.cx - r.hfX) < 2e-5 && Math.abs(r.cy - r.hfY) < 2e-5) continue;
+      budget--;
+      r.hfX = r.cx; r.hfY = r.cy;
+      r.hf = railBearingAt(r.cx, r.cy);
+    }
+  }
+
+  // Label placement from the label zoom up. In one pass, in priority order: the selected train's
+  // code, then station names, then the other trains' codes. Each tries a few positions (beside the
+  // train, either side, then off its ends; to the right/above/below/left of a station dot) and takes
+  // the first that is clear of every train body, every station dot and every label already placed.
+  // Returns the station names and the train records that found a place, with their offsets set.
+  function placeLabels(buf, zoom, sd, selTrainId) {
+    var vb = geo.padBbox(viewBox, 0.05);
+    var lat = (viewBox[0] + viewBox[2]) / 2;
+    var lenPx = motion.trainLenPx(zoom, lat), mix = motion.metreMix(zoom);
+    var widPx = Math.max(7, lenPx * (mix >= 0.5 ? 0.1 : 0.375));
+    var fixed = [], items = [], trainRecs = [];
+    var dotScale = zoom < 7 ? 0.8 : zoom < 11 ? 1 : 1.35;
+    var i, r, p;
+    // train bodies as a row of small boxes along their axis
+    var side = Math.max(widPx, 8), steps = Math.max(1, Math.round(lenPx / side));
+    var inView = [];
+    for (i = 0; i < buf.n && inView.length < MAX_LABELS * 2; i++) {
+      r = buf.order[i];
+      if (r.cy < vb[0] || r.cy > vb[2] || r.cx < vb[1] || r.cx > vb[3]) continue;
+      p = map.project([r.cx, r.cy]);
+      var hd = bearingOf(r) * Math.PI / 180, tx = Math.sin(hd), ty = -Math.cos(hd);
+      inView.push({ r: r, x: p.x, y: p.y, tx: tx, ty: ty });
+      for (var k = 0; k < steps; k++) {
+        var o = (k + 0.5) / steps * lenPx - lenPx / 2;
+        fixed.push({ x: p.x + tx * o - side / 2, y: p.y + ty * o - side / 2, w: side, h: side });
+      }
+    }
+    for (i = 0; i < sd.dots.length; i++) {
+      var s0 = sd.dots[i];
+      if (s0.lat < vb[0] || s0.lat > vb[2] || s0.lon < vb[1] || s0.lon > vb[3]) continue;
+      p = map.project(s0.pos);
+      var rad = s0.r * dotScale + 1;
+      fixed.push({ x: p.x - rad, y: p.y - rad, w: rad * 2, h: rad * 2 });
+    }
+    // station names
+    for (i = 0; i < sd.names.length; i++) {
+      var s = sd.names[i];
+      if (s.lat < vb[0] || s.lat > vb[2] || s.lon < vb[1] || s.lon > vb[3]) continue;
+      p = map.project(s.pos);
+      var size = nameSize(s), w = DC.textWidth(s.name, size), hh = size + 2, off = Math.ceil(s.r * dotScale) + 5;
+      items.push({ w: w, h: hh, prio: (4 - s.tier) * 100 - s.name.length * 0.01, ref: s, kind: 'st',
+        alts: [
+          { x: p.x + off, y: p.y - hh / 2, lo: [off, 0], la: 'start', lb: 'center' },
+          { x: p.x - w / 2, y: p.y - off - hh, lo: [0, -off - hh / 2], la: 'middle', lb: 'center' },
+          { x: p.x - w / 2, y: p.y + off, lo: [0, off + hh / 2], la: 'middle', lb: 'center' },
+          { x: p.x - off - w, y: p.y - hh / 2, lo: [-off, 0], la: 'end', lb: 'center' },
+          // further out, clear of a train standing at the station (they sit on the station point)
+          { x: p.x - w / 2, y: p.y - off - 10 - hh, lo: [0, -off - 10 - hh / 2], la: 'middle', lb: 'center' },
+          { x: p.x - w / 2, y: p.y + off + 10, lo: [0, off + 10 + hh / 2], la: 'middle', lb: 'center' },
+          { x: p.x - w / 2, y: p.y - off - 0.25 * lenPx - 8 - hh, lo: [0, -off - 0.25 * lenPx - 8 - hh / 2], la: 'middle', lb: 'center' },
+          { x: p.x - w / 2, y: p.y + off + 0.25 * lenPx + 8, lo: [0, off + 0.25 * lenPx + 8 + hh / 2], la: 'middle', lb: 'center' }
+        ] });
+    }
+    // train codes
+    var lsz = 12.5, lh = lsz + 3;
+    for (i = 0; i < inView.length; i++) {
+      var v = inView[i], rr = v.r;
+      var text = rr.pl === 's' ? rr.hc : rr.hc + ' ~', lw = DC.textWidth(text, lsz);
+      var nx = -v.ty, ny = v.tx;                           // unit normal to the train's axis
+      if (ny < 0 || (Math.abs(ny) < 1e-6 && nx < 0)) { nx = -nx; ny = -ny; }   // prefer the side below / to the right
+      var dSide = widPx / 2 + 6 + 0.21 * side + Math.abs(nx) * lw / 2 + Math.abs(ny) * lh / 2;
+      var dEnd = lenPx / 2 + 5 + Math.abs(v.tx) * lw / 2 + Math.abs(v.ty) * lh / 2;
+      var cand = [[nx * dSide, ny * dSide], [-nx * dSide, -ny * dSide], [v.tx * dEnd, v.ty * dEnd], [-v.tx * dEnd, -v.ty * dEnd]];
+      items.push({ w: lw, h: lh, prio: rr.id === selTrainId ? 1000 : 10 - rr.clsIdx, ref: rr, kind: 'tr',
+        alts: cand.map(function (c) { return { x: v.x + c[0] - lw / 2, y: v.y + c[1] - lh / 2, lo: [c[0], c[1]] }; }) });
+    }
+    var res = DC.placeAlt(items, fixed, 2);
+    var names = [];
+    var byRef = new Map();
+    for (i = 0; i < items.length; i++) byRef.set(items[i].ref, items[i]);
+    for (i = 0; i < res.length && trainRecs.length < MAX_LABELS; i++) {
+      var it = byRef.get(res[i].ref), alt = it.alts[res[i].alt];
+      if (it.kind === 'st') { it.ref.lo = alt.lo; it.ref.la = alt.la; it.ref.lb = alt.lb; names.push(it.ref); }
+      else { it.ref.lo = alt.lo; if (!it.ref.pos) it.ref.pos = [0, 0]; it.ref.pos[0] = it.ref.cx; it.ref.pos[1] = it.ref.cy; trainRecs.push(it.ref); }
+    }
+    return { names: names, trains: trainRecs };
+  }
+
   function frame() {
     rafId = 0;
     var t0 = performance.now();
     var zoom = map.getZoom();
     var selTrainId = sel.type === 'train' ? sel.id : null;
     var buf = store.fill(t0, hidden, selTrainId);
+    updateRailHeadings(buf, zoom);
     lastBuf = buf;
     frameN++;
-    var sizePx = motion.trainSizePx(zoom);
     var layers = [];
+    var lat = (viewBox[0] + viewBox[2]) / 2;
+    var labelled = zoom >= LABEL_MIN_ZOOM;
 
-    if (stations.length) {
-      var sd = stationData(zoom);
-      layers = layers.concat(L.stationLayers({ dots: sd.dots, names: sd.names, zoom: zoom, theme: theme }));
-    }
+    var sd = stations.length ? stationData(zoom) : null;
+    var placed = labelled && sd ? placeLabels(buf, zoom, sd, selTrainId) : null;
+    if (sd) layers = layers.concat(L.stationLayers({ dots: sd.dots, names: placed ? placed.names : sd.names, zoom: zoom, theme: theme, frame: frameN }));
 
     var rec = selTrainId ? store.get(selTrainId) : null;
     if (rec && sel.path) {
@@ -148,36 +293,24 @@
       last[0] = rec.cx; last[1] = rec.cy;
       layers = layers.concat(L.trailLayers({ path: sel.path, colour: classes.CLASSES[rec.cls].colour, theme: theme, frame: frameN }));
     }
-    if (buf.n > 0 || buf.na > 0) layers = layers.concat(L.trainLayers({ buf: buf, sizePx: sizePx, theme: theme, atlas: atlas }));
+    if (rec) {                                         // highlight under the selected train: same silhouette, same heading
+      if (!rec.pos) rec.pos = [0, 0];
+      rec.pos[0] = rec.cx; rec.pos[1] = rec.cy;
+      var known = rec.ch === rec.ch || rec.lh === rec.lh;
+      var shd = rec.ch === rec.ch ? rec.ch : rec.lh === rec.lh ? rec.lh : rec.hf === rec.hf ? rec.hf : 0;
+      rec.sa = -shd; rec.si = known ? 'sel' : 'selnodir';
+      layers = layers.concat(L.selectedTrain({ rec: rec, zoom: zoom, theme: theme, atlas: atlas, frame: frameN }));
+    }
+    if (buf.n > 0 || buf.na > 0) layers = layers.concat(L.trainLayers({ buf: buf, zoom: zoom, lat: lat, theme: theme, atlas: atlas }));
 
-    if (zoom >= LABEL_MIN_ZOOM) {
-      var bx = geo.padBbox(viewBox, 0.1), boxes = [], lsz = 12.5, yOff = sizePx * 0.62 + 4;
-      for (var i = 0; i < buf.n && boxes.length < MAX_LABELS * 2; i++) {
-        var r = buf.order[i];
-        if (r.cy < bx[0] || r.cy > bx[2] || r.cx < bx[1] || r.cx > bx[3]) continue;
-        var p = map.project([r.cx, r.cy]);
-        var text = r.pl === 's' ? r.hc : r.hc + ' ~';
-        var w = DC.textWidth(text, lsz);
-        boxes.push({ x: p.x - w / 2, y: p.y + yOff, w: w, h: lsz + 3, prio: r.id === selTrainId ? 1000 : 10 - r.clsIdx, ref: r });
-      }
-      labelRecs = DC.place(boxes, 2).slice(0, MAX_LABELS);
-      for (var j = 0; j < labelRecs.length; j++) {
-        var lr = labelRecs[j];
-        if (!lr.pos) lr.pos = [0, 0];
-        lr.pos[0] = lr.cx; lr.pos[1] = lr.cy;
-      }
-      if (labelRecs.length) {
-        layers.push(L.labelLayer({ recs: labelRecs, theme: theme, sizePx: sizePx, frame: frameN, version: store.version }));
-      }
+    if (placed && placed.trains.length) {
+      layers.push(L.labelLayer({ recs: placed.trains, theme: theme, frame: frameN, version: store.version }));
     }
 
     if (rec) {
-      ringPos[0] = rec.cx; ringPos[1] = rec.cy;
-      layers.push(L.selectedRing({ pos: ringPos, sizePx: sizePx, theme: theme, frame: frameN }));
       if (sel.follow) followTo(rec);
     } else if (sel.type === 'station' && stationByCrs[sel.crs]) {
-      var st = stationByCrs[sel.crs];
-      layers.push(L.selectedRing({ pos: st.pos, sizePx: 6, theme: theme, frame: 0 }));
+      layers.push(L.selectedRing({ pos: stationByCrs[sel.crs].pos, radius: 11, theme: theme }));
     }
 
     overlay.setProps({ layers: layers });
@@ -219,6 +352,10 @@
   map.on('moveend', function () { viewBox = geo.clampBbox(geo.boundsToBbox(map.getBounds())); api.setBbox(viewBox); request(); });
   map.on('dragstart', function () { if (sel.follow) setFollow(false); });
   map.on('style.load', request);
+  // Base-map labels settle after the tiles do; then re-check which station names it already prints.
+  var settle = false;
+  map.on('moveend', function () { settle = true; });
+  map.on('idle', function () { if (settle) { settle = false; stCache.zb = -1; request(); } });
 
   // ---- picking ------------------------------------------------------------------------------------
   // The end of a drag must not count as a click on the map (it would close the panel).
@@ -234,7 +371,7 @@
   function onDeckClick(info) {
     if (dragged) { dragged = false; return false; }
     var id = info && info.layer && info.layer.id;
-    if (id === 'trains' && info.index >= 0 && lastBuf) {
+    if (L.TRAIN_PICK_IDS.indexOf(id) >= 0 && info.index >= 0 && lastBuf) {
       var r = lastBuf.order[info.index];
       if (r) { selectTrain(r.id, { fly: false }); return true; }
     }
@@ -244,7 +381,7 @@
   }
   function onDeckHover(info) {
     var id = info && info.layer && info.layer.id;
-    var over = (id === 'trains' && info.index >= 0) || (id === 'station-dots' && info.object);
+    var over = (L.TRAIN_PICK_IDS.indexOf(id) >= 0 && info.index >= 0) || (id === 'station-dots' && info.object);
     map.getCanvas().style.cursor = over ? 'pointer' : '';
   }
 

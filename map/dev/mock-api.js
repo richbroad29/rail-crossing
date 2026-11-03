@@ -16,6 +16,7 @@
 //   GET /__mock/set?stale=1      feedStale: true on every response
 //   GET /__mock/set?sse503=1     /stream answers 503 (forces the polling fallback)
 //   GET /__mock/set?down=1       every /map/v1 route answers 503
+//   GET /__mock/set?freeze=1     stop the simulation clock (freeze=0 resumes)
 //   GET /__mock/set?stale=0&sse503=0&down=0   back to normal
 //
 // DEVELOPMENT ONLY: unlike the real service it sends Access-Control-Allow-Origin: * itself,
@@ -125,6 +126,9 @@ function pickClass() {
   return 'special';
 }
 
+// The simulation clock. `freeze=1` stops it (for screenshots: a train that is standing stays standing).
+let frozenAt = 0;
+const NOW = () => frozenAt || Date.now();
 let nextId = 1, globalVer = 1;
 const TRAINS = new Map();
 
@@ -145,7 +149,7 @@ function buildSchedule(crsList, stopsSet, speed, dwell) {
   return { sched, total: t };
 }
 
-function makeTrain(route, now) {
+function makeTrain(route, now, phase) {
   const cls = route.cls || pickClass();
   const speed = cls === 'express' ? 30 + rnd() * 10 : cls === 'freight' ? 14 + rnd() * 6 : 18 + rnd() * 10;
   const stopsSet = route.stops ? new Set(route.stops) : null;
@@ -158,7 +162,7 @@ function makeTrain(route, now) {
   const t = {
     id: 't' + (nextId++).toString(36) + Math.floor(rnd() * 36).toString(36),
     cls, hc, speed, fwd, rev, layover,
-    lapLen: lap, startedAt: now - rnd() * lap * 2 + 120000,
+    lapLen: lap, startedAt: now - phase * lap * 2 * 1000,        // phase 0..1 through the out-and-back cycle (lap is in seconds)
     area: route.all.every((c) => ['VIC', 'CLJ', 'ECR', 'GTW', 'TBD', 'HHE', 'BTN', 'HOV', 'PLD'].includes(c)) ? 'LA' : pick(AREAS),
     toc: pick(tocs), hasSvc: cls !== 'special' && rnd() > 0.1, noHdg: rnd() < 0.03, approx: rnd() < 0.05,
     prev: rnd() < 0.12 ? [headcode(cls)] : [],
@@ -178,6 +182,11 @@ function makeTrain(route, now) {
 }
 
 // Where the train really is at `now`: { lat, lon, hdg, dwelling, stationIdx, between:[i,j], speedMs, dirFwd, lapStart }
+function dwellHdg(S, i) {
+  const a = S.sched, here = a[i].st;
+  if (i > 0) return geo.bearing(a[i - 1].st.lat, a[i - 1].st.lon, here.lat, here.lon);
+  return a.length > 1 ? geo.bearing(here.lat, here.lon, a[1].st.lat, a[1].st.lon) : null;
+}
 function truth(t, now) {
   const el = (now - t.startedAt) / 1000;
   const lapNo = Math.floor(el / t.lapLen);
@@ -187,11 +196,11 @@ function truth(t, now) {
   const lapStart = now - lt * 1000;
   if (lt >= S.total) {
     const st = S.sched[S.sched.length - 1].st;
-    return { lat: st.lat, lon: st.lon, hdg: null, dwelling: true, idx: S.sched.length - 1, S, dirFwd, lapStart, speedMs: 0, lt };
+    return { lat: st.lat, lon: st.lon, hdg: dwellHdg(S, S.sched.length - 1), dwelling: true, idx: S.sched.length - 1, S, dirFwd, lapStart, speedMs: 0, lt };
   }
   for (let i = 0; i < S.sched.length; i++) {
     const c = S.sched[i];
-    if (lt >= c.arr && lt < c.dep) return { lat: c.st.lat, lon: c.st.lon, hdg: null, dwelling: true, idx: i, S, dirFwd, lapStart, speedMs: 0, lt };
+    if (lt >= c.arr && lt < c.dep) return { lat: c.st.lat, lon: c.st.lon, hdg: dwellHdg(S, i), dwelling: true, idx: i, S, dirFwd, lapStart, speedMs: 0, lt };
     const n = S.sched[i + 1];
     if (n && lt >= c.dep && lt < n.arr) {
       const f = (lt - c.dep) / (n.arr - c.dep);
@@ -203,7 +212,7 @@ function truth(t, now) {
     }
   }
   const last = S.sched[S.sched.length - 1].st;
-  return { lat: last.lat, lon: last.lon, hdg: null, dwelling: true, idx: S.sched.length - 1, S, dirFwd, lapStart, speedMs: 0, lt };
+  return { lat: last.lat, lon: last.lon, hdg: dwellHdg(S, S.sched.length - 1), dwelling: true, idx: S.sched.length - 1, S, dirFwd, lapStart, speedMs: 0, lt };
 }
 
 // Report a new position if it is time (a "berth step"): at its own cadence, or when it stops/starts.
@@ -214,6 +223,14 @@ function advance(t, now, force) {
   t.lastKey = key;
   t.nextStepAt = now + t.stepEvery * (0.7 + rnd() * 0.6);
   let lat = tr.lat, lon = tr.lon, pl = tr.dwelling ? 's' : 'i';
+  if (tr.dwelling && tr.hdg != null) {
+    // A stopped train sits on its platform: fan platforms out 35 m apart, square to the way it faces,
+    // so several trains at one big station sit side by side instead of on one point.
+    const plat = parseInt(tr.S.sched[tr.idx].platform, 10) || 1;
+    const d = (plat - 3.5) * 0.035, h = (tr.hdg + 90) * Math.PI / 180;
+    lat += d * Math.cos(h) / 111.2;
+    lon += d * Math.sin(h) / (111.2 * Math.cos(lat * Math.PI / 180));
+  }
   if (t.approx) { pl = 'a'; lat += (rnd() - 0.5) * 0.004; lon += (rnd() - 0.5) * 0.006; }
   // Moving trains: the last berth's centre is behind the true position; coarsen to ~12 s steps.
   t.lat = +lat.toFixed(5); t.lon = +lon.toFixed(5);
@@ -230,7 +247,7 @@ function advance(t, now, force) {
 }
 
 function toWire(t) {
-  const tr = truth(t, Date.now());
+  const tr = truth(t, NOW());
   const o = {
     id: t.id, hc: t.hc, lat: t.lat, lon: t.lon, hdg: t.hdg, area: t.area,
     berth: t.berths.length ? t.berths[t.berths.length - 1].berth : '0000', at: t.at, pl: t.pl
@@ -253,7 +270,7 @@ const clockFmt = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-
 function clock(ms) { return clockFmt.format(new Date(ms)).replace(/^24/, '00'); }
 
 function detail(t) {
-  const now = Date.now();
+  const now = NOW();
   const tr = truth(t, now);
   const S = tr.S.sched;
   const w = toWire(t);
@@ -283,20 +300,55 @@ function detail(t) {
 }
 
 // ---- population ---------------------------------------------------------------------------------
+// Spread trains out: every route gets its trains evenly staggered round its out-and-back cycle, and a
+// new train is only accepted if it is at least MIN_SPACING_KM from every train already running, so
+// the screenshots show trains on lines rather than a heap at each terminus. (Reported positions
+// are snapped to stations, so trains can still share a station briefly as the simulation runs.)
+const MIN_SPACING_KM = 0.4;
+let spawnCount = 0;
+const routeUse = new Map();
+let positions = [];                                  // [lat, lon] of every running train as of `now`
+function snapshotPositions(now) {
+  positions = [];
+  TRAINS.forEach((t) => { const q = truth(t, now); positions.push([q.lat, q.lon]); });
+}
+function tooClose(q) {
+  const kx = 111.2 * Math.cos(q.lat * Math.PI / 180);
+  for (let i = 0; i < positions.length; i++) {
+    const dy = (positions[i][0] - q.lat) * 111.2, dx = (positions[i][1] - q.lon) * kx;
+    if (dx * dx + dy * dy < MIN_SPACING_KM * MIN_SPACING_KM) return true;
+  }
+  return false;
+}
 function spawn(now) {
-  let route;
-  if (!NATIONAL || TRAINS.size < SUSSEX.length * 3) route = pick(SUSSEX);
-  else {
+  let route, slots;
+  if (!NATIONAL || spawnCount < SUSSEX.length * 3) {
+    route = SUSSEX[spawnCount % SUSSEX.length];
+    slots = NATIONAL ? 3 : Math.max(1, Math.ceil(COUNT / SUSSEX.length));
+  } else {
     const cls = pickClass();
     route = { cls, stops: cls === 'express' ? null : cls === 'stopping' ? null : [], all: randomChain(cls) };
     if (cls === 'express') route.stops = [route.all[0], route.all[Math.floor(route.all.length / 2)], route.all[route.all.length - 1]];
+    slots = 1;
   }
-  const t = makeTrain(route, now);
+  spawnCount++;
+  const key = route.all.join('-');
+  const n = routeUse.get(key) || 0;
+  routeUse.set(key, n + 1);
+  let t = null, q = null;
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const phase = attempt === 0 ? ((n % slots) + 0.5) / slots * 0.5 + rnd() * 0.02 : rnd();
+    t = makeTrain(route, now, phase);
+    q = truth(t, now);
+    if (!tooClose(q)) break;
+    if (attempt === 39 && process.env.MOCK_DEBUG) process.stderr.write('spawn gave up on spacing: ' + route.all[0] + '-' + route.all.at(-1) + ' n=' + positions.length + '\n');
+  }
   TRAINS.set(t.id, t);
+  positions.push([q.lat, q.lon]);
   return t;
 }
 (function init() {
-  const now = Date.now();
+  const now = NOW();
   for (let i = 0; i < COUNT; i++) spawn(now);
   process.stderr.write('mock: ' + TRAINS.size + ' trains' + (NATIONAL ? ' (national)' : ' (Sussex)') + '\n');
 })();
@@ -315,7 +367,7 @@ function parseBbox(q) {
 
 let tickN = 0;
 setInterval(() => {
-  const now = Date.now();
+  const now = NOW();
   tickN++;
   TRAINS.forEach((t) => advance(t, now, false));
   // Churn: now and then one train ends and another starts.
@@ -323,6 +375,7 @@ setInterval(() => {
     const ids = Array.from(TRAINS.keys());
     const gone = ids[Math.floor(rnd() * ids.length)];
     TRAINS.delete(gone); removedSince.push(gone);
+    snapshotPositions(now);
     spawn(now);
   }
   clients.forEach((c) => {
@@ -362,6 +415,7 @@ const server = http.createServer((req, res) => {
 
   if (p === '/__mock/set') {
     ['stale', 'sse503', 'down'].forEach((k) => { if (u.searchParams.has(k)) flags[k] = u.searchParams.get(k) === '1'; });
+    if (u.searchParams.has('freeze')) frozenAt = u.searchParams.get('freeze') === '1' ? Date.now() : 0;
     return send(req, res, 200, flags);
   }
   if (!p.startsWith('/map/v1/')) return err(req, res, 404, 'Not found.');
