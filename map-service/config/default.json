@@ -1,0 +1,63 @@
+{
+  "host": "127.0.0.1",
+  "port": 3100,
+  "region": { "bbox": [49.8, -8.7, 60.95, 1.95], "_comment": "GB sanity box [south, west, north, east]: a placed position outside it is treated as unplaceable" },
+  "http": {
+    "maxSseClients": 300,
+    "coarseBboxDeg2": 25,
+    "coarseIntervalSecs": 10,
+    "batchMs": 1000,
+    "pingSecs": 20,
+    "sseMaxBufferBytes": 262144,
+    "feedStaleSecs": 120,
+    "gzipCacheEntries": 64,
+    "maxUrlChars": 2048
+  },
+  "td": {
+    "topic": "/topic/TD_ALL_SIG_AREA",
+    "connectTimeoutMs": 30000,
+    "silenceMs": 300000,
+    "backoffMinMs": 1000,
+    "backoffMaxMs": 60000,
+    "heartbeat": "15000,15000",
+    "clockToleranceMs": 900000
+  },
+  "model": {
+    "maxIdleSecs": 2700,
+    "cancelledKeepSecs": 120,
+    "handoverSecs": 90,
+    "handoverMaxKm": 40,
+    "maxTrains": 30000,
+    "maxCancelled": 20000,
+    "maxBerthKeys": 250000,
+    "recentBerths": 20,
+    "trailMax": 40,
+    "trailWindowSecs": 900,
+    "pruneIntervalSecs": 10,
+    "svcRecheckSecs": 120,
+    "gcIntervalSecs": 60
+  },
+  "placement": {
+    "maxHops": 14,
+    "minEdgeCount": 2,
+    "maxLearnedEdges": 400000,
+    "saveIntervalSecs": 600,
+    "replaceMinIntervalSecs": 5,
+    "minHeadingMetres": 20
+  },
+  "service": {
+    "matchWindowMins": 45,
+    "yesterdayUntilHour": 5
+  },
+  "reference": {
+    "smart": { "hour": 4, "minute": 40 },
+    "corpus": { "hour": 4, "minute": 40 },
+    "naptan": { "weekday": 6, "hour": 4, "minute": 20, "_comment": "weekday 0 = Monday .. 6 = Sunday" },
+    "cif": { "hour": 4, "minute": 50 },
+    "checkIntervalSecs": 30,
+    "retryMinSecs": 900,
+    "retryMaxSecs": 3600,
+    "minRows": { "smart": 1000, "corpus": 1000, "naptan": 500, "cif": 1000 }
+  },
+  "log": { "summarySecs": 300 }
+}
