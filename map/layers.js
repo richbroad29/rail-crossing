@@ -231,10 +231,10 @@
     if (b.na > 0 && o.zoom >= 10 && mix < 1) {
       out.push(new d.ScatterplotLayer({
         id: 'approx', data: { length: b.na, attributes: { getPosition: { value: b.apos, size: 2 } } },
-        radiusUnits: 'pixels', getRadius: lenPx * 0.95, stroked: true, filled: true, lineWidthUnits: 'pixels', getLineWidth: 1.2,
+        radiusUnits: 'pixels', getRadius: lenPx * 0.95, stroked: true, filled: false, lineWidthUnits: 'pixels', getLineWidth: 1.2,
         opacity: 1 - mix,
-        getFillColor: o.theme === 'dark' ? [255, 255, 255, 38] : [15, 23, 42, 38],
-        getLineColor: o.theme === 'dark' ? [255, 255, 255, 120] : [15, 23, 42, 120],
+        getFillColor: o.theme === 'dark' ? [255, 255, 255, 18] : [15, 23, 42, 18],
+        getLineColor: o.theme === 'dark' ? [255, 255, 255, 90] : [15, 23, 42, 90],
         updateTriggers: { getRadius: lenPx }
       }));
     }

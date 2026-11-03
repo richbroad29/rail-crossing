@@ -8,7 +8,10 @@
 
   var DEFAULT_API = 'https://api.railcrossing.uk';
   var API_BASE = geo.resolveApiBase(location.search, DEFAULT_API);
-  var STYLE = { light: 'https://tiles.openfreemap.org/styles/liberty', dark: 'https://tiles.openfreemap.org/styles/dark' };
+  // Light base: OpenFreeMap "positron" (see style.js for the flattening applied on top). ?light=liberty
+  // is kept as a review switch so the two can be compared on the same view.
+  var LIGHT_BASE = new URLSearchParams(location.search).get('light') === 'liberty' ? 'liberty' : 'positron';
+  var STYLE = { light: 'https://tiles.openfreemap.org/styles/' + LIGHT_BASE, dark: 'https://tiles.openfreemap.org/styles/dark' };
   var LABEL_MIN_ZOOM = 11;
   var MAX_LABELS = 300;
   var FOLLOW_ZOOM = 12.5;
@@ -522,7 +525,7 @@
 
   function loadStations(attempt) {
     api.getStations().then(function (d) {
-      stations = (d.stations || []).map(function (s) {
+      stations = ST.cleanStations(d.stations).map(function (s) {
         var t = ST.tierOf(s);
         s.pos = [s.lon, s.lat]; s.tier = t; s.r = t === 1 ? 5.5 : t === 2 ? 4.2 : 3.4;
         s.dotMin = ST.dotMinZoom(s); s.nameMin = ST.nameMinZoom(s); s.prio = t === 1 ? -10 : t === 2 ? -20 : -30;

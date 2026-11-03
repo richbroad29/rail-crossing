@@ -111,3 +111,19 @@ test('declutter scales: 2,000 candidate labels in well under a frame', () => {
   assert.ok(kept.length > 100 && kept.length < 2000);
   assert.ok(ms < 30, ms + ' ms');
 });
+
+test('cleanStations drops what the page cannot key by CRS (as the real service sends them)', () => {
+  const real = [
+    { tiploc: 'BRGHTN', crs: 'BTN', name: 'Brighton', lat: 50.829, lon: -0.141 },
+    { tiploc: 'CLPHMJ1', crs: '', name: 'Clapham Junction', lat: 51.46, lon: -0.17 },      // second TIPLOC, no CRS
+    { tiploc: 'ALSTON', crs: '', name: 'Alston', lat: 54.8, lon: -2.4 },                    // heritage line
+    { tiploc: 'BRGHTN2', crs: 'BTN', name: 'Brighton (again)', lat: 50.83, lon: -0.14 },    // repeated CRS: first wins
+    { tiploc: 'X', crs: 'XYZ', name: 'No position', lat: null, lon: 1 },
+    { tiploc: 'Y', crs: 'btn', name: 'Lower case', lat: 1, lon: 1 },
+    null
+  ];
+  const out = S.cleanStations(real);
+  assert.deepEqual(out.map((s) => s.crs), ['BTN']);
+  assert.equal(out[0].name, 'Brighton');
+  assert.deepEqual(S.cleanStations(undefined), []);
+});

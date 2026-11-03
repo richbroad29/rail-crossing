@@ -78,7 +78,7 @@
         var s = t.svc;
         return { type: 'train', id: t.id, hc: t.hc, route: s ? classes.titleCase(s.o) + ' to ' + classes.titleCase(s.d) : 'Unknown route' };
       });
-      var stations = S.searchStations(o.getStations(), q, 6).map(function (s) {
+      var stations = S.searchStations(o.getStations(), q, 6).filter(function (s) { return /^[A-Z]{3}$/.test(s.crs); }).map(function (s) {
         return { type: 'station', crs: s.crs, name: s.name, lat: s.lat, lon: s.lon };
       });
       return trains.concat(stations);
@@ -112,7 +112,7 @@
           var rt = (r.trains || []).map(function (t) {
             return { type: 'train', id: t.id, hc: t.hc, route: t.o && t.d ? classes.titleCase(t.o) + ' to ' + classes.titleCase(t.d) : 'Train' };
           });
-          var rs = (r.stations || []).map(function (s) { return { type: 'station', crs: s.crs, name: s.name, lat: s.lat, lon: s.lon }; });
+          var rs = S.cleanStations(r.stations).map(function (s) { return { type: 'station', crs: s.crs, name: s.name, lat: s.lat, lon: s.lon }; });
           items = merge(local, rt.concat(rs));
           remoteDone = true;
           render(true);

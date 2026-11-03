@@ -53,17 +53,17 @@ async function launch() {
   return chromium.launch({ executablePath: CFG.chrome, headless: true });
 }
 // Open the page and wait until trains have arrived.
-async function open(browser, opts = {}, hash = '') {
+async function open(browser, opts = {}, hash = '', query = '') {
   const ctx = await browser.newContext(Object.assign({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 }, opts));
   const page = await ctx.newPage();
   const errors = [];
   page.on('console', (m) => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
   page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
   page.on('requestfailed', (r) => { if (!(r.failure() && /ABORTED/.test(r.failure().errorText))) errors.push('requestfailed: ' + r.url().slice(0, 100)); });
-  await page.goto(PAGE + hash, { waitUntil: 'load' });
+  await page.goto(PAGE + query + hash, { waitUntil: 'load' });
   await page.waitForFunction(() => window.RM && RM.debug && RM.debug.store && RM.debug.store.size > 0, null, { timeout: 30000 });
   return { page, ctx, errors };
 }
 const shot = (page, name) => page.screenshot({ path: path.join(CFG.out, name + '.png') }).then(() => path.join(CFG.out, name + '.png'));
 
-module.exports = { CFG, API, PAGE, servers, setMock, launch, open, shot, REPO };
+module.exports = { CFG, API, PAGE, servers, startStatic, setMock, launch, open, shot, REPO };
