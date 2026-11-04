@@ -209,13 +209,13 @@
     }
 
     // ---- requests -----------------------------------------------------------------------------
-    function requestJson(path, signal) {
+    function requestJson(path, signal, timeoutMs) {
       var ctl = null, timer = null;
       var opts = { headers: { Accept: 'application/json' } };
       // Our own controller so every request has a deadline; a caller's signal is forwarded to it.
       if (Abort) {
         ctl = new Abort(); opts.signal = ctl.signal;
-        timer = setT(function () { try { ctl.abort(); } catch (e) { /* ignore */ } }, cfg.requestTimeoutMs);
+        timer = setT(function () { try { ctl.abort(); } catch (e) { /* ignore */ } }, timeoutMs || cfg.requestTimeoutMs);
         if (signal) {
           if (signal.aborted) ctl.abort();
           else signal.addEventListener('abort', function () { try { ctl.abort(); } catch (e) { /* ignore */ } });
@@ -293,6 +293,22 @@
         });
       },
       getStations: function () { return requestJson('stations'); },
+      // One berth's track geometry (immutable per id). null when the service does not know it.
+      getSpan: function (id) {
+        return requestJson('span/' + encodeURIComponent(id)).catch(function (e) {
+          if (e && e.status === 404) return null;
+          throw e;
+        });
+      },
+      // The live board for one station. null when the code is unknown.
+      getStation: function (crs) {
+        return requestJson('station/' + encodeURIComponent(crs)).catch(function (e) {
+          if (e && e.status === 404) return null;
+          throw e;
+        });
+      },
+      // The national line layer, as GeoJSON. level: 'lo' (zoom <= 7) or 'hi' (zoom 8-11).
+      getNetwork: function (level) { return requestJson('network?level=' + (level === 'lo' ? 'lo' : 'hi'), null, 40000); },
       search: function (q, signal) { return requestJson('search?q=' + encodeURIComponent(q), signal); }
     };
     return self;

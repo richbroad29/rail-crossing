@@ -13,7 +13,8 @@
 (function (root) {
   'use strict';
 
-  var RM = root.RM;
+  // The page's other modules, looked up when needed (they load after this file's closure is built in tests).
+  var RM = { get motion() { return (root.RM || (typeof globalThis !== 'undefined' && globalThis.RM) || {}).motion; } };
 
   // ---- colours by theme ---------------------------------------------------------------------------
   var THEME = {
@@ -28,6 +29,7 @@
       rail: '#c3ccda', railCase: '#0a101c', railTie: '#0a101c', ring: [244, 114, 182, 255]
     }
   };
+  function deckRef() { return root.deck || (typeof globalThis !== 'undefined' && globalThis.deck); }
   var FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif';
 
   // ---- train icon atlas ---------------------------------------------------------------------------
@@ -141,39 +143,103 @@
   // visibly sits on a line. MEASURED against OpenFreeMap's tiles (2026-11): the vector tiles carry NO
   // rail at zoom 7 and below, one generalised network feature from zoom 8, and full detail from 9.
   // So the lines start at 8; nothing can be drawn from the tiles before that.
+  // THE RAILWAY LINES, AT EVERY ZOOM (owner's requirement 2026-11-03: continuous lines, branches and tunnels
+  // included, from the national view to the street).
+  //   zoom 0 - 8     network `lo`   (service: /network?level=lo, drawn from GeoJSON)
+  //   zoom 8 - 11    network `hi`   (/network?level=hi)
+  //   zoom 11 +      the base map's own rail layer (full detail in the tiles from here)
+  // Neighbouring pieces cross-fade over a short zoom range (FADE) with the SAME colour and the SAME width
+  // curve (WIDTH), so there is no seam where one hands over to the next. The tile layer alone lost the
+  // branch lines at zoom 8-9 (East Grinstead, Uckfield, Caterham) and had nothing below 8.
   var RAIL_IDS = ['rm-rail-case', 'rm-rail', 'rm-rail-ties'];
-  var RAIL_MIN_ZOOM = 8;
+  var NET_IDS = ['rm-net-lo-case', 'rm-net-lo', 'rm-net-hi-case', 'rm-net-hi'];
+  var NET_SOURCES = ['rm-net-lo', 'rm-net-hi'];
+  var LO_FADE = [7.7, 8.3], HI_FADE = [10.7, 11.4];
+  var RAIL_MIN_ZOOM = HI_FADE[0];
+  // Line width in px by zoom. Thin and calm when zoomed out (the national view must not be a scribble),
+  // and unchanged from the tile layer's own curve from zoom 8 up. `core` is the line, `case` the outline.
+  var WIDTH = {
+    core: [[3, 0.55], [5, 0.7], [6, 0.9], [7, 1.3], [8, 1.9], [10, 2.4], [13, 3.9], [16, 6], [19, 10]],
+    kase: [[3, 1.4], [5, 1.8], [6, 2.2], [7, 2.8], [8, 3.8], [10, 4.6], [13, 7], [16, 11], [19, 18]]
+  };
+  function widthExpr(stops) {
+    var e = ['interpolate', ['linear'], ['zoom']];
+    stops.forEach(function (p) { e.push(p[0], p[1]); });
+    return e;
+  }
+  // The base map's rail features. Tunnels are drawn exactly like open track: a train in a tunnel is
+  // still on the railway, and leaving them out made trains in Clayton Tunnel and on the Elizabeth line
+  // look as if they ran along the road above (owner's report, 2026-11-03). Test: layers.test.js.
+  function railFilter() {
+    return ['all', ['==', ['get', 'class'], 'rail'], ['!', ['has', 'service']]];
+  }
+  // opacity ramps: fade in over [a, b] / fade out over [a, b]
+  function fadeIn(r) { return ['interpolate', ['linear'], ['zoom'], r[0], 0, r[1], 0.92]; }
+  function fadeOut(r) { return ['interpolate', ['linear'], ['zoom'], r[0], 0.92, r[1], 0]; }
+  function fadeBoth(a, b) { return ['interpolate', ['linear'], ['zoom'], a[0], 0, a[1], 0.92, b[0], 0.92, b[1], 0]; }
+  function firstSymbolId(style) {
+    var before = null;
+    (style.layers || []).some(function (l) { if (l.type === 'symbol') { before = l.id; return true; } return false; });
+    return before;
+  }
+
   function addRailLayers(map, theme) {
     var style = map.getStyle();
     if (!style) return;
     var src = null;
     Object.keys(style.sources || {}).forEach(function (k) { if (!src && style.sources[k].type === 'vector') src = k; });
     if (!src) return;
-    var before = null;
-    (style.layers || []).some(function (l) { if (l.type === 'symbol') { before = l.id; return true; } return false; });
-    var T = THEME[theme];
-    // Tunnels are drawn exactly like open track. A train in a tunnel is still on the railway; leaving
-    // tunnels out made trains in Clayton Tunnel and on the Elizabeth line look as if they ran along
-    // the road above (owner's report, 2026-11-03).
-    var filter = ['all', ['==', ['get', 'class'], 'rail'], ['!', ['has', 'service']]];
+    var before = firstSymbolId(style);
+    var T = THEME[theme], filter = railFilter();
     RAIL_IDS.forEach(function (id) { if (map.getLayer(id)) map.removeLayer(id); });
     map.addLayer({
       id: 'rm-rail-case', type: 'line', source: src, 'source-layer': 'transportation', filter: filter, minzoom: RAIL_MIN_ZOOM,
       layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: { 'line-color': T.railCase, 'line-opacity': 0.92,
-        'line-width': ['interpolate', ['linear'], ['zoom'], 8, 3.8, 10, 4.6, 13, 7, 16, 11, 19, 18] }
+      paint: { 'line-color': T.railCase, 'line-opacity': fadeIn(HI_FADE), 'line-width': widthExpr(WIDTH.kase) }
     }, before || undefined);
     map.addLayer({
       id: 'rm-rail', type: 'line', source: src, 'source-layer': 'transportation', filter: filter, minzoom: RAIL_MIN_ZOOM,
       layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: { 'line-color': T.rail,
-        'line-width': ['interpolate', ['linear'], ['zoom'], 8, 1.9, 10, 2.4, 13, 3.9, 16, 6, 19, 10] }
+      paint: { 'line-color': T.rail, 'line-opacity': ['interpolate', ['linear'], ['zoom'], HI_FADE[0], 0, HI_FADE[1], 1], 'line-width': widthExpr(WIDTH.core) }
     }, before || undefined);
     map.addLayer({
       id: 'rm-rail-ties', type: 'line', source: src, 'source-layer': 'transportation', filter: filter, minzoom: 13.5,
       paint: { 'line-color': T.railTie, 'line-dasharray': [2, 3],
         'line-width': ['interpolate', ['linear'], ['zoom'], 13.5, 1.4, 16, 3, 19, 6] }
     }, before || undefined);
+  }
+
+  // The national line layer from the service. Sources are re-added after every style change (a theme
+  // switch replaces the style and drops them), from the data kept here.
+  var netData = { lo: null, hi: null };
+  // `always` (review aid, ?debugtrack=1): keep the service's own line drawn at every zoom, over the base map,
+  // so a train's alignment with the track the SERVICE knows can be checked against the mock's synthetic track.
+  function addNetworkLayers(map, theme, always) {
+    var style = map.getStyle();
+    if (!style) return;
+    var before = firstSymbolId(style), T = THEME[theme];
+    NET_IDS.forEach(function (id) { if (map.getLayer(id)) map.removeLayer(id); });
+    NET_SOURCES.forEach(function (id) { if (map.getSource(id)) map.removeSource(id); });
+    var empty = { type: 'FeatureCollection', features: [] };
+    ['lo', 'hi'].forEach(function (lvl) {
+      var sid = 'rm-net-' + lvl;
+      map.addSource(sid, { type: 'geojson', data: netData[lvl] || empty, tolerance: lvl === 'lo' ? 0.8 : 0.4 });
+      var minzoom = lvl === 'lo' ? 0 : LO_FADE[0], maxzoom = lvl === 'lo' ? LO_FADE[1] : (always ? 24 : HI_FADE[1]);
+      var op = lvl === 'lo' ? fadeOut(LO_FADE) : fadeBoth(LO_FADE, HI_FADE);
+      var opCore = lvl === 'lo' ? ['interpolate', ['linear'], ['zoom'], LO_FADE[0], 1, LO_FADE[1], 0]
+        : ['interpolate', ['linear'], ['zoom'], LO_FADE[0], 0, LO_FADE[1], 1, HI_FADE[0], 1, HI_FADE[1], 0];
+      if (always && lvl === 'hi') { op = ['interpolate', ['linear'], ['zoom'], LO_FADE[0], 0, LO_FADE[1], 0.92]; opCore = ['interpolate', ['linear'], ['zoom'], LO_FADE[0], 0, LO_FADE[1], 1]; }
+      var layout = { 'line-cap': 'round', 'line-join': 'round' };
+      map.addLayer({ id: sid + '-case', type: 'line', source: sid, minzoom: minzoom, maxzoom: maxzoom, layout: layout,
+        paint: { 'line-color': T.railCase, 'line-opacity': op, 'line-width': widthExpr(WIDTH.kase) } }, before || undefined);
+      map.addLayer({ id: sid, type: 'line', source: sid, minzoom: minzoom, maxzoom: maxzoom, layout: layout,
+        paint: { 'line-color': T.rail, 'line-opacity': opCore, 'line-width': widthExpr(WIDTH.core) } }, before || undefined);
+    });
+  }
+  function setNetworkData(map, level, geojson) {
+    netData[level === 'lo' ? 'lo' : 'hi'] = geojson;
+    var src = map.getSource('rm-net-' + (level === 'lo' ? 'lo' : 'hi'));
+    if (src && src.setData) src.setData(geojson);
   }
 
   // Apply the plan from style.js (hide station POIs, recolour dark labels, ...).
@@ -205,7 +271,7 @@
     // Same inputs as last frame: hand back the very same layer objects, so deck does no work.
     if (stationMemo && stationMemo.dots === o.dots && stationMemo.names === o.names &&
         stationMemo.scale === scale && stationMemo.theme === o.theme) return stationMemo.out;
-    var d = root.deck, T = THEME[o.theme], out = [];
+    var d = deckRef(), T = THEME[o.theme], out = [];
     out.push(new d.ScatterplotLayer({
       id: 'station-dots', data: o.dots, pickable: true,
       getPosition: stPos, getRadius: stRadius,
@@ -227,25 +293,16 @@
 
   // Trains. o: { buf, zoom, lat, theme, atlas }.
   function trainLayers(o) {
-    var d = root.deck, T = THEME[o.theme], b = o.buf, out = [];
+    var d = deckRef(), T = THEME[o.theme], b = o.buf, out = [];
     var mix = RM.motion.metreMix(o.zoom);
     var lenPx = RM.motion.trainLenPx(o.zoom, o.lat);
-    // Faint circle round trains we only know the rough area of. At the national view it is noise.
-    if (b.na > 0 && o.zoom >= 10 && mix < 1) {
-      out.push(new d.ScatterplotLayer({
-        id: 'approx', data: { length: b.na, attributes: { getPosition: { value: b.apos, size: 2 } } },
-        radiusUnits: 'pixels', getRadius: lenPx * 0.95, stroked: true, filled: false, lineWidthUnits: 'pixels', getLineWidth: 1.2,
-        opacity: 1 - mix,
-        getFillColor: o.theme === 'dark' ? [255, 255, 255, 18] : [15, 23, 42, 18],
-        getLineColor: o.theme === 'dark' ? [255, 255, 255, 90] : [15, 23, 42, 90],
-        updateTriggers: { getRadius: lenPx }
-      }));
-    }
+    // A rough position (pl "a") is shown by a fainter body with the dashed outline (see motion.js), never
+    // by a ring: a ring many times the size of the train read as a rendering fault at zoom 13-15.
     function set(setKey, id, opacity, pickable, sizing) {
       var posAng = { getPosition: { value: b.pos, size: 2 }, getAngle: { value: b.ang, size: 1 } };
       out.push(new d.IconLayer(Object.assign({
-        id: id + '-halo', data: { length: b.n, attributes: posAng }, opacity: opacity, pickable: false,
-        getIcon: function (_, i) { return haloName(setKey, b.kind[i.index]); }, getSize: 1, getColor: T.halo,
+        id: id + '-halo', data: { length: b.n, attributes: Object.assign({ getColor: { value: b.hcol, size: 4 } }, posAng) }, opacity: opacity, pickable: false,
+        getIcon: function (_, i) { return haloName(setKey, b.kind[i.index]); }, getSize: 1,
         iconAtlas: o.atlas.url, iconMapping: o.atlas.mapping, billboard: false
       }, sizing)));
       out.push(new d.IconLayer(Object.assign({
@@ -257,6 +314,15 @@
     }
     if (mix < 1) set('px', 'trains', 1 - mix, mix < 0.5, { sizeUnits: 'pixels', sizeScale: RM.motion.trainSizePx(o.zoom) });
     if (mix > 0) set('m', 'trains-m', mix, mix >= 0.5, { sizeUnits: 'meters', sizeScale: RM.motion.TRAIN_LENGTH_M });
+    // An amber mark just ahead of a train that is waiting at a signal (the engine's "waiting" state).
+    if (b.nw > 0 && o.zoom >= 10.5) {
+      out.push(new d.ScatterplotLayer({
+        id: 'waiting', data: { length: b.nw, attributes: { getPosition: { value: b.wpos, size: 2 } } }, pickable: false,
+        radiusUnits: 'pixels', getRadius: Math.max(4, Math.min(8, lenPx * 0.16)), stroked: true, filled: true, lineWidthUnits: 'pixels', getLineWidth: 1.5,
+        getFillColor: [245, 158, 11, 255], getLineColor: o.theme === 'dark' ? [10, 16, 28, 255] : [255, 255, 255, 255],
+        updateTriggers: { getRadius: lenPx }
+      }));
+    }
     return out;
   }
   var TRAIN_PICK_IDS = ['trains', 'trains-m'];
@@ -268,7 +334,7 @@
   function selIconPx(r) { return 'px.' + r.si; }
   function selIconM(r) { return 'm.' + r.si; }
   function selectedTrain(o) {
-    var d = root.deck, mix = RM.motion.metreMix(o.zoom);
+    var d = deckRef(), mix = RM.motion.metreMix(o.zoom);
     var common = { data: [o.rec], getPosition: selPos, getAngle: selAngle, getSize: 1, getColor: THEME[o.theme].ring,
       iconAtlas: o.atlas.url, iconMapping: o.atlas.mapping, billboard: false,
       updateTriggers: { getPosition: o.frame, getAngle: o.frame, getIcon: o.frame, getColor: o.theme } };
@@ -283,7 +349,7 @@
   function recText(r) { return r.pl === 's' ? r.hc : r.hc + ' ~'; }
   function recOff(r) { return r.lo; }
   function labelLayer(o) {
-    var d = root.deck, T = THEME[o.theme];
+    var d = deckRef(), T = THEME[o.theme];
     return new d.TextLayer({
       id: 'train-labels', data: o.recs, pickable: false,
       getPosition: recPos, getText: recText, getPixelOffset: recOff,
@@ -296,7 +362,7 @@
 
   // A ring for a selected STATION.
   function selectedRing(o) {
-    var d = root.deck;
+    var d = deckRef();
     return new d.ScatterplotLayer({
       id: 'selected-station', data: [o.pos], getPosition: function (p) { return p; },
       radiusUnits: 'pixels', getRadius: o.radius, stroked: true, filled: false,
@@ -306,7 +372,7 @@
   }
 
   function trailLayers(o) {
-    var d = root.deck, T = THEME[o.theme];
+    var d = deckRef(), T = THEME[o.theme];
     var rgb = RM.motion.hexToRgb(o.colour);
     return [
       new d.PathLayer({
@@ -324,9 +390,12 @@
 
   var api = {
     THEME: THEME, SHAPES: SHAPES, makeAtlas: makeAtlas, addRailLayers: addRailLayers, applyStylePlan: applyStylePlan,
+    railFilter: railFilter, widthExpr: widthExpr, WIDTH: WIDTH, LO_FADE: LO_FADE, HI_FADE: HI_FADE,
+    addNetworkLayers: addNetworkLayers, setNetworkData: setNetworkData, NET_IDS: NET_IDS,
     RAIL_IDS: RAIL_IDS, RAIL_MIN_ZOOM: RAIL_MIN_ZOOM, TRAIN_PICK_IDS: TRAIN_PICK_IDS,
     stationLayers: stationLayers, trainLayers: trainLayers, selectedTrain: selectedTrain, labelLayer: labelLayer,
     selectedRing: selectedRing, trailLayers: trailLayers
   };
-  (root.RM = root.RM || {}).layers = api;
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+  else (root.RM = root.RM || {}).layers = api;
 })(typeof self !== 'undefined' ? self : this);

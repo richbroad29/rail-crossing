@@ -35,3 +35,13 @@ separate terminals:
 
 Or by hand: open `map/index.html` through any static server with `?api=http://localhost:3101`.
 `node map/test/visual/run.js basemap` compares the candidate base maps (positron / liberty / dark).
+
+**Phase 2** (`phase2.js`, `node map/test/visual/run.js phase2 [network|views|stacked|approx|panel|sequence|video]`):
+trains following the track (a mid-span train on a curve, one dwelling at a platform, one held at a signal),
+the stacked-train case at Brighton, the panel's "Next:" line and lateness pill, the station board and its
+tabs (a row tap selects the train), the national line layer at zoom 6 / 8 / 9.5 / 11 and 5.2 over SE England
+(it queries the rendered map, so a line that goes missing at a zoom fails the check, not just looks odd), a
+10-frame sequence one second apart of a train crossing a berth boundary (`p2-seq-sheet.png` is the contact
+sheet) and a screen recording (`out/video/*.webm`). Without a browser: `node map/test/motion-replay.js`
+(four motion metrics on a recorded hour), `node map/test/mutation-check.js` (breaks each engine rule and
+requires a test to fail) and `node map/test/bench-engine.js` (engine CPU per frame for 1,500 trains).

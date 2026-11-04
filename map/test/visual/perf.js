@@ -21,9 +21,9 @@ async function measure(page, name, c, z) {
     d.sort((x, y) => x - y);
     const q = (p) => +d[Math.min(d.length - 1, Math.floor(d.length * p))].toFixed(1);
     const sm = RM.debug.summary();
-    return { fps: +(a.length / ((a[a.length - 1] - a[0]) / 1000)).toFixed(1), gap: [q(0.5), q(0.95), q(1)], js: [sm.jsMs.p50, sm.jsMs.p95, sm.jsMs.max].map((v) => +v.toFixed(2)), trains: sm.trains };
+    return { fps: +(a.length / ((a[a.length - 1] - a[0]) / 1000)).toFixed(1), gap: [q(0.5), q(0.95), q(1)], js: [sm.jsMs.p50, sm.jsMs.p95, sm.jsMs.max].map((v) => +v.toFixed(2)), fill: [sm.fillMs.p50, sm.fillMs.p95, sm.fillMs.max].map((v) => +v.toFixed(2)), trains: sm.trains, tracked: (() => { let n = 0; RM.debug.store.forEach((r) => { if (r.mode === 'track') n++; }); return n; })() };
   });
-  console.log(name.padEnd(34), r.fps + ' fps', ' frame gap p50/p95/max ' + r.gap.join('/') + ' ms', ' JS p50/p95/max ' + r.js.join('/') + ' ms', ' trains in store ' + r.trains);
+  console.log(name.padEnd(34), r.fps + ' fps', ' frame gap p50/p95/max ' + r.gap.join('/') + ' ms', ' JS p50/p95/max ' + r.js.join('/') + ' ms', ' of which store.fill (motion engine) p50/p95/max ' + r.fill.join('/') + ' ms', ' trains ' + r.trains + ' (' + r.tracked + ' on the track)');
   return r;
 }
 
@@ -39,5 +39,17 @@ module.exports = async function perf(browser) {
   await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 });
   for (const [n, c, z] of [views[0], views[2], views[3]]) await measure(page, n + ' [CPU x4 slower]', c, z);
   await ctx.close();
+  // every train on the track at once (?trackzoom=0 makes the page follow the track at any zoom, so the
+  // national view carries all ~1,500 motion plans through the engine and fetches all their spans)
+  const ctx2 = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2 });
+  const page2 = await ctx2.newPage();
+  await page2.goto(L.PAGE + '&trackzoom=0');
+  await page2.waitForFunction(() => window.RM && RM.debug && RM.debug.store && RM.debug.store.size > 1000, null, { timeout: 60000 });
+  await page2.waitForTimeout(12000);                          // spans arrive
+  for (const [n, c, z] of [['ALL tracked: GB, zoom 5.2', [-2.6, 54.2], 5.2], ['ALL tracked: Sussex/London, zoom 9', [-0.3, 51.2], 9], ['ALL tracked: city, zoom 11', [-0.12, 51.5], 11]]) await measure(page2, n, c, z);
+  const cdp2 = await ctx2.newCDPSession(page2);
+  await cdp2.send('Emulation.setCPUThrottlingRate', { rate: 4 });
+  await measure(page2, 'ALL tracked: GB, zoom 5.2 [CPU x4 slower]', [-2.6, 54.2], 5.2);
+  await ctx2.close();
   return 0;
 };
