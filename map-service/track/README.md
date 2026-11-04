@@ -51,8 +51,11 @@ The builder has **no npm dependencies** (the PBF reader is `lib/pbf.js`). Node 2
    `railway=railway_crossing` / `diamond_crossing` node with no `railway:switch` (the tracks cross, they do not
    connect). Edges keep class (main, branch, siding, yard, crossover, other), electrification, maxspeed, name, ref,
    track ref, and a **tunnel flag that is metadata only** (`tunnel=*`, `covered=yes`, `layer<0`): tunnels are
-   ordinary track in the graph and in the overview. Simplify to 1 m. Drop components under 200 m and light-rail
-   components that touch no `railway=rail`.
+   ordinary track in the graph and in the overview. **Stitch** dangling ends: an end within 1 m of another running
+   edge is joined to it, but only on the SAME level (tunnel, bridge and `layer` must all agree), so a flyover or
+   dive-under is never joined to the line it crosses; the builder logs every join and every refusal in the manifest
+   (`stitches`; `--no-stitch` turns it off for comparison). Simplify to 1 m. Drop components under 200 m and
+   light-rail components that touch no `railway=rail`.
 3. **Stations** (`lib/stations.js`): primary snap = nearest running edge (not siding, yard or crossover) within
    300 m of the NaPTAN point; platform snaps from OSM platforms alongside the track and from track ways carrying a
    platform number. Unsnapped stations are listed in the manifest.
@@ -74,9 +77,22 @@ pack.slice(route, 1000, 2000);        // [[lat, lon], ...]
 pack.network('lo');                   // gzip bytes of the overview, read from disk on demand; pack.sha256() is its ETag
 ```
 
-`route()` takes a snap or an array of snaps at either end (a station has one per platform track) and returns the
+**Route between stations with `pack.stationSnaps(name or TIPLOC)`, not between two single snaps.** It returns every
+platform-track snap of every TIPLOC of the station (NaPTAN gives Clapham Junction five TIPLOCs, London Bridge two, each
+with only its own half of the platforms). Routing from one snap on one track is direction-blind: the primary snap is
+the track nearest the NaPTAN point, not the one the train uses, and between two such snaps the shortest path that
+needs no reversal can be very long (Clapham Junction to Victoria came out at 33 km, against 4.4 km published; seven of
+the 24 test pairs were wrong by 3 to 16 times). With the arrays all 24 are within 10% of the published rail distance
+(`test/track-pairs.js`, distances from the ELR mileage tables at railwaycodes.org.uk).
+
+`route()` takes a snap or an array of snaps at either end and returns the
 shortest by length, or `null`. It does not allow a heel-to-heel turn at a junction or a reversal along the track
-just used (`maxDeflection`, default 100 degrees); pass `maxDeflection: 180` for a move that needs a reversal.
+just used (`maxDeflection`, default 100 degrees); pass `maxDeflection: 180` for a move that needs a reversal. 100 is
+measured, not guessed: across the whole graph continuing track turns at most 20 degrees at its 99.9th percentile
+(the only degree-2 nodes above 100 are 18 siding and yard hairpins), a through route at a three-way junction at most
+7 degrees at the 99th, and a heel-to-heel move is 150 degrees or more. All 24 test pairs, and 24,384 station pairs in
+SE England, give identical routes at 100, 120, 135 and 150, so the limit sits in an empty gap and decides nothing
+on real running track; it only forbids reversals.
 
 Measure it on a real pack (`--expose-gc` for clean memory figures):
 `node --expose-gc track/measure.js ~/rail-map-refdata/track-out/track-pack-20261102.bin`.
@@ -84,11 +100,15 @@ Measure it on a real pack (`--expose-gc` for clean memory figures):
 ## Tests and fixture
 
 `node --test test/track.test.js` (offline, 0.2 s). Most tests write a small real PBF with `test/track-synth.js`
-and run the builder's own pipeline on planted ways with known answers; the rest use `test/fixtures/track-sussex.bin`
-(31 KB: Hove, Brighton, Preston Park, Hassocks, Clayton Tunnel). Regenerate it after a format or snapping change:
+and run the builder's own pipeline on planted ways with known answers; the rest use two cuts of the real pack:
+`test/fixtures/track-sussex.bin` (31 KB: Hove, Brighton, Preston Park, Hassocks, Clayton Tunnel) and
+`test/fixtures/track-routes.bin.gz` (229 KB gzipped: 15 m either side of the shortest route between each of the 24
+station pairs of `test/track-pairs.js`, for the route-accuracy regression). Regenerate them after a format, snapping
+or graph change:
 
 ```
-node track/make-fixture.js ~/rail-map-refdata/track-out/track-pack-<date>.bin test/fixtures/track-sussex.bin
+node track/make-fixture.js box    ~/rail-map-refdata/track-out/track-pack-<date>.bin test/fixtures/track-sussex.bin
+node track/make-fixture.js routes ~/rail-map-refdata/track-out/track-pack-<date>.bin test/fixtures/track-routes.bin.gz
 ```
 
 ## Visual proof

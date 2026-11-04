@@ -106,12 +106,30 @@ class DSU {
   union(a, b) { a = this.find(a); b = this.find(b); if (a !== b) this.p[a] = b; }
 }
 
+const STITCH_M = 1.0;          // a dangling end this close to another running edge, on the same level, is joined to it
+
+/** The level a way runs on: tunnel, bridge and layer. Two ways are on the same level only if all three agree. */
+function levelKey(t) {
+  const layer = t.layer ? Number(String(t.layer).split(';')[0]) : 0;
+  return (isTunnel(t) ? 'T' : '-') + (t.bridge && t.bridge !== 'no' ? 'B' : '-') + (Number.isFinite(layer) ? layer : 0);
+}
+
+/** Metres from point (la, lo) to the segment a-b (all 1e-7 degree integers), and the fraction along it. */
+function pointSegment(la, lo, a_la, a_lo, b_la, b_lo) {
+  const kx = kxAt(la);
+  const ax = (a_lo - lo) * DEG7 * kx, ay = (a_la - la) * DEG7 * KY, bx = (b_lo - lo) * DEG7 * kx, by = (b_la - la) * DEG7 * KY;
+  const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+  let t = l2 > 0 ? -(ax * dx + ay * dy) / l2 : 0;
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  return { d: Math.hypot(ax + t * dx, ay + t * dy), t };
+}
+
 /**
  * @param {object} ex output of osm-extract.extract
  * @param {{tolerance?: number, log?: Function}} opts tolerance is the polyline simplification in metres
  * @returns graph: node arrays, edge arrays, per-edge original way index, strings, stats
  */
-function buildGraph(ex, { tolerance = 1.0, log = () => {} } = {}) {
+function buildGraph(ex, { tolerance = 1.0, stitch = true, log = () => {} } = {}) {
   const { ways, refs, wanted, lat, lon } = ex;
   const stats = { railWays: 0, skippedWays: 0, lightRailEdgesDropped: 0, fragmentsDropped: 0, fragmentMetresDropped: 0, duplicateEdges: 0 };
 
@@ -174,35 +192,147 @@ function buildGraph(ex, { tolerance = 1.0, log = () => {} } = {}) {
   const E0 = eFrom.length;
   log(`graph: ${rail.length} ways -> ${E0} raw edges, ${nodeW.length} nodes (${stats.duplicateEdges} duplicate edges, ${diamonds} diamond-crossing nodes)`);
 
+  // --- vertices of an edge: its slice of the way, unless stitching has rewritten it ---
+  const override = new Map();       // edge -> {la, lo, id}  (id = wanted index of the OSM node, or -1 for an inserted vertex)
+  const vertsOf = (e) => {
+    const o = override.get(e);
+    if (o) return o;
+    const n = eE[e] - eS[e] + 1;
+    const la = new Int32Array(n), lo = new Int32Array(n), id = new Int32Array(n);
+    for (let q = 0; q < n; q++) { const w = wn[eS[e] + q]; la[q] = lat[w]; lo[q] = lon[w]; id[q] = w; }
+    return { la, lo, id };
+  };
+  const levelOfEdge = (e) => levelKey(rail[eWay[e]].tags);
+
+  // --- stitching: a dangling end within 1 m of another running edge, on the SAME level, is joined to it ---
+  // OSM mappers sometimes end a way a few centimetres short of the track it should meet. Joining across levels
+  // would be worse than the gap: a bridge over a line, or a line over a dive-under, is within a metre of the one
+  // below it in plan and must never connect, so tunnel, bridge and layer must all agree.
+  const stitches = [];
+  stats.stitchJoined = 0; stats.stitchMergedWithNode = 0; stats.stitchRefusedOtherLevel = 0; stats.stitchCandidates = 0;
+  if (stitch) {
+    const degree = new Uint32Array(nodeW.length);
+    for (let e = 0; e < eFrom.length; e++) { degree[eFrom[e]]++; degree[eTo[e]]++; }
+    const ownEdge = new Map();                      // dangling node -> its only edge
+    for (let e = 0; e < eFrom.length; e++) { if (degree[eFrom[e]] === 1) ownEdge.set(eFrom[e], e); if (degree[eTo[e]] === 1) ownEdge.set(eTo[e], e); }
+    const CELL_LA = 2000, CELL_LO = 3200;           // ~22 m
+    const cellKey = (la, lo) => Math.floor((la - 49e7) / CELL_LA) * 1e6 + Math.floor((lo + 10e7) / CELL_LO);
+    const dMap = new Map();
+    for (const [d] of ownEdge) { const w = nodeW[d]; const k = cellKey(lat[w], lon[w]); const l = dMap.get(k); if (l) l.push(d); else dMap.set(k, [d]); }
+    const best = new Map();                         // dangling node -> {edge, d}
+    const seenRefused = new Set();
+    for (let e = 0; e < eFrom.length; e++) {
+      const V = vertsOf(e);
+      for (let q = 0; q + 1 < V.la.length; q++) {
+        const c0 = Math.floor((Math.min(V.la[q], V.la[q + 1]) - 49e7) / CELL_LA) - 1, c1 = Math.floor((Math.max(V.la[q], V.la[q + 1]) - 49e7) / CELL_LA) + 1;
+        const x0 = Math.floor((Math.min(V.lo[q], V.lo[q + 1]) + 10e7) / CELL_LO) - 1, x1 = Math.floor((Math.max(V.lo[q], V.lo[q + 1]) + 10e7) / CELL_LO) + 1;
+        for (let cy = c0; cy <= c1; cy++) for (let cx = x0; cx <= x1; cx++) {
+          const list = dMap.get(cy * 1e6 + cx);
+          if (!list) continue;
+          for (const d of list) {
+            if (ownEdge.get(d) === e || eFrom[e] === d || eTo[e] === d) continue;
+            const w = nodeW[d];
+            const r = pointSegment(lat[w], lon[w], V.la[q], V.lo[q], V.la[q + 1], V.lo[q + 1]);
+            if (r.d > STITCH_M) continue;
+            if (levelOfEdge(e) !== levelOfEdge(ownEdge.get(d))) { const key = d + ':' + e; if (!seenRefused.has(key)) { seenRefused.add(key); stats.stitchRefusedOtherLevel++; stitches.push({ kind: 'refused-other-level', lat: lat[w] * DEG7, lon: lon[w] * DEG7, dist: r.d, levels: [levelOfEdge(ownEdge.get(d)), levelOfEdge(e)] }); } continue; }
+            const cur = best.get(d);
+            if (!cur || r.d < cur.d) best.set(d, { edge: e, d: r.d });
+          }
+        }
+      }
+    }
+    stats.stitchCandidates = best.size;
+    const family = new Map();                       // original edge -> every edge it has been split into
+    const famOf = (e) => family.get(e) || [e];
+    const dangling = [...best.entries()].sort((a, b) => a[0] - b[0]);
+    for (const [d, c] of dangling) {
+      if (degree[d] !== 1) continue;
+      const E = ownEdge.get(d), w = nodeW[d], dla = lat[w], dlo = lon[w];
+      // re-find the target among the pieces its edge has been split into so far
+      let tgt = null;
+      for (const f of famOf(c.edge)) {
+        const V = vertsOf(f);
+        for (let q = 0; q + 1 < V.la.length; q++) {
+          const r = pointSegment(dla, dlo, V.la[q], V.lo[q], V.la[q + 1], V.lo[q + 1]);
+          if (r.d <= STITCH_M && (!tgt || r.d < tgt.d)) tgt = { f, q, d: r.d };
+        }
+      }
+      if (!tgt) continue;
+      const F = tgt.f, V = vertsOf(F), n = V.la.length;
+      const distTo = (i) => Math.hypot((V.la[i] - dla) * DEG7 * KY, (V.lo[i] - dlo) * DEG7 * kxAt(dla));
+      if (distTo(0) <= 0.5 || distTo(n - 1) <= 0.5) {
+        // it ends on (or against) the end node of F: merge the two nodes
+        const N = distTo(0) <= distTo(n - 1) ? eFrom[F] : eTo[F];
+        const VE = vertsOf(E);
+        const copy = { la: Int32Array.from(VE.la), lo: Int32Array.from(VE.lo), id: Int32Array.from(VE.id) };
+        const atStart = eFrom[E] === d;
+        const i = atStart ? 0 : copy.la.length - 1;
+        copy.la[i] = lat[nodeW[N]]; copy.lo[i] = lon[nodeW[N]]; copy.id[i] = nodeW[N];
+        override.set(E, copy);
+        if (atStart) eFrom[E] = N; else eTo[E] = N;
+        degree[d] = 0; degree[N]++;
+        stats.stitchMergedWithNode++;
+        stitches.push({ kind: 'merged', lat: dla * DEG7, lon: dlo * DEG7, dist: tgt.d });
+        continue;
+      }
+      // otherwise split F at the dangling end, which becomes a three-way junction
+      let at = tgt.q + 1;                           // index of the vertex that starts the second half
+      let la1, lo1, id1, la2, lo2, id2;
+      const near = (i) => distTo(i) <= 0.3 && i > 0 && i < n - 1;
+      if (near(tgt.q)) at = tgt.q + 0;              // a vertex of F is already there: reuse it (moved onto the dangling end)
+      else if (near(tgt.q + 1)) at = tgt.q + 1;
+      const reuse = near(tgt.q) || near(tgt.q + 1);
+      const cut = reuse ? at : tgt.q + 1;
+      la1 = Array.from(V.la.subarray(0, cut)); lo1 = Array.from(V.lo.subarray(0, cut)); id1 = Array.from(V.id.subarray(0, cut));
+      la1.push(dla); lo1.push(dlo); id1.push(w);
+      la2 = [dla]; lo2 = [dlo]; id2 = [w];
+      const rest = reuse ? cut + 1 : cut;
+      for (let i = rest; i < n; i++) { la2.push(V.la[i]); lo2.push(V.lo[i]); id2.push(V.id[i]); }
+      const F2 = eFrom.length;
+      eFrom.push(d); eTo.push(eTo[F]); eWay.push(eWay[F]); eS.push(-1); eE.push(-1);
+      eTo[F] = d;
+      override.set(F, { la: Int32Array.from(la1), lo: Int32Array.from(lo1), id: Int32Array.from(id1) });
+      override.set(F2, { la: Int32Array.from(la2), lo: Int32Array.from(lo2), id: Int32Array.from(id2) });
+      let root = c.edge;
+      for (const [k, v] of family) if (v.includes(F)) { root = k; break; }
+      const fam = family.get(root) || [root]; fam.push(F2); family.set(root, fam);
+      degree[d] = 3;
+      stats.stitchJoined++;
+      stitches.push({ kind: 'joined', lat: dla * DEG7, lon: dlo * DEG7, dist: tgt.d, level: levelOfEdge(E) });
+    }
+    log(`stitching: ${stats.stitchJoined} dangling ends joined to a running edge, ${stats.stitchMergedWithNode} merged into an end node, ${stats.stitchRefusedOtherLevel} candidate joins refused because the levels differ (bridge/tunnel/layer)`);
+  }
+
   // --- components, fragments ---
+  const E1 = eFrom.length;
   const dsu = new DSU(nodeW.length);
-  const lens = new Float64Array(E0);
-  for (let e = 0; e < E0; e++) {
+  const lens = new Float64Array(E1);
+  for (let e = 0; e < E1; e++) {
     dsu.union(eFrom[e], eTo[e]);
+    const V = vertsOf(e);
     let L = 0;
-    for (let k = eS[e]; k < eE[e]; k++) {
-      const a = wn[k], b = wn[k + 1];
-      const kx = kxAt((lat[a] + lat[b]) / 2);
-      const dy = (lat[b] - lat[a]) * DEG7 * KY, dx = (lon[b] - lon[a]) * DEG7 * kx;
+    for (let k = 0; k + 1 < V.la.length; k++) {
+      const kx = kxAt((V.la[k] + V.la[k + 1]) / 2);
+      const dy = (V.la[k + 1] - V.la[k]) * DEG7 * KY, dx = (V.lo[k + 1] - V.lo[k]) * DEG7 * kx;
       L += Math.sqrt(dx * dx + dy * dy);
     }
     lens[e] = L;
   }
   const compLen = new Float64Array(nodeW.length), compRail = new Uint8Array(nodeW.length);
-  for (let e = 0; e < E0; e++) {
+  for (let e = 0; e < E1; e++) {
     const c = dsu.find(eFrom[e]);
     compLen[c] += lens[e];
     if (rail[eWay[e]].tags.railway === 'rail') compRail[c] = 1;
   }
-  const keepE = new Uint8Array(E0);
-  for (let e = 0; e < E0; e++) {
+  const keepE = new Uint8Array(E1);
+  for (let e = 0; e < E1; e++) {
     const c = dsu.find(eFrom[e]);
     if (compLen[c] < MIN_COMPONENT_M) { stats.fragmentMetresDropped += lens[e]; continue; }
     if (!compRail[c]) { stats.lightRailEdgesDropped++; continue; }
     keepE[e] = 1;
   }
   const seenComp = new Set();
-  for (let e = 0; e < E0; e++) if (!keepE[e]) seenComp.add(dsu.find(eFrom[e]));
+  for (let e = 0; e < E1; e++) if (!keepE[e]) seenComp.add(dsu.find(eFrom[e]));
   stats.fragmentsDropped = seenComp.size;
 
   // --- compact nodes, simplify, assemble ---
@@ -214,12 +344,11 @@ function buildGraph(ex, { tolerance = 1.0, log = () => {} } = {}) {
   const signalEdge = new Map();                      // wanted node index -> new edge index (for on-way signals)
   const sigNodes = new Set();
   for (const s of ex.special) if (s.tags.railway === 'signal') { const n = lowerBound(wanted, s.id); if (wanted[n] === s.id) sigNodes.add(n); }
-  const newEdgeOf = new Int32Array(E0).fill(-1);
-  for (let e = 0; e < E0; e++) {
+  const newEdgeOf = new Int32Array(E1).fill(-1);
+  for (let e = 0; e < E1; e++) {
     if (!keepE[e]) continue;
-    const n = eE[e] - eS[e] + 1;
-    const la = new Int32Array(n), lo = new Int32Array(n);
-    for (let q = 0; q < n; q++) { la[q] = lat[wn[eS[e] + q]]; lo[q] = lon[wn[eS[e] + q]]; }
+    const V = vertsOf(e);
+    const n = V.la.length, la = V.la, lo = V.lo;
     rawVertices += n;
     const keep = simplify(la, lo, tolerance);
     const idx = edges.from.length;
@@ -227,18 +356,19 @@ function buildGraph(ex, { tolerance = 1.0, log = () => {} } = {}) {
     edges.from.push(useNode(eFrom[e])); edges.to.push(useNode(eTo[e])); edges.way.push(eWay[e]); edges.rawEdge.push(e);
     for (const q of keep) { edges.vlat.push(la[q]); edges.vlon.push(lo[q]); }
     edges.vstart.push(edges.vlat.length);
-    for (let q = 1; q < n - 1; q++) if (sigNodes.has(wn[eS[e] + q])) signalEdge.set(wn[eS[e] + q], idx);
+    for (let q = 1; q < n - 1; q++) if (V.id[q] >= 0 && sigNodes.has(V.id[q])) signalEdge.set(V.id[q], idx);
   }
   // signals that sit exactly on a junction node belong to every edge there; pick the first kept
-  for (let e = 0; e < E0; e++) {
+  for (let e = 0; e < E1; e++) {
     if (!keepE[e]) continue;
-    for (const q of [eS[e], eE[e]]) if (sigNodes.has(wn[q]) && !signalEdge.has(wn[q])) signalEdge.set(wn[q], newEdgeOf[e]);
+    const V = vertsOf(e);
+    for (const q of [0, V.id.length - 1]) if (V.id[q] >= 0 && sigNodes.has(V.id[q]) && !signalEdge.has(V.id[q])) signalEdge.set(V.id[q], newEdgeOf[e]);
   }
   stats.rawVertices = rawVertices;
   stats.keptVertices = edges.vlat.length;
-  stats.rawEdges = E0;
+  stats.rawEdges = E1;
   log(`graph: kept ${edges.from.length} edges, ${nLat.length} nodes; vertices ${rawVertices} -> ${edges.vlat.length} at ${tolerance} m; dropped ${stats.fragmentsDropped} fragments/light-rail islands (${Math.round(stats.fragmentMetresDropped)} m)`);
-  return { nLat, nLon, edges, rail, tagsOf: i => rail[i].tags, signalEdge, stats, wanted };
+  return { nLat, nLon, edges, rail, tagsOf: i => rail[i].tags, signalEdge, stats, wanted, stitches, levelKey };
 }
 
-module.exports = { buildGraph, classify, electrification, maxspeedMph, flags, isTunnel, simplify, MIN_COMPONENT_M };
+module.exports = { buildGraph, levelKey, classify, electrification, maxspeedMph, flags, isTunnel, simplify, MIN_COMPONENT_M };

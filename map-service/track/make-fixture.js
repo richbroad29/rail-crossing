@@ -1,86 +1,65 @@
 #!/usr/bin/env node
 'use strict';
 
-// Cuts a small real-data fixture out of a built pack, for the offline tests: every edge with a vertex
-// inside a box, the nodes they touch, the stations and signals that fall inside, and nothing else
-// (no overview). Written through the same writer as the real pack, so the tests also exercise the
-// real format.
-//   node track/make-fixture.js PACK OUT.bin [S,W,N,E]
-// The default box is the Brighton / Hove / Portslade / Hassocks corner of Sussex, which holds the
-// Hove-Brighton-Preston Park triangle, Clayton Tunnel, a throat with parallel tracks and sidings.
+// Cuts small real-data fixtures out of a built pack, for the offline tests. Written through the same
+// writer as the real pack, so the tests also exercise the real format.
+//
+//   node track/make-fixture.js box PACK OUT.bin [S,W,N,E]
+//       every edge with a vertex in the box. The default box is the Brighton / Hove / Portslade /
+//       Hassocks corner of Sussex: the Hove - Brighton - Preston Park triangle, Clayton Tunnel, a throat
+//       with parallel tracks and sidings.
+//   node track/make-fixture.js routes PACK OUT.bin.gz [BUFFER_METRES]       (an OUT ending .gz is written gzipped: the committed fixture is)
+//       the corridors of the station pairs in test/track-pairs.js: every edge within BUFFER_METRES
+//       (default 15: a four-track main line is within 15 m) of the shortest route between each pair (so parallel tracks, crossovers and
+//       sidings beside the route stay in), plus every edge within 150 m of the pairs' stations. Signals are left out (the other fixture carries some).
 
+const path = require('path');
 const { loadPack } = require('../src/track/pack');
-const { StringTable, writePack } = require('./lib/assemble');
+const { writePack } = require('./lib/assemble');
+const { cutPack } = require('./lib/cut');
 const F = require('../src/track/format');
 
-const [packFile, outFile, boxArg] = process.argv.slice(2);
-if (!packFile || !outFile) { console.error('usage: node track/make-fixture.js PACK OUT.bin [S,W,N,E]'); process.exit(2); }
-const [S, W, N, E] = (boxArg || '50.825,-0.245,50.930,-0.120').split(',').map(Number);
+const [mode, packFile, outFile, arg] = process.argv.slice(2);
+if (!['box', 'routes'].includes(mode) || !packFile || !outFile) { console.error('usage: node track/make-fixture.js box|routes PACK OUT.bin [S,W,N,E | BUFFER_METRES]'); process.exit(2); }
 const pack = loadPack(packFile);
 const s = pack.s;
-const inBox = (la, lo) => la >= S * 1e7 && la <= N * 1e7 && lo >= W * 1e7 && lo <= E * 1e7;
+let edges = new Set(), keepStation, note;
 
-const keepEdge = [];
-for (let e = 0; e < pack.nEdges; e++) {
-  for (let v = pack.evo[e]; v < pack.evo[e + 1]; v++) if (inBox(s.VLAT[v], s.VLON[v])) { keepEdge.push(e); break; }
+if (mode === 'box') {
+  const [S, W, N, E] = (arg || '50.825,-0.245,50.930,-0.120').split(',').map(Number);
+  const inBox = (la, lo) => la >= S * 1e7 && la <= N * 1e7 && lo >= W * 1e7 && lo <= E * 1e7;
+  for (let e = 0; e < pack.nEdges; e++) for (let v = pack.evo[e]; v < pack.evo[e + 1]; v++) if (inBox(s.VLAT[v], s.VLON[v])) { edges.add(e); break; }
+  keepStation = (i) => inBox(s.STLAT[i], s.STLON[i]);
+  note = 'cut from a real track pack for tests; box S,W,N,E = ' + [S, W, N, E].join(',');
+} else {
+  const { PAIRS } = require('../test/track-pairs');
+  const buffer = Number(arg || 15);
+  const names = new Set();
+  const addNear = (lat, lon, r) => { for (const x of pack.nearestOnTrack(lat, lon, { maxDist: r, k: 400 })) edges.add(x.edge); };
+  for (const p of PAIRS) {
+    names.add(p.a); names.add(p.b);
+    const A = pack.stationSnaps(p.a), B = pack.stationSnaps(p.b);
+    const r = pack.route(A, B, { avoidSidings: true });
+    if (!r) throw new Error(`no route for ${p.a} - ${p.b}`);
+    for (const sn of A.concat(B)) addNear(sn.lat, sn.lon, Math.max(buffer, 120));
+    const step = buffer * 0.8;
+    for (let d = 0; d <= r.length + step; d += step) { const q = pack.pointAt(r, Math.min(d, r.length)); addNear(q.lat, q.lon, buffer); }
+    for (const piece of r.pieces) edges.add(piece.e);
+  }
+  keepStation = (i) => names.has(pack.str(s.STNAME[i]));
+  note = `corridors of the ${PAIRS.length} station pairs in test/track-pairs.js, ${buffer} m either side of the shortest route`;
 }
-const nodeMap = new Map();
-const nid = (n) => { if (!nodeMap.has(n)) nodeMap.set(n, nodeMap.size); return nodeMap.get(n); };
-const strings = new StringTable();
-const edgeMap = new Map(keepEdge.map((e, i) => [e, i]));
-const nE = keepEdge.length;
-const out = {
-  EFROM: new Uint32Array(nE), ETO: new Uint32Array(nE), EVO: new Uint32Array(nE + 1), ELEN: new Float32Array(nE),
-  ECLS: new Uint8Array(nE), EELEC: new Uint8Array(nE), ESPD: new Uint8Array(nE), EFLG: new Uint8Array(nE),
-  ENAME: new Uint32Array(nE), EREF: new Uint32Array(nE), ETRK: new Uint32Array(nE)
-};
-const vlat = [], vlon = [];
-keepEdge.forEach((e, i) => {
-  out.EFROM[i] = nid(s.EFROM[e]); out.ETO[i] = nid(s.ETO[e]);
-  for (let v = pack.evo[e]; v < pack.evo[e + 1]; v++) { vlat.push(s.VLAT[v]); vlon.push(s.VLON[v]); }
-  out.EVO[i + 1] = vlat.length;
-  out.ELEN[i] = s.ELEN[e]; out.ECLS[i] = s.ECLS[e]; out.EELEC[i] = s.EELEC[e]; out.ESPD[i] = s.ESPD[e]; out.EFLG[i] = s.EFLG[e];
-  out.ENAME[i] = strings.intern(pack.str(s.ENAME[e])); out.EREF[i] = strings.intern(pack.str(s.EREF[e])); out.ETRK[i] = strings.intern(pack.str(s.ETRK[e]));
-});
-const nN = nodeMap.size;
-out.NLAT = new Int32Array(nN); out.NLON = new Int32Array(nN);
-for (const [old, nw] of nodeMap) { out.NLAT[nw] = s.NLAT[old]; out.NLON[nw] = s.NLON[old]; }
-out.VLAT = Int32Array.from(vlat); out.VLON = Int32Array.from(vlon);
-// adjacency
-const deg = new Uint32Array(nN + 1);
-for (let i = 0; i < nE; i++) { deg[out.EFROM[i]]++; deg[out.ETO[i]]++; }
-out.NADJO = new Uint32Array(nN + 1);
-for (let i = 0; i < nN; i++) out.NADJO[i + 1] = out.NADJO[i] + deg[i];
-const fill = out.NADJO.slice(0, nN);
-out.NADJ = new Uint32Array(out.NADJO[nN]);
-for (let i = 0; i < nE; i++) { out.NADJ[fill[out.EFROM[i]]++] = i * 2; out.NADJ[fill[out.ETO[i]]++] = i * 2 + 1; }
 
-// stations inside the box (with the snaps whose edges survived)
-const st = [];
-for (let i = 0; i < pack.stationCount(); i++) {
-  if (!inBox(s.STLAT[i], s.STLON[i])) continue;
-  const snaps = [];
-  for (let j = s.STSNO[i]; j < s.STSNO[i + 1]; j++) if (edgeMap.has(s.SNEDGE[j])) snaps.push(j);
-  st.push({ i, snaps });
+const { sections, counts } = cutPack(pack, edges, keepStation, { signals: mode === 'box' });
+const meta = { fixture: true, note, format: F.VERSION, source: pack.meta.sources, packDate: pack.meta.packDate };
+const gz = outFile.endsWith('.gz');
+const rawFile = gz ? outFile.slice(0, -3) : outFile;
+const w = writePack(rawFile, sections, { metaJson: JSON.stringify(meta), built: 0 });
+let finalBytes = w.bytes;
+if (gz) {
+  const fs = require('fs');
+  fs.writeFileSync(outFile, require('zlib').gzipSync(fs.readFileSync(rawFile), { level: 9 }));
+  fs.unlinkSync(rawFile);
+  finalBytes = fs.statSync(outFile).size;
 }
-const nS = st.length, nSn = st.reduce((n, x) => n + x.snaps.length, 0);
-Object.assign(out, { STTIP: new Uint32Array(nS), STNAME: new Uint32Array(nS), STLAT: new Int32Array(nS), STLON: new Int32Array(nS), STSNO: new Uint32Array(nS + 1),
-  SNEDGE: new Uint32Array(nSn), SNOFF: new Float32Array(nSn), SNDIST: new Float32Array(nSn), SNPLAT: new Uint32Array(nSn), SNLO: new Float32Array(nSn), SNHI: new Float32Array(nSn), SNFLG: new Uint8Array(nSn) });
-let k = 0;
-st.forEach((x, n) => {
-  out.STTIP[n] = strings.intern(pack.str(s.STTIP[x.i])); out.STNAME[n] = strings.intern(pack.str(s.STNAME[x.i]));
-  out.STLAT[n] = s.STLAT[x.i]; out.STLON[n] = s.STLON[x.i]; out.STSNO[n] = k;
-  for (const j of x.snaps) { out.SNEDGE[k] = edgeMap.get(s.SNEDGE[j]); out.SNOFF[k] = s.SNOFF[j]; out.SNDIST[k] = s.SNDIST[j]; out.SNPLAT[k] = strings.intern(pack.str(s.SNPLAT[j])); out.SNLO[k] = s.SNLO[j]; out.SNHI[k] = s.SNHI[j]; out.SNFLG[k] = s.SNFLG[j]; k++; }
-});
-out.STSNO[nS] = k;
-
-// signals on kept edges
-const sg = [];
-for (let i = 0; i < s.SGEDGE.length; i++) if (edgeMap.has(s.SGEDGE[i])) sg.push(i);
-Object.assign(out, { SGEDGE: new Uint32Array(sg.length), SGOFF: new Float32Array(sg.length), SGDIST: new Float32Array(sg.length), SGLAT: new Int32Array(sg.length), SGLON: new Int32Array(sg.length), SGREF: new Uint32Array(sg.length), SGDIR: new Uint8Array(sg.length), SGSIDE: new Uint8Array(sg.length), SGKIND: new Uint8Array(sg.length) });
-sg.forEach((i, n) => { out.SGEDGE[n] = edgeMap.get(s.SGEDGE[i]); out.SGOFF[n] = s.SGOFF[i]; out.SGDIST[n] = s.SGDIST[i]; out.SGLAT[n] = s.SGLAT[i]; out.SGLON[n] = s.SGLON[i]; out.SGREF[n] = strings.intern(pack.str(s.SGREF[i])); out.SGDIR[n] = s.SGDIR[i]; out.SGSIDE[n] = s.SGSIDE[i]; out.SGKIND[n] = s.SGKIND[i]; });
-
-Object.assign(out, strings.build());
-const meta = { fixture: true, note: 'cut from a real track pack for tests; box S,W,N,E = ' + [S, W, N, E].join(','), format: F.VERSION, source: pack.meta.sources, packDate: pack.meta.packDate };
-const w = writePack(outFile, out, { metaJson: JSON.stringify(meta), built: 0 });
-console.log(`${outFile}: ${w.bytes} bytes; ${nE} edges, ${nN} nodes, ${nS} stations, ${nSn} snaps, ${sg.length} signals`);
+console.log(`${path.basename(outFile)}: ${finalBytes} bytes (${w.bytes} raw); ${counts.edges} edges, ${counts.nodes} nodes, ${counts.stations} stations, ${counts.snaps} snaps, ${counts.signals} signals`);

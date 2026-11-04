@@ -22,13 +22,13 @@ const { overview } = require('./lib/network');
 const { download, GEOFABRIK, NAPTAN } = require('./lib/fetch');
 
 function parseArgs(argv) {
-  const a = { out: path.join(__dirname, 'out'), tolerance: 1.0, cache: path.join(__dirname, '.cache'), loTol: 100, hiTol: 15 };
+  const a = { out: path.join(__dirname, 'out'), tolerance: 1.0, cache: path.join(__dirname, '.cache'), loTol: 100, hiTol: 15, stitch: true };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
     const v = () => { if (i + 1 >= argv.length) throw new Error(`${k} needs a value`); return argv[++i]; };
     if (k === '--pbf') a.pbf = v(); else if (k === '--naptan') a.naptan = v(); else if (k === '--out') a.out = v();
     else if (k === '--tolerance') a.tolerance = Number(v()); else if (k === '--date') a.date = v(); else if (k === '--cache') a.cache = v();
-    else if (k === '--download') a.download = true; else if (k === '--lo-tolerance') a.loTol = Number(v()); else if (k === '--hi-tolerance') a.hiTol = Number(v());
+    else if (k === '--download') a.download = true; else if (k === '--no-stitch') a.stitch = false; else if (k === '--lo-tolerance') a.loTol = Number(v()); else if (k === '--hi-tolerance') a.hiTol = Number(v());
     else if (k === '-h' || k === '--help') { console.log(fs.readFileSync(__filename, 'utf8').split('\n').slice(3, 9).join('\n')); process.exit(0); }
     else throw new Error(`Unknown argument ${k}`);
   }
@@ -67,7 +67,7 @@ async function main() {
 
   // 2. graph
   t = Date.now();
-  const g = buildGraph(ex, { tolerance: args.tolerance, log });
+  const g = buildGraph(ex, { tolerance: args.tolerance, stitch: args.stitch, log });
   const strings = new StringTable();
   const S = graphSections(g, strings);
   Object.assign(S, strings.build());
@@ -115,14 +115,15 @@ async function main() {
       osm: { file: path.basename(args.pbf), dataTimestamp: osmDate.toISOString(), writingProgram: ex.source.program, bytes: fs.statSync(args.pbf).size, licence: 'ODbL, © OpenStreetMap contributors' },
       naptan: { file: path.basename(args.naptan), newestModification: naptan.newestModified, sha256: naptanHash }
     },
-    parameters: { toleranceMetres: args.tolerance, minComponentMetres: MIN_COMPONENT_M, overviewLoMetres: args.loTol, overviewHiMetres: args.hiTol, primarySnapMaxMetres: 300 },
+    parameters: { toleranceMetres: args.tolerance, minComponentMetres: MIN_COMPONENT_M, overviewLoMetres: args.loTol, overviewHiMetres: args.hiTol, stitchMetres: args.stitch ? 1.0 : 0, primarySnapMaxMetres: 300 },
     counts: {
       nodes: pack.nNodes, edges: pack.nEdges, vertices: pack.nVertices, km: Math.round(totalKm), kmByClass: classKm, tunnelEdges, tunnelKm: Math.round(tunnelKm),
       stations: st.stats.stations, stationsSnapped: st.stats.snapped, stationsUnsnapped: st.stats.unsnapped, stationsWithPlatformSnaps: st.stats.withPlatformSnaps, platformSnaps: st.stats.platformSnaps,
       signals: sg.sections.SGEDGE.length, signalNodesTotal: sg.stats.signalNodes, signalsWithRef: sg.stats.withRef
     },
     graphStats: g.stats, stationStats: st.stats, signalStats: sg.stats,
-    unsnappedStations: st.unsnapped
+    unsnappedStations: st.unsnapped,
+    stitches: g.stitches.map(x => ({ kind: x.kind, lat: Math.round(x.lat * 1e6) / 1e6, lon: Math.round(x.lon * 1e6) / 1e6, metres: Math.round(x.dist * 100) / 100, levels: x.levels }))
   };
   const file = path.join(args.out, `track-pack-${date}.bin`);
   t = Date.now();

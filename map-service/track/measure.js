@@ -26,7 +26,8 @@ console.log(`graph: ${pack.nNodes} nodes, ${pack.nEdges} edges, ${pack.nVertices
 
 // route latency
 const pairs = opt('--pairs', 1000), radiusKm = opt('--radius', 50);
-const stations = pack.stationTiplocs().map(t => pack.station(t)).filter(s => s.snaps.some(x => x.primary));
+const stations = pack.stationTiplocs().map(t => Object.assign({ tiploc: t }, pack.station(t))).filter(s => s.snaps.some(x => x.primary));
+const SINGLE = process.argv.includes('--single');   // route between ONE primary snap per station instead of stationSnaps (what NOT to do)
 let seed = 12345;
 const rnd = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296;
 const km = (a, b) => Math.hypot((a.lon - b.lon) * 111.19 * Math.cos(a.lat * Math.PI / 180), (a.lat - b.lat) * 111.19);
@@ -36,7 +37,7 @@ while (n < pairs) {
   const a = stations[Math.floor(rnd() * stations.length)], b = stations[Math.floor(rnd() * stations.length)];
   const d = km(a, b);
   if (a === b || d > radiusKm || d < 1) continue;
-  const sa = a.snaps.find(x => x.primary), sb = b.snaps.find(x => x.primary);
+  const sa = SINGLE ? a.snaps.find(x => x.primary) : pack.stationSnaps(a.tiploc), sb = SINGLE ? b.snaps.find(x => x.primary) : pack.stationSnaps(b.tiploc);
   const t = process.hrtime.bigint();
   const r = pack.route(sa, sb, { avoidSidings: true });
   const t1 = process.hrtime.bigint();
@@ -47,7 +48,7 @@ while (n < pairs) {
   msGeom.push(Number(process.hrtime.bigint() - t) / 1e6);
 }
 const q = (a, p) => { const s = a.slice().sort((x, y) => x - y); return s[Math.min(s.length - 1, Math.floor(p * s.length))]; };
-console.log(`route() over ${pairs} random station pairs within ${radiusKm} km (avoidSidings): p50 ${q(ms, 0.5).toFixed(2)} ms, p95 ${q(ms, 0.95).toFixed(2)} ms, p99 ${q(ms, 0.99).toFixed(2)} ms, max ${q(ms, 1).toFixed(1)} ms; no route for ${none}`);
+console.log(`route() over ${pairs} random station pairs within ${radiusKm} km (avoidSidings, station snap arrays; --single for one primary snap each): p50 ${q(ms, 0.5).toFixed(2)} ms, p95 ${q(ms, 0.95).toFixed(2)} ms, p99 ${q(ms, 0.99).toFixed(2)} ms, max ${q(ms, 1).toFixed(1)} ms; no route for ${none}`);
 console.log(`route() + geometry (pointAt): p50 ${q(msGeom, 0.5).toFixed(2)} ms, p95 ${q(msGeom, 0.95).toFixed(2)} ms`);
 // nearestOnTrack
 const nt = [];

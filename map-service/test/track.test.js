@@ -449,3 +449,112 @@ test('real track: avoidSidings and fragments on real data - the Brighton route n
   assert.ok(r);
   assert.ok(!r.pieces.some(x => { const c = p.ecls[x.e]; return c === F.CLS.SIDING || c === F.CLS.YARD; }));
 });
+
+// ---- stitching ------------------------------------------------------------------------------------
+
+test('stitching: a dangling end within 1 m of a running edge on the SAME level joins it; across levels it never does', () => {
+  const lay = {
+    points: {
+      M0: [0, 0], M1: [1000, 0],
+      B0: [500, 300], B1: [500, 0.6],                       // branch ending 0.6 m short of the main line: joined (T junction)
+      C0: [2000, 0], C1a: [2500, 0], C1b: [2500, 0], C2: [3000, 0],   // two ways ending on the same coordinates, different nodes: merged
+      R0: [700, 300], R1: [700, 0.4],                       // a bridge ending 0.4 m from the line: NOT joined
+      U0: [800, -300], U1: [800, -0.4],                     // a tunnel ending 0.4 m from the line: NOT joined
+      G0: [900, 300], G1: [900, 1.5]                        // 1.5 m short: too far, NOT joined
+    },
+    ways: [
+      { pts: ['M0', 'M1'], tags: { name: 'main', usage: 'main' } },
+      { pts: ['B0', 'B1'], tags: { name: 'branch', usage: 'branch' } },
+      { pts: ['C0', 'C1a'], tags: { name: 'c1', usage: 'main' } },
+      { pts: ['C1b', 'C2'], tags: { name: 'c2', usage: 'main' } },
+      { pts: ['R0', 'R1'], tags: { name: 'bridge', bridge: 'yes', layer: '1', usage: 'branch' } },
+      { pts: ['U0', 'U1'], tags: { name: 'tunnel', tunnel: 'yes', layer: '-1', usage: 'branch' } },
+      { pts: ['G0', 'G1'], tags: { name: 'gap', usage: 'branch' } }
+    ]
+  };
+  const x = synth(dir, lay);
+  const p = x.pack, st = x.graph.stats;
+  assert.equal(st.stitchJoined, 1, 'the T gap');
+  assert.equal(st.stitchMergedWithNode, 1, 'the end-to-end gap');
+  assert.equal(st.stitchRefusedOtherLevel, 2, 'the bridge and the tunnel were candidates and were refused');
+  const snap = (xm, ym) => p.nearestOnTrack(...ll(xm, ym), { maxDist: 5 });
+  const reach = (a, b) => p.route(snap(...a), snap(...b), { maxDeflection: 180 });
+  assert.ok(reach([500, 150], [200, 0]), 'branch -> main: joined');
+  near(reach([500, 150], [200, 0]).length, 150 + 300, 3);
+  assert.ok(reach([2200, 0], [2800, 0]), 'the two end-to-end ways are one track');
+  assert.equal(reach([700, 150], [200, 0]), null, 'a bridge is not joined to the line beneath it');
+  assert.equal(reach([800, -150], [200, 0]), null, 'a tunnel is not joined to the line above it');
+  assert.equal(reach([900, 150], [200, 0]), null, '1.5 m is a gap, not a join');
+  // the split edge keeps its geometry: the main line is still 1000 m end to end and the junction node has three edges
+  const m = x.pack.nearestOnTrack(...ll(200, 0), { maxDist: 5 });
+  near(p.route(m, snap(900, 0)).length, 700, 1.5);
+  assert.ok(x.graph.stitches.some(s => s.kind === 'joined'));
+});
+
+// ---- route accuracy against published distances ---------------------------------------------------
+
+// 24 real station pairs across Sussex, London, Kent, Berkshire and Glasgow (test/track-pairs.js; each row cites the
+// ELR mileage tables the distance comes from), routed with the snap arrays the service uses (pack.stationSnaps: every
+// platform track of every TIPLOC of the station). A route must be within 10% of the published rail distance, or 250 m,
+// whichever is larger: the mileages are for the station building and the pack's stop point is mid-platform.
+// The corridors fixture is gzipped (test/fixtures/track-routes.bin.gz, made by track/make-fixture.js routes).
+const { PAIRS } = require('./track-pairs');
+let corridors;
+function loadCorridors() {
+  if (!corridors) {
+    const f = path.join(dir, 'track-routes.bin');
+    fs.writeFileSync(f, zlib.gunzipSync(fs.readFileSync(path.join(__dirname, 'fixtures', 'track-routes.bin.gz'))));
+    corridors = loadPack(f);
+  }
+  return corridors;
+}
+
+test('route accuracy: 24 real station pairs are within 10% of the published rail distance', () => {
+  const p = loadCorridors();
+  assert.ok(PAIRS.length >= 20);
+  const bad = [];
+  for (const pair of PAIRS) {
+    const r = p.route(p.stationSnaps(pair.a), p.stationSnaps(pair.b), { avoidSidings: true });
+    const km = r ? r.length / 1000 : null;
+    if (km === null || Math.abs(km - pair.km) > Math.max(0.1 * pair.km, 0.25)) bad.push(`${pair.a} - ${pair.b}: route ${km && km.toFixed(2)} km, published ${pair.km.toFixed(2)} km (${pair.src})`);
+  }
+  assert.deepEqual(bad, []);
+});
+
+test('route accuracy: the pairs run through Clayton Tunnel and the Thameslink core tunnels', () => {
+  const p = loadCorridors();
+  const used = (a, b) => p.route(p.stationSnaps(a), p.stationSnaps(b), { avoidSidings: true }).pieces.map(x => p.edgeInfo(x.e));
+  assert.ok(used('Haywards Heath', 'Brighton').some(e => e.tunnel && e.length > 1000), 'Clayton Tunnel');
+  assert.ok(used('London St Pancras International', 'London Blackfriars').filter(e => e.tunnel).reduce((s, e) => s + e.length, 0) > 1500, 'Thameslink core in tunnel');
+  assert.ok(used('Reading', 'London Paddington').length > 30);
+});
+
+test('route accuracy: the 100 degree turn limit does not decide any of the 24 results (100 and 150 agree to the metre)', () => {
+  const p = loadCorridors();
+  for (const pair of PAIRS) {
+    const a = p.route(p.stationSnaps(pair.a), p.stationSnaps(pair.b), { avoidSidings: true, maxDeflection: 100 });
+    const b = p.route(p.stationSnaps(pair.a), p.stationSnaps(pair.b), { avoidSidings: true, maxDeflection: 150 });
+    near(a.length, b.length, 1, `${pair.a} - ${pair.b}`);
+  }
+});
+
+test('route accuracy: routing from ONE snap on ONE track per station can be wildly off, which is why stationSnaps exists', () => {
+  const p = loadCorridors();
+  let off = 0;
+  for (const pair of PAIRS) {
+    const ta = p.stationTiplocs().find(t => p.station(t).name === pair.a), tb = p.stationTiplocs().find(t => p.station(t).name === pair.b);
+    const sa = p.station(ta).snaps.filter(s => s.primary), sb = p.station(tb).snaps.filter(s => s.primary);
+    const r = sa.length && sb.length ? p.route(sa, sb, { avoidSidings: true }) : null;
+    if (!r || r.length / 1000 > 1.5 * pair.km) off++;
+  }
+  assert.ok(off >= 1, 'a single primary snap is direction-blind: it sits on whichever track is nearest, not the one the train uses');
+});
+
+test('stationSnaps: groups every TIPLOC of a station, never another town\'s namesake', () => {
+  const p = loadCorridors();
+  const cj = p.stationSnaps('Clapham Junction');
+  assert.ok(new Set(cj.map(s => s.tiploc)).size >= 5, 'Clapham Junction has five TIPLOCs in NaPTAN');
+  assert.deepEqual([...new Set(p.stationSnaps('CLPHMJC').map(s => s.tiploc))].sort(), [...new Set(cj.map(s => s.tiploc))].sort(), 'by TIPLOC or by name');
+  assert.ok(new Set(p.stationSnaps('London Bridge').map(s => s.tiploc)).size >= 2);
+  assert.deepEqual(p.stationSnaps('No Such Station'), []);
+});

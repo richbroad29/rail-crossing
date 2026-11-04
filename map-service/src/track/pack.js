@@ -260,6 +260,31 @@ class TrackPack {
     }
     return { tiploc, name: this.str(s.STNAME[i]), lat: s.STLAT[i] * DEG7, lon: s.STLON[i] * DEG7, snaps };
   }
+  /**
+   * Every snap of one PLACE, for routing. NaPTAN gives a big station several TIPLOCs (Clapham Junction has five, London Bridge
+   * two), each with only the platform tracks of its own half of the station, so a route between ONE TIPLOC's snaps and another's
+   * can be forced a long way round (CLPHMJC -> LNDNBDC: 36 km, against 13 km between the two stations' full sets of tracks).
+   * This returns the snaps of the station called `nameOrTiploc` and of every same-named station within 1.5 km, each with its `tiploc`.
+   * Pass the result straight to route() as either end.
+   */
+  stationSnaps(nameOrTiploc) {
+    const idx = this._stations();
+    if (!this._byName) {
+      this._byName = new Map();
+      for (const t of idx.keys()) { const n = this.str(this.s.STNAME[idx.get(t)]); const l = this._byName.get(n); if (l) l.push(t); else this._byName.set(n, [t]); }
+    }
+    let name = nameOrTiploc, anchor = null;
+    if (idx.has(nameOrTiploc)) { anchor = this.station(nameOrTiploc); name = anchor.name; }
+    const out = [];
+    for (const t of this._byName.get(name) || []) {
+      const st = this.station(t);
+      if (!anchor) anchor = st;
+      if (Math.abs(st.lat - anchor.lat) > 0.014 || Math.abs(st.lon - anchor.lon) > 0.022) continue;     // ~1.5 km: not another town's namesake
+      for (const sn of st.snaps) out.push(Object.assign({ tiploc: t }, sn));
+    }
+    return out;
+  }
+
   stationCount() { return this.s.STTIP ? this.s.STTIP.length : 0; }
   stationTiplocs() { return [...this._stations().keys()]; }
 
