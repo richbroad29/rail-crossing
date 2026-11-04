@@ -38,7 +38,7 @@ const MUTATIONS = [
   { name: 'midnight not unwrapped', file: 'cif-index.js', from: 'if (prev >= 0 && v < prev - 720) { offset += 1440; v = t + offset; }', to: '', tests: ['cif'] },
   { name: 'match window ignored', file: 'cif-index.js', from: 'if (d > window) continue;', to: '', tests: ['cif'] },
   { name: 'ambiguity guard removed', file: 'cif-index.js', from: 'if (second && second.rec.uid !== best.rec.uid && Math.abs(second.dist - best.dist) < 0.5) return null;', to: '', tests: ['cif'] },
-  { name: 'area filter ignored (any timing point)', file: 'cif-index.js', from: 'if (!ids.has(this.pool[rec.off + i * STRIDE])) continue;', to: '', tests: ['cif'] },
+  { name: 'area filter ignored (any timing point)', file: 'cif-index.js', from: 'if (rec.tip ? !(areaSet && areaSet.has(rec.tip[v])) : !ids.has(v)) continue;', to: '', tests: ['cif'] },
   { name: 'days_runs ignored', file: 'cif-index.js', from: "if (runs[dowOfDayNum(dn)] !== '1') continue;", to: '', tests: ['cif'] },
   // downloads and reference data
   { name: 'login sent on every hop', file: 'download.js', from: 'if (hop === 0 && o.auth) {', to: 'if (o.auth) {', tests: ['download'] },
@@ -60,7 +60,69 @@ const MUTATIONS = [
   { name: 'gzip never used', file: 'http.js', from: 'if (wantsGzip(req) && (gzBuf || text.length > 1024)) {', to: 'if (false) {', tests: ['api'] },
   { name: 'bbox not validated', file: 'geo.js', from: 'if (s < -90 || n > 90 || w < -180 || e > 180 || s > n || w > e) return null;', to: '', tests: ['api', 'misc'] },
   { name: 'stack trace leaks in a 500', file: 'http.js', from: "sendJson(req, res, 500, { error: 'Something went wrong on the server.' })", to: "sendJson(req, res, 500, { error: String(e && e.stack) })", tests: ['api'] },
-  { name: 'an unplaceable berth is drawn at 0,0 instead of counted', file: 'model.js', from: 'if (!p) { t.placed = false; t.pl = null; t.place = null; return; }', to: "if (!p) { t.placed = true; t.lat = 0; t.lon = 0; t.pl = 'a'; t.place = { pl: 'a', station: '?' }; return; }", tests: ['api'] }
+  { name: 'an unplaceable berth is drawn at 0,0 instead of counted', file: 'model.js', from: 'if (!p) { t.placed = false; t.pl = null; t.place = null; return; }', to: "if (!p) { t.placed = true; t.lat = 0; t.lon = 0; t.pl = 'a'; t.place = { pl: 'a', station: '?' }; return; }", tests: ['api'] },
+  // phase 2: dependencies and feeds
+  { name: 'missing dependency is retried forever in the TD loop', file: 'td-ingest.js', from: "if (e && e.kind === 'missing-dependency') {", to: 'if (false) {', tests: ['deps'] },
+  { name: 'App.start() does not check dependencies', file: 'app.js', from: 'requireDeps();                                   // a missing package fails here, at once, not as a hang later', to: '', tests: ['deps'] },
+  { name: 'a refused extra topic is retried at once (not switched off)', file: 'td-ingest.js', from: 'x.refused++; x.disabledUntil = this.now() + x.cooldownMs;', to: 'x.refused++;', tests: ['feeds'] },
+  { name: 'an extra handler error is not counted against its subscription', file: 'td-ingest.js', from: 'x.errors++; if (x.firstError === null) x.firstError = log.errText(e);', to: 'void e;', tests: ['feeds'] },
+  // TRUST
+  { name: 'TRUST: the TD area is not required to cover the activation', file: 'trust.js', from: 'if (!areaSet.has(ctx.stanoxOf(ctx.cif.tiplocAt(rec, i)))) continue;', to: '', tests: ['trust'] },
+  { name: 'TRUST: ambiguity guard removed', file: 'trust.js', from: "if (second && second.act !== best.act && second.rec.uid !== best.rec.uid && second.tier === best.tier && Math.abs(second.dist - best.dist) < (this.cfg.ambiguityMins || 2)) return null;", to: '', tests: ['trust'] },
+  { name: 'TRUST: time window ignored', file: 'trust.js', from: 'if (!(dist <= window)) continue;', to: '', tests: ['trust'] },
+  { name: 'TRUST: headcode taken from the wrong slice of train_id', file: 'trust.js', from: "act = { id, hc: id.slice(2, 6), uid: '', runDay", to: "act = { id, hc: id.slice(1, 5), uid: '', runDay", tests: ['trust'] },
+  { name: 'TRUST: EARLY is not negative', file: 'trust.js', from: 'else if (e.status === ST_EARLY) act.lateMins = -e.variation;', to: 'else if (e.status === ST_EARLY) act.lateMins = e.variation;', tests: ['trust'] },
+  { name: 'TRUST: an out-of-order report overwrites lateness', file: 'trust.js', from: 'if (!act.last || actualSec >= act.last.actualSec) {', to: 'if (true) {', tests: ['trust'] },
+  { name: 'TRUST: a corrected movement is added, not replaced', file: 'trust.js', from: 'if (act.ev[b] === e.stanox && (act.ev[b + 3] & F_DEP) === (e.dep ? F_DEP : 0) && act.ev[b + 1] === plannedSec) { slot = i; break; }', to: '', tests: ['trust'] },
+  { name: 'TRUST: movements before the activation are dropped', file: 'trust.js', from: 'for (const e of o.evs) this._apply(act, e); c.orphansReplayed += o.evs.length;', to: '', tests: ['trust'] },
+  { name: 'TRUST: activations never expire', file: 'trust.js', from: 'if (nowMs > a.expireAt || finished) {', to: 'if (finished) {', tests: ['trust'] },
+  { name: 'TRUST: the activation cap evicts nothing', file: 'trust.js', from: 'if (w) { this._drop(w); this.counts.evicted++; }', to: 'if (w) { this.counts.evicted++; }', tests: ['trust'] },
+  { name: 'TRUST: events per train unbounded', file: 'trust.js', from: 'if (act.evN >= 400) return;                      // a pathological train: bounded', to: '', tests: ['trust'] },
+  { name: 'TRUST: a change of identity does not re-key the headcode', file: 'trust.js', from: 'act.id = neu; act.hc = neu.slice(2, 6);', to: 'act.id = neu;', tests: ['trust', 'feeds'] },
+  { name: 'TRUST: inference after a restart disabled', file: 'trust.js', from: 'if (!act && TRAIN_ID.test(id)) act = this._infer(id, ev, nowMs);', to: '', tests: ['trust'] },
+  { name: 'TRUST: a negative inference is retried every time', file: 'trust.js', from: 'if (neg && nowMs < neg) return null;', to: '', tests: ['trust'] },
+  // journey derivation
+  { name: 'next station: passes count as stations', file: 'progress.js', from: 'if (c.cancelled || (p.arr < 0 && p.dep < 0)) continue;', to: 'if (c.cancelled) continue;', tests: ['trust'] },
+  { name: 'next station: cancelled calls are not skipped', file: 'progress.js', from: 'if (c.cancelled || (p.arr < 0 && p.dep < 0)) continue;', to: 'if (p.arr < 0 && p.dep < 0) continue;', tests: ['trust'] },
+  { name: 'expected time may be earlier than now', file: 'progress.js', from: 'c.expDep = hhmm(Math.max(p.dep + late, nowMin));', to: 'c.expDep = hhmm(p.dep + late);', tests: ['trust', 'feeds'] },
+  { name: 'cancellation includes the cancellation point itself', file: 'progress.js', from: 'else for (let i = ci + 1; i < n; i++) calls[i].cancelled = true;', to: 'else for (let i = ci; i < n; i++) calls[i].cancelled = true;', tests: ['trust'] },
+  { name: 'a pass report is stored as a departure', file: 'progress.js', from: 'if (passOnly) { c.actualPass = hm; c._pass = sec; } else', to: 'if (false) { c.actualPass = hm; c._pass = sec; } else', tests: ['trust'] },
+  // VSTP
+  { name: 'VSTP: the later message wins whatever its STP', file: 'vstp.js', from: 'if (STP_RANK[r.stp] >= curRank) winners.set(', to: 'if (true) winners.set(', tests: ['vstp'] },
+  { name: 'VSTP: Delete removes nothing', file: 'vstp.js', from: 'this.recs = keep; this.counts.deletedRecords += n;', to: 'this.counts.deletedRecords += n;', tests: ['vstp'] },
+  { name: 'VSTP: a cancel does not suppress the CIF schedule', file: 'vstp.js', from: "const rank = w === CANCELLED ? 3 : STP_RANK[w.stp];", to: "const rank = w === CANCELLED ? -1 : STP_RANK[w.stp];", tests: ['vstp'] },
+  { name: 'VSTP: days-of-week ignored', file: 'vstp.js', from: "return dayNum >= r.start && dayNum <= r.end && r.runs[dow(dayNum)] === '1';", to: 'return dayNum >= r.start && dayNum <= r.end;', tests: ['vstp'] },
+  { name: 'VSTP: the schedule cap not enforced', file: 'vstp.js', from: 'if (this.recs.length >= this.maxSchedules) this._evict();', to: '', tests: ['vstp'] },
+  // transit times
+  { name: 'transit: outliers over 30 minutes kept', file: 'transit.js', from: 'if (!(secs >= 0) || secs > this.maxSeconds) {', to: 'if (!(secs >= 0)) {', tests: ['transit'] },
+  { name: 'transit: median is the 60th percentile', file: 'transit.js', from: 'median: percentile(a, 0.5)', to: 'median: percentile(a, 0.6)', tests: ['transit'] },
+  { name: 'transit: p90 is the p80', file: 'transit.js', from: 'p90: percentile(a, 0.9)', to: 'p90: percentile(a, 0.8)', tests: ['transit'] },
+  { name: 'transit: the entry cap not enforced', file: 'transit.js', from: 'if (this.map.size >= this.maxEntries) { this.stats.dropped++; return false; }', to: '', tests: ['transit'] },
+  { name: 'transit: a berth entered by interposing is timed anyway', file: 'model.js', from: 't.keyId === fromId && t.enteredStep && ts > t.at', to: 't.keyId === fromId && ts > t.at', tests: ['transit'] },
+  // motion plans
+  { name: 'motion: held at exactly the threshold', file: 'motion.js', from: 'held: nowMs > heldAt', to: 'held: nowMs >= heldAt', tests: ['transit'] },
+  { name: 'motion: no 30 s floor on the held grace', file: 'motion.js', from: 'Math.max((this.cfg.heldMinGraceSecs || 30), spread)', to: 'spread', tests: ['transit'] },
+  { name: 'motion: dwell not added to a passing median', file: 'motion.js', from: 'medianSecs = pass.median + dwell;', to: 'medianSecs = pass.median;', tests: ['transit'] },
+  { name: 'motion: t0 is the receive time, not the signalling time', file: 'motion.js', from: 'const mv = { sp: sp.id, t0: t.at,', to: 'const mv = { sp: sp.id, t0: nowMs,', tests: ['transit'] },
+  { name: 'motion: the clock never flips held by itself', file: 'model.js', from: 'if (nowMs >= t.timeDepAt) { this.timeDep.delete(t); this._touch(t); n++; }', to: '', tests: ['transit'] },
+  // spans
+  { name: 'spans: always equal shares', file: 'spans.js', from: 'const w = learned ? meds : meds.map(() => 1);', to: 'const w = meds.map(() => 1);', tests: ['spans'] },
+  { name: 'spans: no stop point on arrival and departure berths', file: 'spans.js', from: 'const stop = last ? len : first ? 0 : null;', to: 'const stop = null;', tests: ['spans'] },
+  { name: 'spans: never re-cut', file: 'spans.js', from: 'const moved = Math.abs(len - old.length)', to: 'const moved = false; const _m = Math.abs(len - old.length)', tests: ['spans'] },
+  { name: 'spans: always re-cut (ids churn)', file: 'spans.js', from: 'if (!moved) { this.stats.kept++; continue; }', to: '', tests: ['spans'] },
+  { name: 'spans: superseded ids forgotten', file: 'spans.js', from: 'this.retired.set(old.id, old);', to: '', tests: ['spans'] },
+  // recording
+  { name: 'record: proxy headers not refused', file: 'record.js', from: 'for (const h of PROXY_HEADERS) if (req.headers[h] !== undefined) return false;', to: '', tests: ['record'] },
+  { name: 'record: Host not checked', file: 'record.js', from: "return LOOPBACK_HOST.test(String(req.headers.host || ''));", to: 'return true;', tests: ['record'] },
+  { name: 'record: remote socket allowed', file: 'record.js', from: 'if (!LOOPBACK_ADDR.has(addr)) return false;', to: '', tests: ['record'] },
+  { name: 'record: segment size cap ignored', file: 'record.js', from: 'if (this.bytes + line.length > max) {', to: 'if (false) {', tests: ['record'] },
+  { name: 'record: old segments never deleted', file: 'record.js', from: 'for (const n of names.slice(0, Math.max(0, names.length - keep))) {', to: 'for (const n of []) {', tests: ['record'] },
+  { name: 'record: a write error is thrown into the tick', file: 'record.js', from: '} catch (e) { this._fail(e); }', to: '} catch (e) { throw e; }', tests: ['record'] },
+  // station boards
+  { name: 'board: sorted by booked time, not expected', file: 'station-board.js', from: 'board.sort((a, b) => a.k - b.k ||', to: 'board.sort((a, b) => a.b - b.b ||', tests: ['feeds'] },
+  { name: 'board: the past window not applied', file: 'station-board.js', from: 'if (expMin < nowMin - GRACE_MIN || expMin > nowMin + AHEAD_MIN) continue;', to: 'if (expMin > nowMin + AHEAD_MIN) continue;', tests: ['feeds'] },
+  { name: 'board: the 2 h window not applied', file: 'station-board.js', from: 'if (expMin < nowMin - GRACE_MIN || expMin > nowMin + AHEAD_MIN) continue;', to: 'if (expMin < nowMin - GRACE_MIN) continue;', tests: ['feeds'] },
+  { name: 'board: the 30 min recent window not applied', file: 'station-board.js', from: 'if (mins >= nowMin - BEHIND_MIN && mins <= nowMin + 1) {', to: 'if (mins <= nowMin + 1) {', tests: ['feeds'] }
 ];
 
 function run(nodeBin, tests) {

@@ -443,8 +443,8 @@ class TrustState {
       let dist = Infinity, evidence = false;
       // route: the nearest booked point inside the area
       for (let i = 0; i < rec.n; i++) {
+        if (!areaSet.has(ctx.stanoxOf(ctx.cif.tiplocAt(rec, i)))) continue;       // cheap test first: most points are elsewhere
         const p = ctx.cif.point(rec, i);
-        if (!areaSet.has(ctx.stanoxOf(p.tiploc))) continue;
         const t = p.dep >= 0 ? p.dep : p.pass >= 0 ? p.pass : p.arr;
         if (t >= 0) dist = Math.min(dist, Math.abs(t - rel));
       }

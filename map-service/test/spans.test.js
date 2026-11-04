@@ -81,23 +81,27 @@ test('GET span: the polyline cut from the route at the berth boundaries, and not
 });
 
 test('IDS are stable while nothing changes, and change when learning moves a berth by more than 10 % of its length', () => {
-  const w = world({ medians: { '0001': 10, '0003': 10, '0005': 10, '0007': 10, '0009': 10 } });
+  const all = { '0001': 100, '0003': 100, '0005': 100, '0007': 100, '0009': 100 };
+  const w = world({ medians: all });
   w.sb.settle();
-  const before = Object.fromEntries(['0001', '0003', '0005', '0007', '0009'].map(b => [b, w.sb.forBerth(w.id(b)).id]));
+  const ids = () => Object.fromEntries(Object.keys(all).map(b => [b, w.sb.forBerth(w.id(b)).id]));
+  const before = ids();
   // Same data re-planned: identical ids.
   w.sb._planned.at = -Infinity; w.sb._planned.transit = -2; w.sb.settle();
-  for (const b of Object.keys(before)) assert.equal(w.sb.forBerth(w.id(b)).id, before[b]);
-  // A small shift (< 10 % of the berth): the cut moves a little but the span (and its id) is kept.
-  for (let i = 0; i < 5; i++) w.transit.add(w.id('0003'), 'express', 'passes', 10.4);
+  assert.deepEqual(ids(), before);
+  // A small shift (berth 0003 now 104 s against 100: its share moves about 3 %): the span, and its id, is kept.
+  for (let i = 0; i < 10; i++) w.transit.add(w.id('0003'), 'express', 'passes', 104);
   w.sb._planned.at = -Infinity; w.sb.settle();
-  assert.equal(w.sb.forBerth(w.id('0003')).id, before['0003'], 'a 2 % change keeps the id');
-  // A large shift: berth 0003 becomes much longer; ids change, and the OLD id still resolves.
-  for (let i = 0; i < 100; i++) w.transit.add(w.id('0003'), 'express', 'passes', 40);
+  assert.deepEqual(ids(), before, 'a 3 % change keeps every id');
+  assert.equal(w.sb.stats.recut, 0);
+  // A large shift: 0003 becomes four times longer; its id changes, and the OLD id is still readable.
+  for (let i = 0; i < 200; i++) w.transit.add(w.id('0003'), 'express', 'passes', 400);
   w.sb._planned.at = -Infinity; w.sb.settle();
   assert.notEqual(w.sb.forBerth(w.id('0003')).id, before['0003']);
   assert.ok(w.sb.get(before['0003']), 'the superseded id is still readable');
   assert.equal(w.sb.get(before['0003']).id, before['0003']);
   assert.ok(w.sb.stats.recut >= 1);
+  assert.equal(w.sb.byId.has(before['0003']), false, 'and it is no longer the current one');
 });
 
 test('no route between the stops: no spans, counted; a station that will not snap: counted too; never a throw', () => {

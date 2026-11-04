@@ -25,6 +25,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 const opt = {};
 for (const a of process.argv.slice(2)) { const m = /^--([a-z-]+)=(.*)$/.exec(a); if (m) opt[m[1]] = m[2]; }
 const NODE = opt.node || process.execPath;
+const trustRate = Number(opt['trust-rate'] || 25), vstpRate = Number(opt['vstp-rate'] || 2), trustPrefill = Number(opt['trust-prefill'] || 0);
 const minutes = Number(opt.minutes || 10), rate = Number(opt.rate || 200), trains = Number(opt.trains || 5000), sseN = Number(opt.sse || 60);
 const REF = opt['ref-dir'];
 if (!REF) { console.error('usage: measure-memory.js --ref-dir=<folder with smart-latest.json.gz corpus-latest.json.gz naptan-rail.csv>'); process.exit(2); }
@@ -54,7 +55,7 @@ const getJson = (port, p) => new Promise((resolve, reject) => {
   }
 
   const stompPort = 62000 + Math.floor(Math.random() * 1000), port = 36000 + Math.floor(Math.random() * 1000);
-  const fake = spawn(NODE, [path.join(__dirname, 'fake-nrod.js'), '--mode=synthetic', `--smart=${path.join(refDir, 'smart-latest.json.gz')}`, `--rate=${rate}`, `--trains=${trains}`, `--port=${stompPort}`], { stdio: ['ignore', 'pipe', 'inherit'] });
+  const fake = spawn(NODE, [path.join(__dirname, 'fake-nrod.js'), '--mode=synthetic', `--smart=${path.join(refDir, 'smart-latest.json.gz')}`, `--rate=${rate}`, `--trains=${trains}`, `--port=${stompPort}`, `--trust-rate=${trustRate}`, `--vstp-rate=${vstpRate}`, `--trust-prefill=${trustPrefill}`], { stdio: ['ignore', 'pipe', 'inherit'] });
   fake.stdout.on('data', () => {});
   await sleep(1500);
   const svcLog = [];
@@ -87,13 +88,14 @@ const getJson = (port, p) => new Promise((resolve, reject) => {
 
   await sleep(15000);                                  // let the synthetic population fill
   const rows = [];
+  let lastHealth = null;
   const base = ps(svc.pid), baseT = Date.now();
   const end = Date.now() + minutes * 60000;
   let n = 0;
   while (Date.now() < end && !exited) {
     await sleep(10000);
     const p = ps(svc.pid); if (!p) break;
-    let h = null; try { h = await getJson(port, '/map/v1/health'); } catch (_) { /* busy */ }
+    let h = null; try { h = await getJson(port, '/map/v1/health'); lastHealth = h; } catch (_) { /* busy */ }
     rows.push({ t: Math.round((Date.now() - baseT) / 1000), rss: p.rssMB, heap: h ? h.heapMB : null, trains: h ? h.model.trains : null, placed: h ? h.model.placed : null, sse: h ? h.clients.sse : null, evMin: h ? h.feeds.td.messagesPerMin : null, cpu: p.cpuSecs });
     if (++n % 6 === 0) console.log(`  t=${rows[rows.length - 1].t}s rss=${p.rssMB.toFixed(0)}MB heap=${h ? h.heapMB : '?'}MB trains=${h ? h.model.trains : '?'}`);
   }
@@ -106,13 +108,14 @@ const getJson = (port, p) => new Promise((resolve, reject) => {
   const mean = a => a.reduce((x, y) => x + y, 0) / (a.length || 1);
   const result = {
     node: process.version === undefined ? null : execFileSync(NODE, ['--version'], { encoding: 'utf8' }).trim(),
-    minutes, rate, trainsTarget: trains, sseClients: sseN, cifSchedules: health.reference.cif.schedules,
+    minutes, rate, trustRate, vstpRatePerMin: vstpRate, trustPrefill, trainsTarget: trains, sseClients: sseN, cifSchedules: health.reference.cif.schedules,
     startupPeakRssMB: Math.round(peakStart),
     steady: { rssMB: { min: Math.round(Math.min(...rssVals)), mean: Math.round(mean(rssVals)), max: Math.round(Math.max(...rssVals)) }, heapMB: { min: Math.min(...heapVals), mean: Math.round(mean(heapVals)), max: Math.max(...heapVals) } },
     growth: { firstHalfMeanRssMB: Math.round(mean(rssVals.slice(0, half))), secondHalfMeanRssMB: Math.round(mean(rssVals.slice(half))) },
     trains: { max: Math.max(...rows.map(r => r.trains || 0)), placedAtEnd: rows[rows.length - 1].placed },
     eventsPerMinMeasured: Math.round(mean(rows.map(r => r.evMin || 0))),
     cpu: { avgPercentOfOneCore: cpuAvg === null ? null : Math.round(cpuAvg * 10) / 10 },
+    trust: lastHealth ? { activations: lastHealth.feeds.trust.activations, msgPerMin: lastHealth.feeds.trust.messagesPerMin, vstpSchedules: lastHealth.feeds.vstp.schedules, stats: lastHealth.diagnostics.trust, transitSeries: lastHealth.diagnostics.transit.series } : null,
     budgetRssMB: 220, withinBudget: Math.max(...rssVals) <= 220
   };
   console.log(JSON.stringify(result, null, 1));

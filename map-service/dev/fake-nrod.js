@@ -23,8 +23,15 @@
 //              feed clocks); the gaps between events are kept, divided by --speed. --speed=max sends
 //              as fast as the socket takes it.
 //
+// It also serves /topic/TRAIN_MVT_ALL_TOC (TRUST) and /topic/VSTP_ALL in the documented wire shapes
+// when --trust-rate / --vstp-rate are given (see TrustSynth). TRUST activations and movements walk
+// real SMART STANOXes; they are NOT tied to the synthetic TD trains' headcodes, so they exercise the
+// service's TRUST state and memory (the point of the generator) rather than its matching.
+//
 // Options: --port=61613 --mode= --file= --smart= --rate=20 (events/s, synthetic) --trains=300
 //          --speed=60|max --loop --seed=1
+//          --trust-rate=25 (messages/s) --trust-prefill=0 (activations + movements sent at once on
+//          first subscriber, to reach a full day's state) --vstp-rate=2 (messages/MINUTE)
 
 const fs = require('fs');
 const zlib = require('zlib');
@@ -32,6 +39,7 @@ const readline = require('readline');
 const { FakeStompServer } = require('./fake-stomp-server');
 
 const TOPIC = '/topic/TD_ALL_SIG_AREA';
+const TRUST_TOPIC = '/topic/TRAIN_MVT_ALL_TOC', VSTP_TOPIC = '/topic/VSTP_ALL';
 
 function mulberry32(seed) {
   let a = seed >>> 0;
@@ -112,10 +120,77 @@ class Synthetic {
   }
 }
 
+/** The STANOXes SMART knows, in file order. */
+async function readSmartStanoxes(file) {
+  const { streamRows } = require('../src/json-rows');
+  const set = new Set();
+  await streamRows(file, { onRow(r) { const n = parseInt(String(r.STANOX || '').trim(), 10); if (n > 0) set.add(n); } });
+  return [...set];
+}
+
+/**
+ * TRUST in the documented shapes: 0001 activations, then 0003 movements along a route of real
+ * STANOXes (arrival + departure per stop, a pass for some), the last one with train_terminated, with
+ * the occasional 0002 cancellation, 0005 reinstatement and 0007 identity change, at realistic mixes:
+ * roughly 1 activation per 20 messages. Also VSTP Create/Delete.
+ */
+class TrustSynth {
+  constructor({ stanoxes, seed = 3 }) {
+    this.rand = mulberry32(seed); this.sx = stanoxes; this.live = []; this.n = 0;
+  }
+  _pick(a) { return a[Math.floor(this.rand() * a.length)]; }
+  _id(hc, dd, p) { return `${p}${hc}MY${dd}`; }
+  _hc() { const n = this.n; return `${1 + (n % 9)}${String.fromCharCode(65 + (n * 7) % 26)}${String(n % 100).padStart(2, '0')}`; }
+  _activate(now) {
+    const n = this.n++, hc = this._hc(), dd = String(new Date(now).getUTCDate()).padStart(2, '0');
+    const id = this._id(hc, dd, String(10 + (n % 80)));
+    const route = Array.from({ length: 8 + Math.floor(this.rand() * 14) }, () => this._pick(this.sx));
+    const day = new Date(now).toISOString().slice(0, 10);
+    this.live.push({ id, route, i: 0, arrived: false, t: now, hc });
+    return { header: { msg_type: '0001' }, body: { schedule_source: 'C', train_file_address: null, schedule_end_date: day, train_id: id, tp_origin_timestamp: day, tp_origin_stanox: String(route[0]),
+      origin_dep_timestamp: String(now), train_service_code: '24673000', toc_id: '84', d1266_record_number: '00000', train_call_type: 'AUTOMATIC',
+      train_uid: `C${String(n % 100000).padStart(5, '0')}`, train_call_mode: 'NORMAL', schedule_type: 'O', sched_origin_stanox: String(route[0]), schedule_wtt_id: `${hc}M`, schedule_start_date: day } };
+  }
+  _move(tr, now) {
+    const sx = tr.route[tr.i], last = tr.i === tr.route.length - 1;
+    const evt = tr.arrived ? 'DEPARTURE' : 'ARRIVAL';
+    const late = Math.floor(this.rand() * 9) - 2;
+    const msg = { header: { msg_type: '0003' }, body: { event_type: evt, gbtt_timestamp: String(now), original_loc_stanox: '', planned_timestamp: String(now - late * 60000), timetable_variation: String(Math.abs(late)),
+      original_loc_timestamp: '', current_train_id: '', delay_monitoring_point: 'true', next_report_run_time: '1', reporting_stanox: String(sx), actual_timestamp: String(now), correction_ind: 'false',
+      event_source: 'AUTOMATIC', train_file_address: null, platform: this.rand() < 0.64 ? String(1 + Math.floor(this.rand() * 8)) : ' ', division_code: '84', train_terminated: String(last && evt === 'ARRIVAL'),
+      train_id: tr.id, offroute_ind: 'false', variation_status: late > 0 ? 'LATE' : late < 0 ? 'EARLY' : 'ON TIME', train_service_code: '24673000', toc_id: '84', loc_stanox: String(sx),
+      auto_expected: 'true', direction_ind: 'UP', route: '', planned_event_type: evt, next_report_stanox: '', line_ind: '' } };
+    if (tr.arrived || last) { tr.i++; tr.arrived = false; } else tr.arrived = true;
+    return msg;
+  }
+  /** `k` messages: mostly movements of live trains, about 1 in 20 an activation, rarely the others. */
+  messages(k, now) {
+    const out = [];
+    while (out.length < k) {
+      const r = this.rand();
+      if (!this.live.length || r < 0.05) { out.push(this._activate(now)); continue; }
+      const idx = Math.floor(this.rand() * this.live.length), tr = this.live[idx];
+      if (tr.i >= tr.route.length) { this.live.splice(idx, 1); continue; }
+      if (r > 0.995) out.push({ header: { msg_type: '0002' }, body: { train_id: tr.id, loc_stanox: String(tr.route[Math.min(tr.i, tr.route.length - 1)]), canx_type: 'EN ROUTE', canx_reason_code: 'YI', train_file_address: null, toc_id: '84' } });
+      else if (r > 0.99) out.push({ header: { msg_type: '0007' }, body: { train_id: tr.id, revised_train_id: this._id(tr.hc, tr.id.slice(8, 10), String(10 + (this.n % 80))), event_timestamp: String(now), train_file_address: null, toc_id: '84' } });
+      else out.push(this._move(tr, now));
+    }
+    return out;
+  }
+  vstp(now) {
+    const day = new Date(now).toISOString().slice(0, 10), n = this.n++;
+    const uid = `V${String(n % 100000).padStart(5, '0')}`;
+    if (this.rand() < 0.2) return { VSTPCIFMsgV1: { Schedule: { transaction_type: 'Delete', schedule_start_date: day, schedule_end_date: day, CIF_train_uid: uid, CIF_stp_indicator: 'N' } } };
+    const locs = Array.from({ length: 6 }, (_, i) => ({ scheduled_arrival_time: i ? '1000' + String(i).padStart(2, '0') : '', scheduled_departure_time: i < 5 ? '1001' + String(i).padStart(2, '0') : '', scheduled_pass_time: '', CIF_platform: '1', location: { tiploc: { tiploc_id: `SYN${(n + i) % 500}` } } }));
+    return { VSTPCIFMsgV1: { Schedule: { transaction_type: 'Create', schedule_id: uid, schedule_start_date: day, schedule_end_date: day, schedule_days_runs: '1111111', CIF_train_uid: uid, train_status: '1', CIF_stp_indicator: 'N',
+      schedule_segment: { signalling_id: this._hc(), atoc_code: 'SN', CIF_train_category: 'XX', CIF_power_type: 'EMU', CIF_speed: '075', schedule_location: locs } } } };
+  }
+}
+
 class FakeNrod {
   /** @param {object} o  port, mode, file, smart, rate, trains, speed, loop, seed, frameSize */
   constructor(o = {}) {
-    this.o = { port: 0, mode: 'synthetic', rate: 20, trains: 300, speed: 60, loop: false, seed: 1, frameSize: 50, ...o };
+    this.o = { port: 0, mode: 'synthetic', rate: 20, trains: 300, speed: 60, loop: false, seed: 1, frameSize: 50, trustRate: 0, trustPrefill: 0, vstpRate: 0, ...o };
     this.server = new FakeStompServer({ acceptAny: true, heartbeat: [15000, 15000] });
     this.sent = { frames: 0, events: 0 };
     this._timer = null;
@@ -133,7 +208,7 @@ class FakeNrod {
   }
 
   async stop() {
-    clearInterval(this._timer); clearTimeout(this._timer);
+    clearInterval(this._timer); clearTimeout(this._timer); clearInterval(this._trustTimer); clearInterval(this._vstpTimer); clearInterval(this._burst);
     await this.server.close();
   }
 
@@ -161,6 +236,30 @@ class FakeNrod {
     const gen = new Synthetic({ adj, trains: this.o.trains, seed: this.o.seed });
     const tickMs = 50, perTick = Math.max(1, Math.round(this.o.rate * tickMs / 1000));
     this._timer = setInterval(() => this._publish(gen.events(perTick, Date.now())), tickMs);
+    if (this.o.trustRate > 0 || this.o.vstpRate > 0 || this.o.trustPrefill > 0) await this._startTrust();
+  }
+
+  async _startTrust() {
+    if (!this.o.smart) throw new Error('--trust-rate needs --smart (the STANOXes come from it).');
+    const synth = new TrustSynth({ stanoxes: await readSmartStanoxes(this.o.smart), seed: this.o.seed + 2 });
+    this.trust = synth; this.sent.trust = 0; this.sent.vstp = 0;
+    const pub = (topic, msgs, counter) => { this.server.publish(topic, JSON.stringify(msgs)); this.sent[counter] += msgs.length; };
+    // A full day's state at once, on the first subscriber (TRUST is not durable: a real service sees this build up over a day).
+    if (this.o.trustPrefill > 0) {
+      this.server.waitFor(() => this.server.framesOf('SUBSCRIBE').some(f => f.headers.destination === TRUST_TOPIC), 3600000, 'a TRUST subscriber').then(() => {
+        let left = this.o.trustPrefill * 14;
+        const burst = setInterval(() => { const k = Math.min(left, 150); pub(TRUST_TOPIC, synth.messages(k, Date.now()), 'trust'); left -= k; if (left <= 0) clearInterval(burst); }, 40);
+        this._burst = burst;
+      }).catch(() => {});
+    }
+    const tickMs = 100;
+    if (this.o.trustRate > 0) {
+      let carry = 0;
+      this._trustTimer = setInterval(() => { carry += this.o.trustRate * tickMs / 1000; const k = Math.floor(carry); carry -= k; if (k) pub(TRUST_TOPIC, synth.messages(k, Date.now()), 'trust'); }, tickMs);
+    }
+    if (this.o.vstpRate > 0) {
+      this._vstpTimer = setInterval(() => pub(VSTP_TOPIC, [synth.vstp(Date.now())], 'vstp'), Math.round(60000 / this.o.vstpRate));
+    }
   }
 
   async _readLog() {
@@ -214,11 +313,14 @@ class FakeNrod {
 function parseArgs(argv) {
   const o = {};
   for (const a of argv) {
-    const m = /^--([a-z]+)(?:=(.*))?$/.exec(a);
+    const m = /^--([a-z-]+)(?:=(.*))?$/.exec(a);
     if (!m) throw new Error(`Unknown argument "${a}"`);
     const [, k, v] = m;
     if (k === 'loop') o.loop = true;
     else if (['port', 'rate', 'trains', 'seed'].includes(k)) o[k] = Number(v);
+    else if (k === 'trust-rate') o.trustRate = Number(v);
+    else if (k === 'trust-prefill') o.trustPrefill = Number(v);
+    else if (k === 'vstp-rate') o.vstpRate = Number(v);
     else if (k === 'speed') o.speed = v === 'max' ? 'max' : Number(v);
     else if (['mode', 'file', 'smart'].includes(k)) o[k] = v;
     else throw new Error(`Unknown option --${k}`);
@@ -239,4 +341,4 @@ if (require.main === module) {
   })().catch(e => { console.error(`fake NROD: ${e.message}`); process.exit(1); });
 }
 
-module.exports = { FakeNrod, Synthetic, readSmartChains, wrap, TOPIC, mulberry32 };
+module.exports = { FakeNrod, Synthetic, TrustSynth, readSmartChains, readSmartStanoxes, wrap, TOPIC, TRUST_TOPIC, VSTP_TOPIC, mulberry32 };

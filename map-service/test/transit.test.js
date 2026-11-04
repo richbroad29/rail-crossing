@@ -152,8 +152,8 @@ const feed = (store, cls, beh, vals) => vals.forEach(v => store.add(5, cls, beh,
 test('MOTION PLAN: t0 is the step time, eta = t0 + learned median, and no span means no plan', () => {
   const { store, p } = planner();
   feed(store, 'express', 'passes', [50, 60, 60, 60, 70]);
-  const r = p.plan(train(), 1_000_000);
-  assert.deepEqual(r.mv, { sp: 'sp_test', t0: 1_000_000, eta: 1_060_000, stop: null, dwell: null, held: false });
+  const r = p.plan(train(), 1_000_500);                 // received half a second after the step
+  assert.deepEqual(r.mv, { sp: 'sp_test', t0: 1_000_000, eta: 1_060_000, stop: null, dwell: null, held: false }, 't0 is the step time, not the receive time');
   assert.equal(p.plan(train({ keyId: 6 }), 1_000_000), null, 'a berth without a span keeps phase-1 lat/lon only');
 });
 
