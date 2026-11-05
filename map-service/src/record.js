@@ -13,10 +13,13 @@
 //     and a loopback Host, because Caddy reaches this service from 127.0.0.1 too: the socket alone
 //     would let the whole internet in. Refusals look like any unknown path (404).
 //
-// Line shapes (the SSE shapes, plus an `event` key first):
-//   {"event":"snapshot","serverTime":..,"feedStale":..,"trains":[Train...]}
-//   {"event":"update","serverTime":..,"upsert":[Train...],"remove":[id...]}
-//   {"event":"end","serverTime":..}              (debug stream only)
+// Line shapes (contract section 16): one JSON object per line, {t, event, data}, t = the server time in ms.
+//   {"t":..,"event":"snapshot","data":{"serverTime":..,"feedStale":..,"trains":[Train...]}}
+//   {"t":..,"event":"update","data":{"upsert":[Train...],"remove":[id...]}}
+//   {"t":..,"event":"span","data":{"id":"sp_..","length":..,"path":[[lat,lon]...],"stop":..}}
+//   {"t":..,"event":"end","data":null}                 (debug stream only)
+// A `span` line is written BEFORE the first line that references its id (a train's mv.sp) in a segment, or in a debug stream,
+// so any one segment replays with no network: nothing has to be fetched from /span/:id.
 
 const fs = require('fs');
 const path = require('path');
@@ -35,6 +38,39 @@ function isLocalRequest(req) {
   return LOOPBACK_HOST.test(String(req.headers.host || ''));
 }
 
+const SP = /"sp":"(sp_[0-9a-f]+)"/g;
+
+/**
+ * Builds the {t, event, data} lines, adding a `span` line the first time each span id is referenced since the last reset().
+ * `write(text)` returns true when the text was kept; ids are only remembered as written then (a dropped block never leaves a
+ * later line pointing at a span the file does not contain).
+ */
+class LineMaker {
+  constructor(spanFor) { this.spanFor = spanFor; this.seen = new Set(); }
+  reset() { this.seen.clear(); }
+  _emit(t, event, dataJson, idsFrom, write) {
+    let text = '';
+    const fresh = [];
+    if (this.spanFor && idsFrom) {
+      SP.lastIndex = 0;
+      let m;
+      while ((m = SP.exec(idsFrom)) !== null) {
+        const id = m[1];
+        if (this.seen.has(id) || fresh.includes(id)) continue;
+        const sp = this.spanFor(id);
+        if (sp) { text += `{"t":${t},"event":"span","data":${JSON.stringify(sp)}}\n`; fresh.push(id); }
+      }
+    }
+    text += `{"t":${t},"event":"${event}","data":${dataJson}}\n`;
+    if (write(text)) for (const id of fresh) this.seen.add(id);
+  }
+  snapshot(body, t, write) { this._emit(t, 'snapshot', body, body, write); }
+  update(u, write) {
+    const json = `{"upsert":[${u.upsert.join(',')}],"remove":${JSON.stringify(u.remove)}}`;
+    this._emit(u.serverTime, 'update', json, u.upsert.length ? json : null, write);
+  }
+}
+
 const stamp = ms => new Date(ms).toISOString().replace(/[-:]/g, '').slice(0, 15);        // 20261102T094400
 
 class Recorder {
@@ -45,15 +81,17 @@ class Recorder {
    * @param {SseHub} o.sse
    * @param {Snapshot} o.snapshot
    * @param {function} [o.now]
+   * @param {function(string):object|null} [o.spanFor]  span id -> {id, length, path, stop} (for the `span` lines)
    */
-  constructor({ config, dataDir, sse, snapshot, now = Date.now }) {
+  constructor({ config, dataDir, sse, snapshot, now = Date.now, spanFor = null }) {
     this.cfg = config; this.dir = path.join(dataDir, 'record'); this.sse = sse; this.snapshot = snapshot; this.now = now;
     const [s, w, n, e] = config.bbox;
     this.bbox = { s, w, n, e };
     this.fd = null; this.file = null; this.bytes = 0; this.segStart = 0;
     this.disabledUntil = 0;
     this.stats = { segments: 0, lines: 0, bytes: 0, droppedLines: 0, errors: 0, deleted: 0 };
-    this.tap = { bbox: this.bbox, write: line => this._write(line) };
+    this.maker = new LineMaker(spanFor);
+    this.tap = { bbox: this.bbox, onUpdate: u => this._onUpdate(u) };
     this.enabled = config.enabled !== false;
     this.lastError = null;
   }
@@ -76,24 +114,26 @@ class Recorder {
     this.fd = fs.openSync(this.file, 'a');
     this.bytes = 0; this.segStart = t; this.stats.segments++;
     this._prune();
-    const body = this.snapshot.body(this.bbox);
-    this._raw(`{"event":"snapshot",${body.slice(1)}\n`);
+    this.maker.reset();                                     // each segment replays on its own: spans are written again
+    this.maker.snapshot(this.snapshot.body(this.bbox), t, text => this._raw(text));
   }
 
-  _raw(line) {
+  /** Write a block of whole lines, or none of it. Returns whether it was kept. */
+  _raw(text) {
     const max = this.cfg.maxSegmentBytes || 12582912;
-    if (this.bytes + line.length > max) { this.stats.droppedLines++; return; }
-    fs.writeSync(this.fd, line);
-    this.bytes += line.length; this.stats.lines++; this.stats.bytes += line.length;
+    if (this.bytes + text.length > max) { this.stats.droppedLines++; return false; }
+    fs.writeSync(this.fd, text);
+    this.bytes += text.length; this.stats.lines += text.split('\n').length - 1; this.stats.bytes += text.length;
+    return true;
   }
 
-  _write(line) {
+  _onUpdate(u) {
     const t = this.now();
     if (t < this.disabledUntil) { this.stats.droppedLines++; return; }
     try {
       if (this.fd !== null && t - this.segStart >= (this.cfg.segmentSecs || 600) * 1000) this._close();
       if (this.fd === null) this._open(t);
-      this._raw(line);
+      this.maker.update(u, text => this._raw(text));
     } catch (e) { this._fail(e); }
   }
 
@@ -132,17 +172,19 @@ function serveDebugRecord(app, req, res, q, sendJson) {
   app.debugTaps++;
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
   let done = false;
-  const tap = { bbox, write: line => { if (!done) { if (res.writableLength > 1048576) finish(); else res.write(line); } } };
+  const maker = new LineMaker(app.spans ? id => app.spans.get(id) : null);
+  const write = text => { if (done) return false; if (res.writableLength > 1048576) { finish(); return false; } res.write(text); return true; };
+  const tap = { bbox, onUpdate: u => maker.update(u, write) };
   const finish = () => {
     if (done) return;
     done = true; clearTimeout(timer);
     app.sse.removeTap(tap); app.debugTaps--;
-    try { res.end(`{"event":"end","serverTime":${app.now()}}\n`); } catch (_) { /* gone */ }
+    try { res.end(`{"t":${app.now()},"event":"end","data":null}\n`); } catch (_) { /* gone */ }
   };
   const timer = setTimeout(finish, secs * 1000);
   res.on('close', () => { if (!done) { done = true; clearTimeout(timer); app.sse.removeTap(tap); app.debugTaps--; } });
-  res.write(`{"event":"snapshot",${app.snapshot.body(bbox).slice(1)}\n`);
+  maker.snapshot(app.snapshot.body(bbox), app.now(), write);
   app.sse.addTap(tap);
 }
 
-module.exports = { Recorder, serveDebugRecord, isLocalRequest };
+module.exports = { Recorder, serveDebugRecord, isLocalRequest, LineMaker };

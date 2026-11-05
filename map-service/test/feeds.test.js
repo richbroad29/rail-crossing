@@ -224,3 +224,19 @@ test('STATION BOARD: ordering, the 2 h / 30 min windows, passes, terminations, c
     assert.equal((await getJson(rig.port, '/map/v1/station/pld')).status, 200, 'case-insensitive');
   } finally { await rig.stop(); }
 });
+
+test('SECTION 16: svc.late is POSITIVE when late and NEGATIVE when early, in minutes, on the wire', async () => {
+  const rig = await eastbound();
+  try {
+    rig.trust([T.activation({ id: ID, uid: 'C00001', originStanox: T.STANOX.LTLHMPT, depMs: T.at(9, 30) }),
+      T.movement({ id: ID, stanox: T.STANOX.STHWICK, evt: 'DEPARTURE', actual: T.at(9, 45), planned: T.at(9, 42), variation: 3, status: 'LATE' })]);
+    await rig.settle(1300);
+    assert.strictEqual((await one(rig, '1H15')).svc.late, 3, 'three minutes late is +3');
+    rig.trust([T.movement({ id: ID, stanox: T.STANOX.PSLDAWH, evt: 'ARRIVAL', actual: T.at(9, 46), planned: T.at(9, 48), variation: 2, status: 'EARLY' })]);
+    await rig.settle(1300);
+    assert.strictEqual((await one(rig, '1H15')).svc.late, -2, 'two minutes early is -2');
+    rig.trust([T.movement({ id: ID, stanox: T.STANOX.PSLDAWH, evt: 'DEPARTURE', actual: T.at(9, 47), planned: T.at(9, 47), variation: 0, status: 'ON TIME' })]);
+    await rig.settle(1300);
+    assert.strictEqual((await one(rig, '1H15')).svc.late, 0);
+  } finally { await rig.stop(); }
+});

@@ -228,3 +228,40 @@ test('IN THE SERVICE: a berth with a span puts mv on the wire; held flips by its
     assert.equal(train.mv, undefined, 'no span on the next berth: phase-1 lat/lon only');
   } finally { await rig.stop(); }
 });
+
+// ---- contract section 16: a departure berth starts standing -------------------------------------------------------------
+
+test('SECTION 16: on a DEPARTURE berth a train that calls has stop 0 and dwell 0, never null; an arrival berth keeps the stop point and the booked dwell; a pass stays null', () => {
+  const dep = { id: 'sp_dep', length: 600, stop: 0 }, arr = { id: 'sp_arr', length: 600, stop: 580 }, mid = { id: 'sp_mid', length: 600, stop: null };
+  const calls = { beh: 'calls', dwellSecs: 90 }, passes = { beh: 'passes', dwellSecs: null };
+  // departure berth, calling train: stop 0 / dwell 0 even though the booked dwell is 90 s (the train is ALREADY standing there) and even when no dwell is known
+  for (const info of [calls, { beh: 'calls', dwellSecs: null }]) {
+    const { p } = planner({ span: dep, info });
+    const mv = p.plan(train(), 1_000_000).mv;
+    assert.equal(mv.stop, 0); assert.equal(mv.dwell, 0);
+    assert.ok(mv.stop !== null && mv.dwell !== null);
+  }
+  // arrival berth: the platform stop point, and the booked dwell
+  const a = planner({ span: arr, info: calls }).p.plan(train(), 1_000_000).mv;
+  assert.deepEqual([a.stop, a.dwell], [580, 90]);
+  // a train that passes the departure berth at speed: null, null
+  const pass = planner({ span: dep, info: passes }).p.plan(train(), 1_000_000).mv;
+  assert.deepEqual([pass.stop, pass.dwell], [null, null]);
+  const m = planner({ span: mid, info: passes }).p.plan(train(), 1_000_000).mv;
+  assert.deepEqual([m.stop, m.dwell], [null, null]);
+});
+
+test('SECTION 16 on the wire: a calling train on a departure berth is sent with mv.stop 0 and mv.dwell 0', async () => {
+  const rig = await startRig();
+  try {
+    rig.td([['CC', 'LA', '1H15', null, '0006']]);                       // 1H15 calls at Southwick; 0006 is its berth
+    await until(() => rig.app.model.byId.size === 1, 2000, 'the train');
+    const key = rig.app.graph.lookup('LA', '0006');
+    rig.app.spans = { step() {}, forBerth: id => (id === key ? { id: 'sp_depart', length: 500, stop: 0 } : null) };
+    rig.app.model._touch([...rig.app.model.byId.values()][0]);
+    await rig.settle(1300);
+    const t = (await getJson(rig.port, '/map/v1/trains')).json.trains.find(x => x.hc === '1H15');
+    assert.equal(t.svc.uid, 'C00001', 'matched, and it calls at Southwick');
+    assert.strictEqual(t.mv.stop, 0); assert.strictEqual(t.mv.dwell, 0);
+  } finally { await rig.stop(); }
+});

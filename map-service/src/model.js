@@ -53,6 +53,7 @@ class TrainModel {
   constructor({ graph, config, now = Date.now, matcher = null, decorate = null, motion = null, onTransit = null }) {
     this.graph = graph;
     this.decorate = decorate;         // (Train) -> svc object for the wire (adds late / next from TRUST); default: the match's own
+    this.spanOf = null;               // (keyId) -> the id of the span of that berth, or null: set by the app
     this.motion = motion;             // MotionPlanner (section 11) or null
     this.onTransit = onTransit;       // (Train, keyId, secs) when a train leaves a berth it entered by a step (section 10)
     this.timeDep = new Set();         // trains whose JSON changes with the clock (held flag, clamped expected times)
@@ -430,7 +431,7 @@ class TrainModel {
     const t = this.byId.get(id);
     if (!t || !t.placed) return null;
     const g = this.graph;
-    const recentBerths = t.recentKeys.map((k, i) => ({ area: g.areaOf[k], berth: g.berth(k), at: t.recentAts[i] }));
+    const recentBerths = t.recentKeys.map((k, i) => ({ area: g.areaOf[k], berth: g.berth(k), at: t.recentAts[i], sp: this.spanOf ? this.spanOf(k) : null }));
     const cut = this.now() - (this.cfg.trailWindowSecs || 900) * 1000;
     const trail = [];
     for (let i = 0; i < t.trail.length; i += 3) if (t.trail[i + 2] >= cut) trail.push([t.trail[i], t.trail[i + 1], t.trail[i + 2]]);

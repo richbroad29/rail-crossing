@@ -9,8 +9,9 @@
 //          calls includes its dwell: from the learned "calls" median when there is one, else the
 //          learned "passes" median plus the booked dwell. With nothing learned yet: span length over a
 //          per-class fallback speed (plus the booked dwell), so the page always has a plan;
-//   stop   metres along the span where it stops (calls only), else null;
-//   dwell  the booked dwell in seconds when it calls, else null;
+//   stop   metres along the span where it stops (calls only), else null (a constant-speed pass). A DEPARTURE berth
+//          (its span starts at the stop) gives stop 0 and dwell 0: the train starts standing there, never null;
+//   dwell  the booked dwell in seconds when it calls (0 on a departure berth), else null;
 //   held   true once  now > eta + max(30 s, p90 - median)  with no step: the train is waiting.
 //
 // `held` depends on the clock, so plan() also returns the instant it will flip: the model re-issues
@@ -53,7 +54,11 @@ class MotionPlanner {
     const eta = Math.round(t.at + medianSecs * 1000);
     const grace = Math.max((this.cfg.heldMinGraceSecs || 30), spread) * 1000;
     const heldAt = eta + grace;
-    const mv = { sp: sp.id, t0: t.at, eta, stop: calls && sp.stop !== null && sp.stop !== undefined ? sp.stop : null, dwell, held: nowMs > heldAt };
+    // A train that CALLS: on an arrival berth `stop` is the platform stop point; on a departure berth (the span starts at the stop,
+    // sp.stop === 0) it "starts standing here": stop 0 and dwell 0, never null (contract section 16). `stop: null` is a constant-speed pass.
+    const departure = calls && sp.stop === 0;
+    const stop = calls && sp.stop !== null && sp.stop !== undefined ? sp.stop : null;
+    const mv = { sp: sp.id, t0: t.at, eta, stop, dwell: departure ? 0 : dwell, held: nowMs > heldAt };
     return { mv, heldAt };
   }
 }

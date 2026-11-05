@@ -410,3 +410,122 @@ test('IN THE SERVICE: with a track library injected, spans exist for chains of r
     assert.equal((await getJson(none.port, '/map/v1/span/sp_0123456789')).status, 404);
   } finally { await none.stop(); }
 });
+
+// ---- contract section 16: recentBerths[].sp and the recording's `span` lines ----------------------------------------------
+
+function hashedFake() {
+  const lib = fakeTrack();
+  lib.stationSnaps = key => { const h = [...key].reduce((n, c) => (n * 31 + c.charCodeAt(0)) % 1000, 7); return [{ tiploc: key, platform: null, primary: true, edge: 1, offset: 0, lat: 51 + (h % 37) * 0.001, lon: -1 + h * 0.0004 }]; };
+  return lib;
+}
+const WIDE = { record: { bbox: [50.5, -1.5, 51.5, 0.0], segmentSecs: 600 } };      // the fake library puts every station inside this box
+
+/** A chain of at least three spanned LA berths, in order, from the built spans. */
+function spannedChain(rig) {
+  const sb = rig.app.spans; sb.settle();
+  for (const c of sb.chains.values()) { const l = c.berths.filter(b => sb.byBerth.has(b)); if (l.length >= 3 && l.length === c.berths.length) return c.berths; }
+  throw new Error('no chain of three spanned berths');
+}
+
+test('SECTION 16: /train/:id recentBerths[] each carry sp, the span id that berth was traversed on (null where it has none)', async () => {
+  const { startRig } = require('./rig');
+  const { getJson } = require('./helpers');
+  const rig = await startRig({ track: hashedFake() });
+  try {
+    const g = rig.app.graph, chain = spannedChain(rig);
+    const [a, b, c] = chain.map(k => g.berth(k));
+    const area = g.areaOf[chain[0]];
+    rig.td([['CC', area, '2K22', null, a]]); rig.td([['CA', area, '2K22', a, b]]); rig.td([['CA', area, '2K22', b, c]]);
+    await rig.settle(1300);
+    const t = (await getJson(rig.port, '/map/v1/trains')).json.trains.find(x => x.hc === '2K22');
+    const d = (await getJson(rig.port, `/map/v1/train/${t.id}`)).json;
+    assert.deepEqual(d.recentBerths.map(x => x.berth), [a, b, c]);
+    d.recentBerths.forEach((x, i) => {
+      assert.deepEqual(Object.keys(x).sort(), ['area', 'at', 'berth', 'sp']);
+      assert.equal(x.sp, rig.app.spans.forBerth(chain[i]).id, `berth ${x.berth}`);
+      assert.match(x.sp, /^sp_[0-9a-f]{10}$/);
+    });
+    assert.equal(d.recentBerths.at(-1).sp, t.mv.sp, 'the current berth\'s sp is the train\'s mv.sp');
+    // A berth with no span: sp is null, and the key is still there.
+    const none = [...g.keyOf.keys()].find(k => g.areaOf[k] === area && !rig.app.spans.byBerth.has(k));
+    rig.td([['CC', area, '3M33', null, g.berth(none)]]);
+    await rig.settle(1300);
+    const t2 = (await getJson(rig.port, '/map/v1/trains')).json.trains.find(x => x.hc === '3M33');
+    const d2 = (await getJson(rig.port, `/map/v1/train/${t2.id}`)).json;
+    assert.deepEqual(d2.recentBerths.map(x => x.sp), [null]);
+  } finally { await rig.stop(); }
+});
+
+/** Check a parsed recording: {t, event, data} everywhere; every sp referenced is announced by an EARLIER span line, once. */
+function checkRecording(lines, rig) {
+  const announced = new Set();
+  let spanLines = 0;
+  for (const l of lines) {
+    assert.deepEqual(Object.keys(l), ['t', 'event', 'data']);
+    assert.ok(Number.isInteger(l.t));
+    if (l.event === 'span') {
+      assert.deepEqual(Object.keys(l.data).sort(), ['id', 'length', 'path', 'stop']);
+      assert.ok(!announced.has(l.data.id), `span ${l.data.id} announced twice`);
+      assert.deepEqual(l.data, rig.app.spans.get(l.data.id), 'the span line is the span that /span/:id serves');
+      announced.add(l.data.id); spanLines++;
+      continue;
+    }
+    const trains = l.event === 'snapshot' ? l.data.trains : l.event === 'update' ? l.data.upsert : [];
+    for (const t of trains) if (t.mv) assert.ok(announced.has(t.mv.sp), `${l.event} references ${t.mv.sp} before any span line announced it`);
+  }
+  return spanLines;
+}
+
+test('SECTION 16: the rolling record writes a `span` line the first time each span id appears in a SEGMENT, before the line that uses it; each segment replays alone', async () => {
+  const fs = require('fs'), path = require('path');
+  const { startRig, NOW } = require('./rig');
+  const rig = await startRig({ track: hashedFake(), overrides: WIDE });
+  try {
+    const g = rig.app.graph, chain = spannedChain(rig);
+    const area = g.areaOf[chain[0]], B = i => g.berth(chain[i]);
+    rig.td([['CC', area, '2K22', null, B(0)]]); await rig.settle(150);
+    rig.clock.now = NOW + 5000; rig.td([['CA', area, '2K22', B(0), B(1)]]); await rig.settle(150);
+    rig.clock.now = NOW + 9000; rig.td([['CA', area, '2K22', B(1), B(2)]]); await rig.settle(150);
+    rig.clock.now = NOW + 10000; rig.td([['CA', area, '2K22', B(2), B(1)]]); await rig.settle(150);          // back into a span already announced in this segment
+    // a new segment, 700 s later: the train sits in B(1): its span must be announced AGAIN, in the new file
+    rig.clock.now = NOW + 700_000; rig.td([['CA', area, '2K22', B(1), B(2)]]); await rig.settle(150);
+    const dir = path.join(rig.dataDir, 'record');
+    const files = fs.readdirSync(dir).sort();
+    assert.equal(files.length, 2);
+    const parse = f => fs.readFileSync(path.join(dir, f), 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l));
+    const first = parse(files[0]), second = parse(files[1]);
+    assert.ok(checkRecording(first, rig) >= 3, 'the first segment announced the spans of B0, B1 and B2');
+    assert.ok(checkRecording(second, rig) >= 1, 'the second segment is self-contained');
+    const ids = a => a.filter(l => l.event === 'span').map(l => l.data.id);
+    assert.equal(new Set(ids(first)).size, ids(first).length, 'once per id per segment');
+    assert.ok(ids(second).includes(rig.app.spans.forBerth(chain[2]).id));
+    // The first reference to a new id is preceded immediately by its span line (before the update that carries it).
+    const iUpd = first.findIndex(l => l.event === 'update' && l.data.upsert.some(t => t.mv && t.mv.sp === rig.app.spans.forBerth(chain[1]).id));
+    assert.ok(iUpd > 0 && first[iUpd - 1].event === 'span' && first[iUpd - 1].data.id === rig.app.spans.forBerth(chain[1]).id);
+    assert.equal(first.filter(l => l.event === 'update' && l.data.upsert.some(t => t.mv && t.mv.sp === rig.app.spans.forBerth(chain[1]).id)).length >= 2, true, 'and the later reference needed no second span line');
+  } finally { await rig.stop(); }
+});
+
+test('SECTION 16: /debug/record streams the same {t, event, data} lines, with span lines ahead of their first use', async () => {
+  const http = require('http');
+  const { startRig } = require('./rig');
+  const { until } = require('./helpers');
+  const rig = await startRig({ track: hashedFake(), overrides: WIDE });
+  try {
+    const g = rig.app.graph, chain = spannedChain(rig);
+    const area = g.areaOf[chain[0]], B = i => g.berth(chain[i]);
+    rig.td([['CC', area, '2K22', null, B(0)]]); await rig.settle(1300);                          // already in a span when the stream opens: the snapshot needs it
+    const pending = new Promise((resolve, reject) => {
+      const r = http.request({ host: '127.0.0.1', port: rig.port, path: '/map/v1/debug/record?secs=1', agent: false }, res => { let b = ''; res.on('data', d => { b += d; }); res.on('end', () => resolve(b.split('\n').filter(Boolean).map(l => JSON.parse(l)))); });
+      r.on('error', reject); r.end();
+    });
+    await until(() => rig.app.debugTaps === 1, 2000, 'the tap');
+    rig.td([['CA', area, '2K22', B(0), B(1)]]);
+    const lines = await pending;
+    assert.equal(lines[0].event, 'span', 'the snapshot\'s train is already on a span: announced first');
+    assert.equal(lines.find(l => l.event === 'snapshot').data.trains[0].mv.sp, lines[0].data.id);
+    assert.equal(lines.at(-1).event, 'end');
+    checkRecording(lines.filter(l => l.event !== 'end'), rig);
+    assert.ok(lines.filter(l => l.event === 'span').length >= 2, 'the next span was announced when the train entered it');
+  } finally { await rig.stop(); }
+});

@@ -197,7 +197,7 @@ test('GET /train/:id: exact shape, service detail, place, recent berths, trail',
     assert.deepEqual(d.previousHeadcodes, []);
     assert.equal(d.firstSeenAt, byHc['1H15'].at);
     assert.deepEqual(d.recentBerths.map(b => b.berth), ['0002', '0004', '0006']);
-    d.recentBerths.forEach(b => { assert.deepEqual(keys(b), ['area', 'at', 'berth']); assert.ok(Number.isInteger(b.at)); });
+    d.recentBerths.forEach(b => { assert.deepEqual(keys(b), ['area', 'at', 'berth', 'sp']); assert.ok(Number.isInteger(b.at)); assert.equal(b.sp, null, 'no track pack: no span'); });
     assert.equal(d.trail.length, 3);
     d.trail.forEach(p => { assert.equal(p.length, 3); assert.ok(isNum(p[0]) && isNum(p[1]) && Number.isInteger(p[2])); });
     assert.deepEqual(d.place, { kind: 'station', station: 'Southwick' });

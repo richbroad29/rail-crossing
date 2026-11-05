@@ -66,14 +66,18 @@ test('GET /debug/record: validates its arguments, then streams a snapshot, the u
     assert.equal(r.status, 200);
     assert.equal(r.headers['content-type'], 'application/x-ndjson');
     assert.equal(r.lines[0].event, 'snapshot');
-    assert.deepEqual(Object.keys(r.lines[0]).sort(), ['event', 'feedStale', 'serverTime', 'trains']);
-    assert.deepEqual(r.lines[0].trains.map(t => t.hc), ['1H15']);
+    assert.deepEqual(Object.keys(r.lines[0]), ['t', 'event', 'data'], 'every line is {t, event, data}');
+    assert.deepEqual(Object.keys(r.lines[0].data).sort(), ['feedStale', 'serverTime', 'trains']);
+    assert.equal(r.lines[0].t, r.lines[0].data.serverTime);
+    assert.deepEqual(r.lines[0].data.trains.map(t => t.hc), ['1H15']);
     const updates = r.lines.filter(l => l.event === 'update');
     assert.ok(updates.length >= 1);
-    assert.deepEqual(Object.keys(updates[0]).sort(), ['event', 'remove', 'serverTime', 'upsert']);
-    assert.ok(updates.every(u => u.upsert.every(t => t.hc !== '3M33')), 'the Kent train is outside the box');
-    assert.ok(updates.some(u => u.upsert.some(t => t.hc === '1H15' && t.berth === '0004')));
+    assert.deepEqual(Object.keys(updates[0]), ['t', 'event', 'data']);
+    assert.deepEqual(Object.keys(updates[0].data).sort(), ['remove', 'upsert']);
+    assert.ok(updates.every(u => u.data.upsert.every(t => t.hc !== '3M33')), 'the Kent train is outside the box');
+    assert.ok(updates.some(u => u.data.upsert.some(t => t.hc === '1H15' && t.berth === '0004')));
     assert.equal(r.lines.at(-1).event, 'end');
+    assert.deepEqual(Object.keys(r.lines.at(-1)), ['t', 'event', 'data']);
     assert.equal(rig.app.debugTaps, 0, 'the tap is released');
     assert.equal(rig.app.sse.taps.size, 1, 'only the rolling recorder remains');
   } finally { await rig.stop(); }
@@ -112,9 +116,10 @@ test('ROLLING RECORD: Sussex updates only, a snapshot first in every segment, ro
     for (const f of files) {
       const lines = fs.readFileSync(path.join(rig.dataDir, 'record', f), 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l));
       assert.equal(lines[0].event, 'snapshot', 'each segment replays on its own');
-      assert.ok(lines.slice(1).every(l => l.event === 'update'));
+      assert.ok(lines.slice(1).every(l => l.event === 'update' && Object.keys(l).join() === 't,event,data'));
       assert.ok(lines.length >= 2);
       assert.ok(!JSON.stringify(lines).includes('3M33'));
+      assert.ok(lines.every(l => Number.isInteger(l.t)));
     }
     assert.equal(rig.app.recorder.stats.deleted, 2);
     assert.equal(rig.app.recorder.stats.segments, 4);

@@ -140,6 +140,16 @@ const MUTATIONS = [
   { name: 'track format: the stored derived index is ignored (recomputed at load)', file: 'track/pack.js', from: 'const pre = s.VCUM && s.EBST && s.EBEN && s.GKEY && s.GOFF && s.GSEG && s.GSEGE;', to: 'const pre = false;', tests: ['track'] },
   { name: 'track format: format 1 refused', file: 'track/pack.js', from: 'if (version < F.MIN_VERSION || version > F.VERSION) throw', to: 'if (version !== F.VERSION) throw', tests: ['track'] },
   { name: 'track format: the writer does not store the derived index', file: '../track/lib/assemble.js', from: 'if (version >= 2 && !sections.GKEY) sections = Object.assign({}, sections, deriveSections(sections.VLAT, sections.VLON, sections.EVO));', to: '', tests: ['track'] },
+  // contract section 16
+  { name: 's16: a departure berth gets dwell null instead of 0', file: 'motion.js', from: 'dwell: departure ? 0 : dwell, held', to: 'dwell, held', tests: ['transit'] },
+  { name: 's16: a departure berth gets stop null', file: 'motion.js', from: 'const stop = calls && sp.stop !== null && sp.stop !== undefined ? sp.stop : null;', to: 'const stop = calls && sp.stop ? sp.stop : null;', tests: ['transit'] },
+  { name: 's16: a passing train on a departure berth is given stop 0', file: 'motion.js', from: 'const departure = calls && sp.stop === 0;', to: 'const departure = sp.stop === 0;', tests: ['transit'] },
+  { name: 's16: recentBerths carry no span id', file: 'model.js', from: 'sp: this.spanOf ? this.spanOf(k) : null }));', to: 'sp: null }));', tests: ['spans'] },
+  { name: 's16: the recording never writes span lines', file: 'record.js', from: 'if (sp) { text +=', to: 'if (false) { text +=', tests: ['spans'] },
+  { name: 's16: a span is announced once per recording, not once per segment', file: 'record.js', from: "this.maker.reset();                                     // each segment replays on its own: spans are written again", to: '', tests: ['spans'] },
+  { name: 's16: a span line comes AFTER the line that uses it', file: 'record.js', from: "    text += `{\"t\":${t},\"event\":\"${event}\",\"data\":${dataJson}}\\n`;", to: "    text = `{\"t\":${t},\"event\":\"${event}\",\"data\":${dataJson}}\\n` + text;", tests: ['spans'] },
+  { name: 's16: an early train is reported as late (sign dropped)', file: 'trust.js', from: 'else if (e.status === ST_EARLY) act.lateMins = -e.variation;', to: 'else if (e.status === ST_EARLY) act.lateMins = e.variation;', tests: ['feeds'] },
+  { name: 's16: a late train is reported negative', file: 'trust.js', from: 'if (e.status === ST_LATE) act.lateMins = e.variation;', to: 'if (e.status === ST_LATE) act.lateMins = -e.variation;', tests: ['feeds'] },
   // station boards
   { name: 'board: sorted by booked time, not expected', file: 'station-board.js', from: 'board.sort((a, b) => a.k - b.k ||', to: 'board.sort((a, b) => a.b - b.b ||', tests: ['feeds'] },
   { name: 'board: the past window not applied', file: 'station-board.js', from: 'if (expMin < nowMin - GRACE_MIN || expMin > nowMin + AHEAD_MIN) continue;', to: 'if (expMin > nowMin + AHEAD_MIN) continue;', tests: ['feeds'] },

@@ -75,6 +75,7 @@ class App {
       motion: this.motion,
       onTransit: (t, keyId, secs) => this._learnTransit(t, keyId, secs)
     });
+    this.model.spanOf = keyId => { const r = this.spans ? this.spans.forBerth(keyId) : null; return r ? r.id : null; };
     this.changes = this.model.addChangeSet(new ChangeSet());
     this.snapshot = new Snapshot({ model: this.model, now, gzipCacheEntries: config.http.gzipCacheEntries });
     this.sse = new SseHub({ model: this.model, snapshot: this.snapshot, config: config.http, now });
@@ -291,7 +292,7 @@ class App {
       this.trackManager.on('loaded', pack => this._setTrack(pack));
       await this.trackManager.start();
     }
-    if (cfg.record.enabled) { this.recorder = new Recorder({ config: cfg.record, dataDir: this.dataDir, sse: this.sse, snapshot: this.snapshot, now: this.now }); this.recorder.start(); }
+    if (cfg.record.enabled) { this.recorder = new Recorder({ config: cfg.record, dataDir: this.dataDir, sse: this.sse, snapshot: this.snapshot, now: this.now, spanFor: id => (this.spans ? this.spans.get(id) : null) }); this.recorder.start(); }
 
     let creds, host, port;
     if (this.fake) {
