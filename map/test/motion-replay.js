@@ -38,13 +38,18 @@ const DEFAULT = path.join(__dirname, 'fixtures', 'sussex-10min-iid.jsonl.gz');
 function load(file) {
   let buf = file === '-' ? fs.readFileSync(0) : fs.readFileSync(file);
   if (buf[0] === 0x1f && buf[1] === 0x8b) buf = zlib.gunzipSync(buf);        // gzip by content, not by name
-  const ev = [], spans = new Map(), skipped = { bad: 0, unknown: 0 };
+  const ev = [], spans = new Map(), conts = new Map(), canonOf = new Map(), skipped = { bad: 0, unknown: 0 };
   buf.toString('utf8').split('\n').forEach((l) => {
     if (!l.trim()) return;
     let o;
     try { o = JSON.parse(l); } catch (e) { skipped.bad++; return; }
     if (!o || typeof o !== 'object' || !o.data) { skipped.bad++; return; }
-    if (o.event === 'span') { if (o.data.id && o.data.path) spans.set(o.data.id, o.data); else skipped.bad++; }
+    if (o.event === 'span') {
+      if (!(o.data.id && o.data.path)) skipped.bad++;
+      // CONTRACT 17.1: a continuation line {id, after, of, ...} is what GET span/<of>?after=<after> returned; plain lines are GET span/<id>.
+      else if (o.data.after && o.data.of) { conts.set(o.data.after + '>' + o.data.of, o.data); canonOf.set(o.data.id, o.data.of); }
+      else spans.set(o.data.id, o.data);
+    }
     else if (o.event === 'snapshot' || o.event === 'update') {
       if (typeof o.t !== 'number') o.t = o.data.serverTime;
       if (typeof o.t !== 'number') { skipped.bad++; return; }
@@ -52,7 +57,7 @@ function load(file) {
     } else skipped.unknown++;
   });
   ev.sort((a, b) => a.t - b.t);
-  return { events: ev, spans, skipped };
+  return { events: ev, spans, conts, canonOf, skipped };
 }
 
 function run(rec, opt) {
@@ -63,14 +68,29 @@ function run(rec, opt) {
   const clock = engine.createClock({ lagMs: opt.lagMs });
   // spans arrive a little after they are first asked for
   const asked = new Map(), prepared = new Map();
+  // A continuation key is `after>of`. The recording holds the answers the page would have got, keyed by the recorded
+  // canonical ids; the page may ask `after` a continuation id it drew (a chain), which ends exactly where the canonical
+  // span it continues ends, so it is looked up by that span. No line = the service errored: hasFailed, canonical kept.
+  const contRaw = (key) => {
+    const raw = rec.conts && rec.conts.get(key);
+    if (raw || !rec.canonOf) return raw || null;
+    const cut = key.indexOf('>'), c = rec.canonOf.get(key.slice(0, cut));
+    return c ? rec.conts.get(c + '>' + key.slice(cut + 1)) || null : null;
+  };
   const spans = {
+    contKey: require('../spans.js').contKey,
     peek(id) {
       const at = asked.get(id);
       if (at == null || now < at) return null;
       let p = prepared.get(id);
-      if (!p) { const raw = rec.spans.get(id); if (!raw) return null; p = engine.prepareSpan(raw); prepared.set(id, p); }
+      if (!p) {
+        const raw = id.indexOf('>') < 0 ? rec.spans.get(id) : contRaw(id);
+        if (!raw) return null;
+        p = engine.prepareSpan(raw); p.id = raw.id; prepared.set(id, p);
+      }
       return p;
     },
+    hasFailed(id) { const at = asked.get(id); return at != null && now >= at && id.indexOf('>') >= 0 && !contRaw(id); },
     need(id) { if (!asked.has(id)) asked.set(id, now + opt.spanLatencyMs); }
   };
   const M = { steps: 0, absorbed: 0, waited: 0, capped: 0, late: [], fades: 0, inits: 0 };
@@ -143,7 +163,7 @@ function run(rec, opt) {
       }
       if (p && p.capFrames < es.capFrames) {
         S.capFrames++;
-        const vc = pl ? Math.max(pl.prof ? pl.prof.vc : 0.5, 0.5, es.vcp) : 1;     // the cap is against the higher cruise speed of the span left and the span entered, while slowing
+        const vc = pl ? Math.max(pl.prof ? pl.prof.vc : 0.5, 0.5, es.vcp, es.vcap || 0) : 1;     // the cap is against es.vcap: the highest cruise speed in play (own span, span just left, span the reference is on), CONTRACT 17.3
         const ratio = es.v / vc;
         if (ratio > S.maxRatioCapped) S.maxRatioCapped = ratio;
         if (opt.debug && ratio > 1.55) opt.debug('ratio', r, es, p, ratio, now);
@@ -157,7 +177,7 @@ function run(rec, opt) {
   const cpuMs = Number(process.hrtime.bigint() - cpuStart) / 1e6;
   const trainHours = S.trainFrames * (dtMs / 1000) / 3600;
   const out = {
-    recording: { events: ev.length, spans: rec.spans.size, seconds: Math.round((tEnd - t0) / 1000), fps: opt.fps, lagMs: opt.lagMs, latencyMs: opt.latencyMs },
+    recording: { events: ev.length, spans: rec.spans.size, continuations: rec.conts ? rec.conts.size : 0, seconds: Math.round((tEnd - t0) / 1000), fps: opt.fps, lagMs: opt.lagMs, latencyMs: opt.latencyMs },
     skipped: rec.skipped, trainHours: +trainHours.toFixed(2), steps: M.steps,
     absorbed: M.steps ? M.absorbed / M.steps : 1,
     notAbsorbed: { waited: M.waited, capped: M.capped, bothOrLate: M.steps - M.absorbed - Math.max(M.waited, M.capped) },
@@ -182,7 +202,7 @@ function pct(a) {
 function report(r) {
   const P = (v) => (v * 100).toFixed(1) + ' %', tick = (ok) => (ok ? 'PASS' : 'FAIL');
   const lines = [
-    'recording: ' + r.recording.events + ' events' + (r.skipped && (r.skipped.bad || r.skipped.unknown) ? ' (skipped ' + r.skipped.bad + ' unreadable, ' + r.skipped.unknown + ' of unknown kind)' : '') + ', ' + r.recording.spans + ' spans, ' + r.recording.seconds + ' s; ' + r.recording.fps + ' fps, render lag ' + r.recording.lagMs / 1000 + ' s, network ' + r.recording.latencyMs + ' ms',
+    'recording: ' + r.recording.events + ' events' + (r.skipped && (r.skipped.bad || r.skipped.unknown) ? ' (skipped ' + r.skipped.bad + ' unreadable, ' + r.skipped.unknown + ' of unknown kind)' : '') + ', ' + r.recording.spans + ' spans' + (r.recording.continuations ? ' + ' + r.recording.continuations + ' continuations' : '') + ', ' + r.recording.seconds + ' s; ' + r.recording.fps + ' fps, render lag ' + r.recording.lagMs / 1000 + ' s, network ' + r.recording.latencyMs + ' ms',
     r.trainHours + ' train-hours measured, ' + r.steps + ' berth steps',
     '',
     'absorbed by re-timing alone   ' + P(r.absorbed).padStart(8) + '   target >= 90 %      ' + tick(r.absorbed >= TARGETS.absorbed),

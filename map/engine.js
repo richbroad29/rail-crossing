@@ -8,14 +8,18 @@
 //   1. The render clock R runs 12 s behind the server clock (CONTRACT section 16), so a berth step that happened a few
 //      seconds "in the future" of the drawing is usually already known when the train gets there.
 //   2. Within a span the train follows a reference profile: constant speed for a pass; decelerate,
-//      dwell, accelerate for a call. The drawn train tracks that reference with a bounded
+//      dwell, accelerate for a call. A departure (stop 0) stands for its whole dwell, however long (CONTRACT 17.4). The drawn train tracks that reference with a bounded
 //      acceleration, so its speed never lurches.
 //   3. It never passes the end of a span before the next step is known. With no step it brakes to a
 //      stop HOLD_M short of the end and waits ("waiting at a signal").
 //   4. When the step arrives the span's reference is re-timed to end at the step's t0, and the
 //      train follows it: a gentle speed change when the step is inside the window.
 //   5. A step known late (the train is drawn behind where it should be) is caught up at no more
-//      than CAP x the span's cruise speed. Speed is never negative, so it never moves backwards.
+//      than CAP x the HIGHEST cruise speed in play (CONTRACT 17.3): its own span's, the span it has just left
+//      (until it has slowed to the new one), and the span the REFERENCE is already on when that is a later
+//      one. The limit itself falls no faster than the braking bound: a speed it was allowed a moment ago is
+//      shed at BRK, never cut in one frame (and the allowance is dropped when the train fades and jumps).
+//      Speed is never negative, so it never moves backwards. es.vcap is the limit / CAP, for the harness.
 //   6. More than FADE_M off, it fades out, jumps and fades in rather than racing across the map.
 //   7. A small gap between the end of one span and the start of the next is blended away, not jumped.
 //   8. Identity is the caller's: the same train keeps the same state object across renumbering
@@ -110,6 +114,14 @@
     return Math.sqrt(dx * dx + dy * dy);
   }
 
+  // Metres from where span a ends to where span b starts (0 for a span that is not there).
+  var gapA = { x: 0, y: 0, brg: 0 }, gapB = { x: 0, y: 0, brg: 0 };
+  function spanGap(a, b) {
+    if (!a || !b) return 0;
+    locate(a, a.length, gapA); locate(b, 0, gapB);
+    return metresBetween(gapA.x, gapA.y, gapB.x, gapB.y, a);
+  }
+
   // ---- reference profiles --------------------------------------------------------------------------
   // rampUp: from rest, accelerate at (at most) a to a cruise speed vc, then cruise, covering d metres
   // in exactly t seconds. If a is too gentle for that, accelerate uniformly the whole way instead.
@@ -135,7 +147,10 @@
     var P = { L: L, T: T, call: false, vc: L / T, S: 0, D: 0, Ta: 0, Td: 0, up: null, down: null };
     if (stop == null) return P;
     var S = Math.min(L, Math.max(0, stop)), D = dwell == null ? DEFAULTS.dwellDefault : Math.max(0, dwell);
-    if (D > T * 0.9) D = T * 0.9;
+    // A call keeps at least a tenth of its time for moving. A DEPARTURE (stop 0: "stand this long, then leave", CONTRACT 17.4) only
+    // has to keep 20 s of it: a train standing 25 minutes at its origin with a 2-minute run is not allowed to set off 12 minutes early.
+    var Dmax = S === 0 ? Math.max(T * 0.9, T - 20) : T * 0.9;
+    if (D > Dmax) D = Dmax;
     var Tm = T - D, Ta = L > 0 ? Tm * S / L : 0, Td = Tm - Ta;
     P.call = true; P.S = S; P.D = D; P.Ta = Ta; P.Td = Td;
     P.down = ramp(S, Ta, accel);                    // approach: the time-reverse of a ramp-up
@@ -191,7 +206,7 @@
   function newState() {
     return { init: false, k: 0, s: 0, v: 0, t: 0, dist: 0, x: NaN, y: NaN, hdg: NaN, alpha: 1,
       fade: 0, fadeA: 0, tgtK: 0, tgtS: 0, offx: 0, offy: 0, wait: false, loading: false, ready: false, stopped: true,
-      pw: false, pc: false, vcp: 0, fades: 0, capFrames: 0, frames: 0, maxRatio: 0, snap: false, lastRef: 0 };
+      pw: false, pc: false, vcp: 0, vcap: 0, vallow: 0, fades: 0, capFrames: 0, frames: 0, maxRatio: 0, snap: false, lastRef: 0 };
   }
   function copyState(a) { var o = newState(); for (var k in a) o[k] = a[k]; return o; }
 
@@ -276,7 +291,7 @@
     // A fade is a three-beat: out, jump, in. The train keeps its way meanwhile.
     if (o.fade === 1) {
       o.alpha -= h / cfg.fadeSecs;
-      if (o.alpha <= 0) { o.alpha = 0; o.k = o.tgtK; o.s = o.tgtS; reference(o, plans, tR, cfg, ref); o.v = Math.min(ref.v, stopSpeed(o, plans, cfg)); o.offx = o.offy = 0; o.fade = 2; o.snap = true; o.vcp = 0; }
+      if (o.alpha <= 0) { o.alpha = 0; o.k = o.tgtK; o.s = o.tgtS; reference(o, plans, tR, cfg, ref); o.v = Math.min(ref.v, stopSpeed(o, plans, cfg)); o.offx = o.offy = 0; o.fade = 2; o.snap = true; o.vcp = 0; o.vallow = 0; }
     } else if (o.fade === 2) {
       o.alpha += h / cfg.fadeSecs;
       if (o.alpha >= 1) { o.alpha = 1; o.fade = 0; }
@@ -296,7 +311,13 @@
     var vdes = cur.v + e * cfg.kp;
     if (vdes < 0) vdes = 0;
     if (e > 0.02 && vdes < 0.25) vdes = Math.min(0.25, e * 2);     // the last few centimetres: creep onto the mark rather than stop short of it
-    var vmax = cfg.cap * Math.max(vc, o.vcp);       // entering a slower span: the higher of the two cruise speeds, until we have slowed to the new one
+    // The catch-up limit (CONTRACT 17.3): cap x the HIGHEST cruise speed in play: this span's, the span just left (until we have
+    // slowed to the new one), and the span the REFERENCE is already running in when that is a later one (it is going that fast,
+    // so a train chasing it must be allowed to). The limit itself falls no faster than the braking bound.
+    var vref = cur.j > o.k ? cur.vc : 0;
+    var vmax = cfg.cap * Math.max(vc, o.vcp, vref);
+    if (o.vallow > vmax) vmax = Math.max(vmax, o.vallow - cfg.brk * h);
+    o.vallow = vmax; o.vcap = vmax / cfg.cap;      // vcap: the limit as a speed the cap is a multiple of (the harness's catch-up ratio is against it)
     if (vdes > vmax) { vdes = vmax; if (e > 0) { o.pc = true; o.capFrames++; } }
     // The end of the span is a wall until the next step is known and its geometry has arrived.
     var open = next && next.span, wall = -1;
@@ -423,7 +444,7 @@
     DEFAULTS: DEFAULTS, prepareSpan: prepareSpan, locate: locate, bearingAt: bearingAt, sliceSpan: sliceSpan,
     makeProfile: makeProfile, refAt: refAt, ramp: ramp, makePlan: makePlan, attachSpan: attachSpan, planSecs: planSecs,
     newState: newState, copyState: copyState, advance: advance, reference: reference, createClock: createClock,
-    angDiff: angDiff
+    angDiff: angDiff, spanGap: spanGap
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else (root.RM = root.RM || {}).engine = api;

@@ -300,6 +300,13 @@
           throw e;
         });
       },
+      // The same berth's span, starting where span `after` ends (CONTRACT 17.1). null when the service does not know it.
+      getSpanAfter: function (after, id) {
+        return requestJson('span/' + encodeURIComponent(id) + '?after=' + encodeURIComponent(after)).catch(function (e) {
+          if (e && e.status === 404) return null;
+          throw e;
+        });
+      },
       // The live board for one station. null when the code is unknown.
       getStation: function (crs) {
         return requestJson('station/' + encodeURIComponent(crs)).catch(function (e) {

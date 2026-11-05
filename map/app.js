@@ -99,7 +99,10 @@
 
   // ---- state ----------------------------------------------------------------------------------------
   var api = RM.api.createApi({ base: API_BASE });
-  var spans = RM.spans.createSpanCache({ fetchSpan: function (id) { return api.getSpan(id); } });
+  var spans = RM.spans.createSpanCache({
+    fetchSpan: function (id) { return api.getSpan(id); },
+    fetchSpanAfter: function (after, id) { return api.getSpanAfter(after, id); }
+  });
   var clock = RM.engine.createClock({ lagMs: Number(new URLSearchParams(location.search).get('lag')) || 12000 });
   var store = motion.createStore({ reducedMotion: reduced, spans: spans, clock: clock });
   store.setHalo(L.THEME[theme].halo);
