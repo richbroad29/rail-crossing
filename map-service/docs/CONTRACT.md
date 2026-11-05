@@ -315,3 +315,85 @@ JSONL of updates for the Sussex box in `MAP_DATA_DIR/record/` (bounded, rotated)
   with `event` ∈ `snapshot`, `update`, `span`. The recorder emits a `span` line the first time a
   span id appears in a segment, so a recording replays with no network.
 - **Network overview**: `GeoJSON LineStrings`, optional `properties.u` = `main` | `branch`.
+
+## 17. Phase 2 fix round (lead, 2026-11-05)
+
+**Why.** Real Sussex recordings gave 75 % absorbed and 6.4 fades per train-hour. Diagnosed from one hour of the live
+record (`dev` tooling in the lead's notes; numbers are steps in that hour):
+
+- **94 % of fades were gaps between consecutive spans**, not trains falling behind. 22 % of all steps entered a span
+  that did not start where the last one ended. Causes, in order: (1) chains that meet at a station end and start at
+  DIFFERENT snaps of it (one platform drawn as two OSM ways 138 m apart, e.g. Three Bridges); (2) a chain whose leading
+  or trailing berths were already claimed by another chain cut its remaining berths over the WHOLE station-to-station
+  route, stretching them (spans of 4 km run in 40 s, "speeds" over 100 m/s); (3) consecutive berths placed on
+  different parallel tracks with no crossover in reach; (4) SSE batching: a train that steps twice in one second
+  reaches the page with a berth missing, so a join computed from the service's own "previous berth" is wrong for it.
+- **"Capped" steps were mostly not catch-up.** The limit was measured against the cruise speed of the train's own
+  span while the reference was already running in the next, faster span (median 2.3x faster). Timing accuracy was
+  fine: capped steps had actual/predicted transit 0.97 at the median.
+- Rejected after measuring: braking early for an unknown step (a 30 s delay only reached 83 %), reference profiles
+  that start at the entry speed (no change).
+- A prototype of 17.1-17.3 on the same hour: fades 6.35 -> 0.26 per train-hour, absorbed 74.5 % -> 88.8 % at 12 s,
+  backward 0, catch-up <= 1.5x, acceleration bound held. Delay sweep: 10 s 87.5, 12 s 88.8, 16 s 90.2, 20 s 91.7 %.
+
+### 17.1 Continuation spans (service, page, recorder)
+
+`GET /map/v1/span/:id?after=:prev` returns a span for the same berth as `:id` that STARTS exactly where span `:prev`
+ends (its last point, heading the way `:prev` runs) and ends where `:id` ends. Same body as `/span/:id`
+(`{id, length, path, stop}`), its own stable id `sp_<hash>` of `(:prev, :id)`, immutable cache headers. That id also
+resolves on a plain `GET /span/<id>` and may itself be an `:prev` (trains chain continuations).
+
+- **How it is routed, in order:** (a) the shortest route from `:prev`'s end, travelling the way `:prev` travels, to
+  `:id`'s end, travelling the way `:id` travels, no reversing, within `2 x length(:id) + 500 m`; (b) the same from
+  `:prev`'s end to the nearest reachable point within 120 m of `:id`'s end on any non-siding track (stay on the
+  train's own track); (c) straight on from `:prev`'s end along the track (at each node the edge with the smallest turn,
+  never a siding or yard, never over 100 degrees) for `length(:id)`. The track library's `route()` gains an optional
+  `dir` on a snap (0 = towards increasing edge offset, 1 = decreasing) to make (a) and (b) directed.
+- `stop`: null when `:id`'s is null; 0 when `:id`'s is 0; otherwise the continuation's length (an arrival ends at its
+  stop point).
+- When `:prev`'s end is within 2 m of `:id`'s start, the answer is `:id` itself (its own id and body).
+  Unknown `:prev` (evicted, never issued): `:id` itself, 200. Unknown `:id`: 404 as today.
+- Bounded: at most `spans.maxJoins` (default 50 000) join records, LRU, each holding only `(prev, id, length, stop,
+  end point, how)`; geometry is recomputed on demand and an evicted join is rebuilt from its two ids when asked.
+  `/health` `diagnostics.spans.joins`: counts by how (`same`, `direct`, `beside`, `straight`, `fallback`).
+- **The page** asks for a continuation whenever a new plan's span is attached and the previous plan's span is attached
+  and they are more than 2 m apart: `span/<new sp>?after=<the span id the page actually drew the previous berth on>`
+  (which may itself be a continuation id). Until the answer arrives the plan is not ready (the train waits at the wall,
+  as for any span still loading); on an error it keeps the canonical span.
+- **The recorder** (rolling records and `/debug/record`) writes what a page would fetch: per train, when the recorded
+  `mv.sp` changes from P to S and S does not start within 2 m of P's end, a `span` line
+  `{id: <continuation id>, after: P, of: S, length, path, stop}` before the line that references S. The replay harness
+  resolves `(after, of)` from these lines exactly as the page would from the API.
+
+### 17.2 Spans (service)
+
+- A chain is cut over ALL its berths (claimed ones included, so the unclaimed ones get their true share of the
+  route), and only its unclaimed berths are built from it. Claimed berths keep the span of the chain that claimed them.
+- Cut weights: each berth's learned pass median where it has one, the mean of the chain's known medians where it has
+  not, equal shares only when none is known. `rule.cutBy` gains `partial`.
+
+### 17.3 Catch-up limit (page) — amends section 16
+
+The limit is `cap x` the HIGHER of: the cruise speed of the train's own span, the cruise speed of the span it just
+left (until it has slowed, as before), and the cruise speed of the span the REFERENCE is on when that is a later span.
+The limit itself never falls faster than the braking bound (a speed the train was allowed a moment ago is shed at
+`brk`, not cut in one frame). The harness measures catch-up against that same effective limit.
+
+### 17.4 Departures (service) — amends section 16
+
+On a departure berth (`stop: 0`) where the train calls, `dwell` is the seconds from `t0` until its expected
+departure from that station (booked departure plus TRUST lateness when known; never negative; at most 3600), and
+`eta = t0 + dwell + learned run time`. `dwell: 0` means it is due to leave now. Before this, a train standing
+20-40 minutes at an origin crept along its departure span at under 1 m/s and faded when it really left.
+
+### 17.5 Transit store (service)
+
+At the cap, evict the least recently updated series instead of dropping new samples (live: the 60 000 cap filled in
+12 h; 24 000 of the series had fewer than 5 samples). Store compactly enough that the national set (measure it: about
+24 000 berths x their classes) fits with the service still <= 220 MB steady; report the series count and RSS after
+24 h live.
+
+### 17.6 Render delay
+
+Chosen by the lead from a sweep over all six recorded regions after 17.1-17.5, with the real feed-delay
+distribution per region (Sussex, 2026-11-05: step to page p50 1.2 s, p90 1.8 s, p95 2.0 s). Recorded here when chosen.
