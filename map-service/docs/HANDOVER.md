@@ -50,7 +50,7 @@ then the repo's `CLAUDE.md`. Product intent is the Claude Doc "UK Live Train Map
 | 3 carriages | Not started. Rich has subscribed to Darwin Push Port + snapshots on RDM. |
 | 4 enthusiast features, launch | Not started. |
 
-## Fix round 2 — MERGED 2026-11-05 (`55f2575`), NOT yet deployed
+## Fix round 2 — DEPLOYED 2026-11-05 22:35 UTC (VPS `~/rail-map` at `e81f499`; rollback point `0161a0d`)
 
 CONTRACT 18.1-18.5: the harness's headline excludes "slower than predicted" waits and counts re-appearances as fades;
 impossible spans (> 60 m/s implied) are withdrawn (201 berths nationally, at most 12 per area); a departing train stays at
@@ -63,6 +63,11 @@ manchester 2.31 -> 0.84; rural samples too small); headline absorbed 95.1 -> 95.
 glasgow 96.0, manchester 89.0). Backward 0, catch-up <= 1.5x, accel bound held. Remaining fades: 40 behind, 46
 re-appearances, 12 gaps (11 continuations the service could not make when the previous span was itself a continuation:
 `continuation()` returns `fallback`; worth a look). Fades still miss < 0.1 everywhere.
+Live after deploy: 14,304 berths with spans, 208 impossible withdrawn, gap chains 1,047 built (respan predicted 1,028),
+RSS 174 MB, transit store past the old 60k cap with no drops. NEXT: let it record ~24 h (rural regions need it), copy the
+LIVE recordings down and score them directly with `map/test/motion-replay.js` (no respan: they carry continuation lines and
+the 18.3 departure timing), report region by region, then ask Rich about publishing the phase 2 page. Round 3 candidates
+are listed under "Next, in order" item 5 below.
 
 ## Fix round 1 — DONE 2026-11-05 (service deployed at 0161a0d)
 
