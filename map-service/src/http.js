@@ -75,6 +75,7 @@ function createServer(app) {
     if (rest.startsWith('train/')) return train(req, res, rest.slice(6));
     if (rest.startsWith('station/')) return station(req, res, rest.slice(8));
     if (rest.startsWith('span/')) return span(req, res, rest.slice(5));
+    if (rest === 'network') return network(req, res, q);
     if (rest === 'debug/record') return serveDebugRecord(app, req, res, q, sendJson);
     sendJson(req, res, 404, { error: 'No such endpoint.' });
   }
@@ -127,6 +128,17 @@ function createServer(app) {
     const d = app.trainDetail(id);
     if (!d) { sendJson(req, res, 404, { error: 'No train with that id.' }); return; }
     await sendJson(req, res, 200, d);
+  }
+
+  function network(req, res, q) {
+    const level = q.has('level') ? q.get('level') : 'hi';
+    const n = app.network(level);
+    if (!n) { sendJson(req, res, 404, { error: app.track ? 'level must be lo or hi.' : 'The track network is not loaded yet.' }); return; }
+    // The pack's own gzip bytes, as they are: cacheable for a day, validated by the pack's hash.
+    const headers = { 'Content-Type': 'application/geo+json', 'Content-Encoding': 'gzip', Vary: 'Accept-Encoding', 'Cache-Control': 'public, max-age=86400', ETag: n.etag, 'X-Content-Type-Options': 'nosniff' };
+    if (req.headers['if-none-match'] === n.etag) { res.writeHead(304, { ETag: n.etag, 'Cache-Control': headers['Cache-Control'] }); res.end(); return; }
+    headers['Content-Length'] = n.buf.length;
+    res.writeHead(200, headers); res.end(req.method === 'HEAD' ? undefined : n.buf);
   }
 
   async function station(req, res, raw) {

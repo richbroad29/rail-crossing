@@ -59,7 +59,7 @@ const getJson = (port, p) => new Promise((resolve, reject) => {
   fake.stdout.on('data', () => {});
   await sleep(1500);
   const svcLog = [];
-  const svc = spawn(NODE, ['--max-old-space-size=192', path.join(__dirname, '..', 'bin', 'rail-map.js'), `--fake=127.0.0.1:${stompPort}`, `--ref-dir=${refDir}`],
+  const svc = spawn(NODE, ['--max-old-space-size=192', path.join(__dirname, '..', 'bin', 'rail-map.js'), `--fake=127.0.0.1:${stompPort}`, `--ref-dir=${refDir}`, ...(opt['track-pack'] ? [`--track-pack=${opt['track-pack']}`] : [])],
     { env: { ...process.env, PORT: String(port), MAP_DATA_DIR: dataDir, MAP_ENV_FILE: '/nonexistent' }, stdio: ['ignore', 'pipe', 'pipe'] });
   svc.stdout.on('data', d => svcLog.push(String(d))); svc.stderr.on('data', d => svcLog.push(String(d)));
   let exited = null;
@@ -108,13 +108,15 @@ const getJson = (port, p) => new Promise((resolve, reject) => {
   const mean = a => a.reduce((x, y) => x + y, 0) / (a.length || 1);
   const result = {
     node: process.version === undefined ? null : execFileSync(NODE, ['--version'], { encoding: 'utf8' }).trim(),
-    minutes, rate, trustRate, vstpRatePerMin: vstpRate, trustPrefill, trainsTarget: trains, sseClients: sseN, cifSchedules: health.reference.cif.schedules,
+    trackPack: opt['track-pack'] || null, minutes, rate, trustRate, vstpRatePerMin: vstpRate, trustPrefill, trainsTarget: trains, sseClients: sseN, cifSchedules: health.reference.cif.schedules,
     startupPeakRssMB: Math.round(peakStart),
     steady: { rssMB: { min: Math.round(Math.min(...rssVals)), mean: Math.round(mean(rssVals)), max: Math.round(Math.max(...rssVals)) }, heapMB: { min: Math.min(...heapVals), mean: Math.round(mean(heapVals)), max: Math.max(...heapVals) } },
     growth: { firstHalfMeanRssMB: Math.round(mean(rssVals.slice(0, half))), secondHalfMeanRssMB: Math.round(mean(rssVals.slice(half))) },
     trains: { max: Math.max(...rows.map(r => r.trains || 0)), placedAtEnd: rows[rows.length - 1].placed },
     eventsPerMinMeasured: Math.round(mean(rows.map(r => r.evMin || 0))),
     cpu: { avgPercentOfOneCore: cpuAvg === null ? null : Math.round(cpuAvg * 10) / 10 },
+    track: lastHealth ? lastHealth.diagnostics.track : null,
+    spans: lastHealth && typeof lastHealth.diagnostics.spans === 'object' ? { berths: lastHealth.diagnostics.spans.berthsWithSpans, chains: lastHealth.diagnostics.spans.chains, queued: lastHealth.diagnostics.spans.queued } : null,
     trust: lastHealth ? { activations: lastHealth.feeds.trust.activations, msgPerMin: lastHealth.feeds.trust.messagesPerMin, vstpSchedules: lastHealth.feeds.vstp.schedules, stats: lastHealth.diagnostics.trust, transitSeries: lastHealth.diagnostics.transit.series } : null,
     budgetRssMB: 220, withinBudget: Math.max(...rssVals) <= 220
   };

@@ -113,6 +113,18 @@ test('a stalled download is abandoned after the idle timeout', async () => {
   } finally { await a.close(); rmrf(dir); }
 });
 
+test('a download that fails the instant it starts leaves NO temp file (the write stream opens asynchronously: the old cleanup raced it)', async () => {
+  // The server sends headers promising 100 bytes and drops the connection at once. The client's pipeline fails before the temp
+  // file's open has finished; unlinking immediately found nothing and the open then created the file. About 1 run in 5 left a .tmp.
+  const dir = tmpDir();
+  const a = await serve((req, res) => { res.writeHead(200, { 'content-length': 100 }); res.flushHeaders(); setImmediate(() => res.socket.destroy()); });
+  try {
+    for (let i = 0; i < 150; i++) await assert.rejects(dl.downloadFile({ url: `http://127.0.0.1:${a.port}/x`, dest: path.join(dir, `f${i}`), idleTimeoutMs: 2000 }));
+    await sleep(100);
+    assert.deepEqual(fs.readdirSync(dir), [], 'not one temp or destination file was left behind');
+  } finally { await a.close(); rmrf(dir); }
+});
+
 test('a full or unwritable output folder is a DISK error, not a crash', async () => {
   const dir = tmpDir();
   const a = await serve((req, res) => { res.writeHead(200); res.end('data'); });

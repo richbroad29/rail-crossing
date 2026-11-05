@@ -100,9 +100,22 @@
     "maxStationSnapM": 300,
     "recomputeFraction": 0.1,
     "replanSecs": 600,
+    "signalAt": "end",
+    "maxDetour": 3,
+    "maxPinDeviation": 1.5,
     "stepBudgetMs": 15,
     "routeCacheEntries": 300,
     "maxSpans": 120000
+  },
+  "track": {
+    "enabled": true,
+    "repo": "richbroad29/rail-crossing",
+    "tagPrefix": "track-pack-",
+    "checkIntervalSecs": 86400,
+    "retryMinSecs": 900,
+    "retryMaxSecs": 21600,
+    "maxPackBytes": 120000000,
+    "keepPacks": 2
   },
   "record": {
     "enabled": true,

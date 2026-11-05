@@ -1,4 +1,4 @@
-# Track pack format, version 1
+# Track pack format, version 2
 
 One file, `track-pack-<yyyymmdd>.bin`, little-endian throughout. Everything the service needs
 loads as typed arrays, one section each, so loading is a handful of `readSync` calls into
@@ -12,7 +12,7 @@ noticing (`test/track.test.js` round-trips every section).
 ```
 offset  size  field
 0       4     magic "RTKP" (ASCII)
-4       4     u32   format version (1). A reader refuses any other version.
+4       4     u32   format version (2). A reader refuses a version it does not know (it reads 1 and 2).
 8       4     u32   section count N
 12      4     u32   flags (0)
 16      8     f64   total file size in bytes (a truncated download fails this check)
@@ -100,13 +100,32 @@ Network overview (two levels, each gzip-compressed GeoJSON; **not loaded into me
 Both are one `FeatureCollection` of two `MultiLineString` features (`class: main`, `class: branch`), every
 running line (tunnels included and not marked), no siding, yard, crossover or depot spur, 4 or 5 decimal places.
 
+## Derived index (stored from format 2)
+
+Computed once by the builder (`src/track/derive.js`, shared with the reader) and stored, so that loading a pack is a handful of
+`readSync` calls and nothing is computed. Format 1 packs lack these sections and the reader derives them itself, which costs
+about 0.1 s on a laptop and 20 s on the 1/8-core production server (measured by the lead): that is why they are stored.
+
+| id | type | count | meaning |
+| --- | --- | --- | --- |
+| VCUM | f32 | vertices | metres from the start of the edge to each vertex |
+| EBST, EBEN | f32 | edges | tangent bearing at the first / last node, measured to the first vertex 15 m in (the routing turn limit) |
+| GSEGE | u32 | vertices | the edge a segment (identified by its first vertex) belongs to |
+| GKEY, GOFF, GSEG | u32 | cells+, cells+1, segments | the sparse 450 m grid: sorted keys of occupied cells, offsets, and the segments in each |
+
+`track/upgrade.js in.bin out.bin [--manifest in.manifest.json]` rewrites a format-1 pack as format 2 without rebuilding it from
+OSM, and records `upgradedFrom` (format and hash) in the new manifest.
+
 ## Derived at load, not stored
 
-Cumulative distance per vertex, edge-end bearings (for the routing turn limit), the 450 m grid index of
-segments, and the route search's scratch arrays (allocated on first `route()`). Together about 3 MB for Britain.
+The route search's scratch arrays (allocated on first `route()`).
 
 ## Versioning
 
 Bump `VERSION` in `src/track/format.js` for any change an old reader cannot ignore (a changed meaning of an
-existing section, a new *required* section). Adding a section an old reader may skip does not need a bump.
+existing section, a new *required* section). Adding a section an old reader may skip does not need a bump (the derived index
+was such a change for an OLD reader but is optional for a NEW one, which is why format 1 stays readable: `MIN_VERSION` is 1).
 The service refuses a pack whose version it does not know and keeps the pack it already has.
+
+- 1: graph, strings, signals, stations, overview.
+- 2: adds the derived index (VCUM, EBST, EBEN, GSEGE, GKEY, GOFF, GSEG).

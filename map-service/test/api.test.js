@@ -74,7 +74,7 @@ test('GET /health: exact shape, plain numbers, and it is truthful', async () => 
     assert.deepEqual(keys(h.feeds.trust), ['activations', 'connected', 'lastMessageAt', 'messagesPerMin', 'staleSecs']);
     assert.deepEqual(keys(h.feeds.vstp), ['connected', 'lastMessageAt', 'messagesPerMin', 'schedules', 'staleSecs']);
     assert.equal(h.feeds.trust.connected, true); assert.equal(h.feeds.vstp.connected, true);
-    assert.deepEqual(keys(h.diagnostics), ['record', 'spans', 'transit', 'trust', 'vstp']);
+    assert.deepEqual(keys(h.diagnostics), ['record', 'spans', 'track', 'transit', 'trust', 'vstp']);
     assert.equal(h.feeds.td.connected, true);
     assert.deepEqual(keys(h.reference), ['cif', 'corpus', 'naptan', 'smart']);
     for (const k of ['smart', 'corpus', 'naptan']) { assert.deepEqual(keys(h.reference[k]), ['loadedAt', 'rows']); assert.ok(h.reference[k].rows > 10); assert.ok(isNum(h.reference[k].loadedAt)); }

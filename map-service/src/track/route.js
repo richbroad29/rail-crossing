@@ -249,4 +249,21 @@ function sliceRoute(pack, route, d0, d1) {
   return rev ? out.reverse() : out;
 }
 
-module.exports = { routeBetween, sliceRoute, pointOnRoute };
+/**
+ * Metres along `route` of the point at `offset` metres along `edge`, or null when the route does not run over that part of that
+ * edge (a signal on another track, or beside the route's stretch). Offsets are the edge's own (from its first node), as in a snap.
+ */
+function alongRoute(pack, route, edge, offset, withDir = false) {
+  let base = 0;
+  for (const p of route.pieces) {
+    const lo = Math.min(p.a, p.b), hi = Math.max(p.a, p.b), len = hi - lo;
+    if (p.e === edge && offset >= lo - 0.5 && offset <= hi + 0.5) {
+      const d = base + Math.abs(Math.max(lo, Math.min(hi, offset)) - p.a);
+      return withDir ? { d, reversed: p.b < p.a } : d;          // reversed: the route runs against the edge's own direction here
+    }
+    base += len;
+  }
+  return null;
+}
+
+module.exports = { routeBetween, sliceRoute, pointOnRoute, alongRoute };

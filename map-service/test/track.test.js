@@ -558,3 +558,68 @@ test('stationSnaps: groups every TIPLOC of a station, never another town\'s name
   assert.ok(new Set(p.stationSnaps('London Bridge').map(s => s.tiploc)).size >= 2);
   assert.deepEqual(p.stationSnaps('No Such Station'), []);
 });
+
+// ---- format 2: the derived index is stored, loading does no work ------------------------------------------------------
+
+const { deriveSections, DERIVED } = require('../src/track/derive');
+
+test('format 2: the pack stores the derived index, the reader uses it as it is, and it equals what would be computed', () => {
+  assert.equal(F.VERSION, 2);
+  assert.equal(fs.readFileSync(FIX).readUInt32LE(4), 2);
+  const p = loadPack(FIX);
+  assert.equal(p.derivedFromPack, true, 'no derivation at load');
+  const d = deriveSections(p.vlat, p.vlon, p.evo);
+  for (const id of DERIVED) {
+    assert.ok(p.s[id], `${id} is in the pack`);
+    assert.deepEqual(Array.from(p.s[id]), Array.from(d[id]), `${id} equals a fresh computation`);
+  }
+  assert.equal(p.vcum, p.s.VCUM, 'the stored arrays are used directly, not copied');
+});
+
+test('format 1 stays readable: a v1 pack loads (deriving the index itself) and answers exactly as the v2 pack does', () => {
+  const p2 = loadPack(FIX);
+  const S = Object.assign({}, p2.s); for (const id of DERIVED) delete S[id];
+  const dir1 = tmpDir('v1-');
+  try {
+    const f = path.join(dir1, 'v1.bin');
+    writePack(f, S, { metaJson: '{}', version: 1, built: 0 });
+    assert.equal(fs.readFileSync(f).readUInt32LE(4), 1);
+    const p1 = loadPack(f);
+    assert.equal(p1.derivedFromPack, false);
+    assert.deepEqual(p1.nearestOnTrack(50.8357, -0.2053, { maxDist: 300 }), p2.nearestOnTrack(50.8357, -0.2053, { maxDist: 300 }));
+    const r1 = p1.route(p1.stationSnaps('HOVE'), p1.stationSnaps('BRGHTN'), { avoidSidings: true }), r2 = p2.route(p2.stationSnaps('HOVE'), p2.stationSnaps('BRGHTN'), { avoidSidings: true });
+    assert.ok(r1 && r2);
+    assert.equal(r1.length, r2.length);
+    assert.deepEqual(p1.slice(r1, 100, 400), p2.slice(r2, 100, 400));
+  } finally { rmrf(dir1); }
+});
+
+test('a pack newer than this reader (version 3) and one older than any it knows (version 0) are refused plainly', () => {
+  const dir1 = tmpDir('vbad-');
+  try {
+    const good = fs.readFileSync(FIX);
+    for (const v of [0, 3]) {
+      const b = Buffer.from(good); b.writeUInt32LE(v, 4);
+      const f = path.join(dir1, `v${v}.bin`); fs.writeFileSync(f, b);
+      assert.throws(() => loadPack(f), /format version \d, this reader understands 1 to 2/);
+    }
+  } finally { rmrf(dir1); }
+});
+
+test('upgrade.js rewrites a v1 pack as v2 with identical graph sections and a manifest that records where it came from', () => {
+  const { spawnSync } = require('child_process');
+  const p2 = loadPack(FIX);
+  const S = Object.assign({}, p2.s); for (const id of DERIVED) delete S[id];
+  const dir1 = tmpDir('upg-');
+  try {
+    const v1 = path.join(dir1, 'in.bin'), out = path.join(dir1, 'out.bin');
+    writePack(v1, S, { metaJson: JSON.stringify({ packDate: '20260101' }), version: 1, built: 0 });
+    const r = spawnSync(process.execPath, [path.join(__dirname, '..', 'track', 'upgrade.js'), v1, out], { encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    const up = loadPack(out);
+    assert.equal(up.derivedFromPack, true);
+    for (const id of Object.keys(S)) if (id !== 'META') assert.deepEqual(Array.from(up.s[id]), Array.from(S[id]), id);
+    const mf = JSON.parse(fs.readFileSync(path.join(dir1, 'out.manifest.json'), 'utf8'));
+    assert.equal(mf.format, 2); assert.equal(mf.upgradedFrom.format, 1); assert.match(mf.sha256, /^[0-9a-f]{64}$/);
+  } finally { rmrf(dir1); }
+});

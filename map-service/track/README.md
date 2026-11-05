@@ -3,7 +3,7 @@
 Builds the railway track model the live map puts trains on (contract section 8): the graph of real
 track from OpenStreetMap, NaPTAN station snaps, OSM signals, and the national network overview. It runs
 on a Mac or a GitHub Actions runner, **never on the VPS**; the VPS downloads the published file. The
-runtime library that reads the pack is `../src/track/` (no dependencies, loads in under 0.1 s).
+runtime library that reads the pack is `../src/track/` (no dependencies; a format-2 pack loads in about 10 ms because the spatial index is stored in it).
 
 Format: [`FORMAT.md`](FORMAT.md). Licence: OSM data is ODbL; the pack and the overview are derived
 databases, so credit "© OpenStreetMap contributors" wherever they are shown. The builder is public.
@@ -41,6 +41,9 @@ The builder has **no npm dependencies** (the PBF reader is `lib/pbf.js`). Node 2
 
 3. The builder reads the pack back through the runtime reader and refuses to finish if it differs from what
    it built.
+
+   To move an existing format-1 pack to format 2 without rebuilding from OSM:
+   `node track/upgrade.js old.bin new.bin --manifest old.manifest.json` (writes `new.manifest.json` with the new hash).
 
 ## What it does
 

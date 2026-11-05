@@ -265,8 +265,12 @@ async function downloadFile({ url, dest, ...opts }) {
     let bytes = 0;
     const count = async function* (source) { for await (const chunk of source) { bytes += chunk.length; yield chunk; } };
     trackTemp(tmp);
+    // The write stream opens (and CREATES) its file asynchronously. If the download fails before that open has finished, an unlink
+    // issued straight away finds nothing to remove and the open then creates the file: a leftover .tmp. So on failure, wait for the
+    // stream to be closed before removing the file.
+    const out = fs.createWriteStream(tmp);
     try {
-      await pipeline(res, count, fs.createWriteStream(tmp));
+      await pipeline(res, count, out);
       const expected = res.headers['content-length'] === undefined ? NaN : Number(res.headers['content-length']);
       if (Number.isFinite(expected) && expected !== bytes) {
         throw new DownloadError('TRUNCATED', `The ${o.what} download was cut short (${bytes} of ${expected} bytes): run it again.`);
@@ -282,11 +286,22 @@ async function downloadFile({ url, dest, ...opts }) {
         contentEncoding: res.headers['content-encoding'] || null
       };
     } catch (e) {
+      await closed(out);
       removeQuietly(tmp);
       throw e;
     } finally {
       untrackTemp(tmp);
     }
+  });
+}
+
+/** Resolve once a write stream is fully closed (destroying it if it is not already). Never rejects. */
+function closed(stream) {
+  return new Promise(resolve => {
+    if (stream.closed) { resolve(); return; }
+    stream.once('close', resolve);
+    stream.on('error', () => {});
+    stream.destroy();
   });
 }
 

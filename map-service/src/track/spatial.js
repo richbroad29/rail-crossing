@@ -13,16 +13,20 @@ const LON0 = -10.0 * 1e7;
 const CX = 2048;                      // cells per row in the key
 const SEG_BITS = 2 ** 24;             // composite = key * 2^24 + segment, exact in a double
 
-class Grid {
-  /**
-   * @param {Int32Array} vlat @param {Int32Array} vlon @param {Uint32Array} evo edge -> first vertex (n+1)
-   */
-  constructor(vlat, vlon, evo) {
+/**
+ * Build the grid arrays from the vertex arrays. This is the expensive part of loading a format-1 pack (about 0.1 s on a Mac,
+ * far more on the small VPS), which is why format 2 stores the result in the pack (sections GKEY, GOFF, GSEG, GSEGE) and
+ * the reader does no work at all.
+ * @param {Int32Array} vlat @param {Int32Array} vlon @param {Uint32Array} evo edge -> first vertex (n+1)
+ * @returns {{segEdge: Uint32Array, keys: Uint32Array, offs: Uint32Array, segs: Uint32Array}}
+ */
+function buildGridArrays(vlat, vlon, evo) {
+  {
     const V = vlat.length, E = evo.length - 1;
     if (V >= SEG_BITS) throw new Error('track pack too large for the grid index');
-    this.segEdge = new Uint32Array(V);
+    const segEdge = new Uint32Array(V);
     let n = 0;
-    for (let e = 0; e < E; e++) for (let v = evo[e]; v < evo[e + 1]; v++) { this.segEdge[v] = e; if (v + 1 < evo[e + 1]) n++; }
+    for (let e = 0; e < E; e++) for (let v = evo[e]; v < evo[e + 1]; v++) { segEdge[v] = e; if (v + 1 < evo[e + 1]) n++; }
 
     // Two passes over the same traversal (count, then fill) so the temporary array is exactly the size needed.
     const traverse = (push) => {
@@ -67,9 +71,16 @@ class Grid {
       segs[w++] = c - key * SEG_BITS;
     }
     offs.push(w);
-    this.keys = Uint32Array.from(keys);
-    this.offs = Uint32Array.from(offs);
-    this.segs = segs.slice(0, w);
+    return { segEdge, keys: Uint32Array.from(keys), offs: Uint32Array.from(offs), segs: segs.slice(0, w) };
+  }
+}
+
+class Grid {
+  /**
+   * @param {{segEdge, keys, offs, segs}} arrays  prebuilt (from the pack) or the result of buildGridArrays
+   */
+  constructor(arrays) {
+    this.segEdge = arrays.segEdge; this.keys = arrays.keys; this.offs = arrays.offs; this.segs = arrays.segs;
   }
 
   /** Calls fn(v) for every segment in every occupied cell touching the box (1e-7 degrees). */
@@ -88,4 +99,4 @@ class Grid {
   }
 }
 
-module.exports = { Grid };
+module.exports = { Grid, buildGridArrays };

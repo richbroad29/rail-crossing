@@ -22,6 +22,7 @@ const { TransitStore, classOf } = require('./transit');
 const { MotionPlanner } = require('./motion');
 const { SpanBuilder } = require('./spans');
 const { Recorder } = require('./record');
+const { TrackManager } = require('./track-manager');
 const { derive } = require('./progress');
 const { buildBoard } = require('./station-board');
 const { hhmm } = require('./time');
@@ -41,7 +42,7 @@ class App {
    * @param {object} [o.refUrls] / o.authHosts / o.downloadOpts   test seams for the downloader
    * @param {function} [o.openSession]                             test seam for STOMP
    */
-  constructor({ config, dataDir, envFile = null, fake = null, now = Date.now, refUrls = {}, authHosts = null, downloadOpts = {}, openSession = null, tdSleep = null, track = null }) {
+  constructor({ config, dataDir, envFile = null, fake = null, now = Date.now, refUrls = {}, authHosts = null, downloadOpts = {}, openSession = null, tdSleep = null, track = null, trackPack = null, trackUrls = {}, trackDownloadOpts = {} }) {
     this.config = config;
     this.dataDir = dataDir;
     this.envFile = envFile;
@@ -59,7 +60,9 @@ class App {
     this.trust = new TrustState({ config: config.trust, now, context: () => this.ctx(), onChange: (act, kind) => this._onTrust(act, kind) });
     this._ctxBase = { areaStanox: new Map(), stanoxOf: () => 0, tiplocsOfStanox: () => [], isStation: () => false };
     this.spans = null;
-    this.track = track;
+    this.track = null;                  // the loaded TrackPack (src/track), once there is one
+    this._injectedTrack = track; this._trackPackFile = trackPack; this._trackUrls = trackUrls; this._trackDownloadOpts = trackDownloadOpts;
+    this.trackManager = null;
     this.motion = new MotionPlanner({
       spans: { forBerth: id => (this.spans ? this.spans.forBerth(id) : null) }, transit: this.transit,
       berthInfo: (t, keyId) => this._berthInfo(t, keyId), config: config.motion
@@ -214,6 +217,20 @@ class App {
     return out;
   }
 
+  /** A track pack is (re)loaded: spans are rebuilt against it, incrementally, from the next tick. */
+  _setTrack(pack) {
+    this.track = pack;
+    this.spans = this.config.spans.enabled ? new SpanBuilder({ track: pack, graph: this.graph, transit: this.transit, config: this.config.spans, now: this.now }) : null;
+    this.model.invalidateServices();
+  }
+
+  /** GET /network: the overview GeoJSON (gzipped) and its ETag, or null without a pack. */
+  network(level) {
+    if (!this.track || (level !== 'lo' && level !== 'hi')) return null;
+    const buf = this.track.network(level), tag = this.track.sha256();
+    return buf ? { buf, etag: `"${tag.slice(0, 16)}-${level}"` } : null;
+  }
+
   _onTrust(act, kind) {
     if (kind === 'activation') { this.model.rematchHeadcode(act.hc); return; }
     if (kind === 'identity') { this.model.rematchHeadcode(act.hc); if (act.previousHc) this.model.rematchHeadcode(act.previousHc); return; }
@@ -268,7 +285,12 @@ class App {
     await this.refdata.loadFromDisk();
     this._derive();
     this.refdata.start();
-    if (this.track && cfg.spans.enabled) this.spans = new SpanBuilder({ track: this.track, graph: this.graph, transit: this.transit, config: cfg.spans, now: this.now });
+    if (this._injectedTrack) this._setTrack(this._injectedTrack);
+    else if (cfg.track.enabled) {
+      this.trackManager = new TrackManager({ config: cfg.track, dataDir: this.dataDir, fixedFile: this._trackPackFile, download: !this.fake, urls: this._trackUrls, downloadOpts: this._trackDownloadOpts, now: this.now });
+      this.trackManager.on('loaded', pack => this._setTrack(pack));
+      await this.trackManager.start();
+    }
     if (cfg.record.enabled) { this.recorder = new Recorder({ config: cfg.record, dataDir: this.dataDir, sse: this.sse, snapshot: this.snapshot, now: this.now }); this.recorder.start(); }
 
     let creds, host, port;
@@ -355,6 +377,7 @@ class App {
     if (this.td) await this.td.stop();
     this.sse.closeAll();
     if (this.recorder) this.recorder.stop();
+    if (this.trackManager) this.trackManager.stop();
     this.saveGraph();
     this.vstp.saveFile(this.vstpFile);
     this.transit.saveFile(this.transitFile, this.graph);
@@ -388,7 +411,7 @@ class App {
       clients: { sse: this.sse.size },
       diagnostics: {
         trust: this.trust.status(), vstp: this.vstp.status(), transit: { series: this.transit.size, ...this.transit.stats },
-        spans: this.spans ? this.spans.status() : 'no track library loaded', record: this.recorder ? this.recorder.status() : null
+        spans: this.spans ? this.spans.status() : 'no track pack loaded', track: this.trackManager ? this.trackManager.status() : { loaded: !!this.track }, record: this.recorder ? this.recorder.status() : null
       }
     };
   }

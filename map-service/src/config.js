@@ -38,12 +38,17 @@ function parseFake(text) {
 function loadConfig({ env = process.env, argv = process.argv.slice(2), overrides = null } = {}) {
   let config = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'config', 'default.json'), 'utf8'));
   const flags = {};
-  for (const a of argv) {
+  const KNOWN = '--fake[=host:port] --ref-dir=DIR --track-pack=FILE';
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
     const m = /^--([a-z-]+)(?:=(.*))?$/.exec(a);
-    if (!m) throw new Error(`Unknown argument "${a}". Known: --fake[=host:port] --ref-dir=DIR`);
+    if (!m) throw new Error(`Unknown argument "${a}". Known: ${KNOWN}`);
+    // `--track-pack FILE` (a space) is accepted as well as `--track-pack=FILE`.
+    if (m[1] === 'track-pack' && m[2] === undefined && i + 1 < argv.length && !argv[i + 1].startsWith('--')) { flags[m[1]] = argv[++i]; continue; }
     flags[m[1]] = m[2] === undefined ? true : m[2];
   }
-  for (const k of Object.keys(flags)) if (!['fake', 'ref-dir'].includes(k)) throw new Error(`Unknown argument "--${k}". Known: --fake[=host:port] --ref-dir=DIR`);
+  for (const k of Object.keys(flags)) if (!['fake', 'ref-dir', 'track-pack'].includes(k)) throw new Error(`Unknown argument "--${k}". Known: ${KNOWN}`);
+  if (flags['track-pack'] !== undefined && (flags['track-pack'] === true || flags['track-pack'] === '')) throw new Error('--track-pack needs a file: --track-pack=FILE.');
 
   const port = env.PORT ? Number(env.PORT) : config.port;
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error(`PORT "${env.PORT}" is not a usable port number.`);
@@ -69,7 +74,8 @@ function loadConfig({ env = process.env, argv = process.argv.slice(2), overrides
     config,
     dataDir: path.resolve(expandHome(env.MAP_DATA_DIR || path.join(os.homedir(), 'rail-map-data'))),
     envFile: expandHome(env.MAP_ENV_FILE || path.join(os.homedir(), 'rail-crossing', 'backend', '.env')),
-    fake
+    fake,
+    trackPack: flags['track-pack'] ? path.resolve(expandHome(String(flags['track-pack']))) : null
   };
 }
 

@@ -69,6 +69,7 @@ class BerthGraph {
     this.stations = [];        // station objects {key,name,lat,lon,crs}
     this.anchors = new Map();  // id -> station index
     this.anchorKind = new Map(); // id -> 'arr' | 'dep' | 'both'
+    this.anchorPlat = new Map(); // id -> SMART platform of the berth at its station
     this.hints = new Map();
     this.smartEdgeCount = 0;
     this.learnedEdges = 0;     // edges seen live at least once
@@ -167,7 +168,7 @@ class BerthGraph {
     for (let e = 0; e < this.edgeCount; e++) if (this.eCnt[e] > 0) learned.push(this.eFrom[e], this.eTo[e], this.eCnt[e]);
     this._reset();
 
-    const votes = new Map(), hintVotes = new Map(), kindVotes = new Map();
+    const votes = new Map(), hintVotes = new Map(), kindVotes = new Map(), platVotes = new Map();
     const stationIdx = new Map();
     const stations = [];
     const idxOf = st => {
@@ -198,6 +199,8 @@ class BerthGraph {
         vote(votes, strong, i);
         let kv = kindVotes.get(strong); if (!kv) { kv = [0, 0]; kindVotes.set(strong, kv); }
         kv[ARRIVE.has(ev) ? 0 : 1]++;
+        const pl = smart.platform ? smart.platform[r] : '';
+        if (pl) { let pv = platVotes.get(strong); if (!pv) { pv = new Map(); platVotes.set(strong, pv); } pv.set(pl, (pv.get(pl) || 0) + 1); }
       }
       if (weak >= 0) vote(hintVotes, weak, i);
       used++;
@@ -222,7 +225,10 @@ class BerthGraph {
     // How each anchored berth is used (SMART events): trains ARRIVE there (the span ends at the stop),
     // DEPART from there (it starts at the stop), or both.
     this.anchorKind = new Map();
+    this.anchorPlat = new Map();          // id -> the platform SMART gives for trains using this berth at the station (most often named)
     for (const id of this.anchors.keys()) {
+      const pv = platVotes.get(id);
+      if (pv) { let best = '', bn = -1; for (const [pl, n] of pv) if (n > bn || (n === bn && pl < best)) { best = pl; bn = n; } this.anchorPlat.set(id, best); }
       const kv = kindVotes.get(id) || [0, 0];
       this.anchorKind.set(id, kv[0] && kv[1] ? 'both' : kv[0] ? 'arr' : 'dep');
     }

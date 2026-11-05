@@ -20,13 +20,13 @@ const { haversineKm } = require('../src/geo');
 const stomp = require('../src/stomp');
 const log = require('../src/log');
 
-async function runReplay({ file, refDir, speed = 3000, quiet = true, overrides = {} }) {
+async function runReplay({ file, refDir, speed = 3000, quiet = true, overrides = {}, track = null }) {
   const fake = new FakeNrod({ mode: 'replay', file, speed });
   const port = await fake.start();
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'replay-'));
   const { config } = loadConfig({ env: {}, argv: [], overrides: { port: 0, http: { batchMs: 50 }, td: { backoffMinMs: 20, backoffMaxMs: 100 }, ...overrides } });
   if (quiet) log.setSink(() => {});
-  const app = new App({ config, dataDir, fake: { host: '127.0.0.1', port, refDir } });
+  const app = new App({ config, dataDir, fake: { host: '127.0.0.1', port, refDir }, track });
   const seen = new Map();                 // id -> record of the train as last attached
   const visited = new Set();              // every berth any train was put on
   const orig = app.model._attach.bind(app.model);

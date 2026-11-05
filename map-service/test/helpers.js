@@ -39,8 +39,8 @@ function makeModel({ now = () => 1000000, cfgOverrides = {}, stationsAt = {} } =
 
 /** Compact SMART rows (loadSmart's shape) from [area, from, to, stanox, event] tuples. */
 function smartRows(tuples) {
-  const d = { rows: 0, area: [], from: [], to: [], stanox: [], event: [], skipped: 0 };
-  for (const [a, f, t, s, e] of tuples) { d.area.push(a); d.from.push(f); d.to.push(t); d.stanox.push(s); d.event.push(e); d.rows++; }
+  const d = { rows: 0, area: [], from: [], to: [], stanox: [], event: [], platform: [], skipped: 0 };
+  for (const [a, f, t, s, e, pl] of tuples) { d.area.push(a); d.from.push(f); d.to.push(t); d.stanox.push(s); d.event.push(e); d.platform.push(pl || ''); d.rows++; }
   return d;
 }
 
