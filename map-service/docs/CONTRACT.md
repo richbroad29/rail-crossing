@@ -296,3 +296,22 @@ JSONL of updates for the Sussex box in `MAP_DATA_DIR/record/` (bounded, rotated)
 - The motion replay meets §12's targets on a recorded hour of the live Sussex box.
 - TRUST: next station + time and lateness on every matched passenger train; station boards live.
 - Memory: service ≤ 220 MB steady, ≤ 260 MB peak during the daily CIF refresh, measured on the VPS.
+
+## 16. Phase 2 clarifications (lead, 2026-11-05)
+
+- **Render lag** defaults to **12 s** (was 10). Measured on the noisy mock: 10 s absorbs 88.8% of
+  steps, 12 s 92.7%, 15 s 95.0%. To be re-confirmed on a real recording before deploy.
+- **"Absorbed"** (section 12 metric): between the step arriving and the train entering the new span,
+  the drawn train neither stopped short at a signal nor hit the catch-up limit. Standing at a
+  platform past its dwell is not waiting.
+- **`mv.stop` on a departure berth** is `0` with `dwell: 0` ("starts standing here"), never null.
+  On an arrival berth `stop` is the platform stop point. `null` means a constant-speed pass.
+- **Catch-up limit** is ≤ 1.5× the span's cruise speed (length ÷ (eta − t0)), not the current
+  speed, which is zero for a held train.
+- **`svc.late`**: positive = late, negative = early, minutes.
+- **`recentBerths[].sp`** (in `/train/:id`): the span id each recent berth was traversed on, so the
+  trail follows the track.
+- **Recording format** (`/debug/record` and the rolling record): JSONL lines `{t, event, data}`
+  with `event` ∈ `snapshot`, `update`, `span`. The recorder emits a `span` line the first time a
+  span id appears in a segment, so a recording replays with no network.
+- **Network overview**: `GeoJSON LineStrings`, optional `properties.u` = `main` | `branch`.
