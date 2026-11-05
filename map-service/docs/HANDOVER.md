@@ -84,6 +84,13 @@ The respan keeps recorded t0/eta, so the departure-dwell fix (17.4) is NOT in th
 3. After round 2 is deployed and has recorded a day, re-measure all six regions from the LIVE recordings (no respan needed),
    then ask Rich to publish the phase 2 page. Then phase 3.
 4. Rural regions need a full day of recording before their numbers mean anything.
+5. **Fix round 3 candidates (found 2026-11-05, not started):** trains REMOVED inside the view and re-added later, which the
+   viewer sees as a pop-out then a fade-in and the harness does not count (it reports them as `readded`). London respans:
+   1,970 removals more than 1.5 km inside the box in ~1.3 h, 348 re-added (median 83 s gone). (a) 52 came back at the SAME
+   berth with a new headcode: a renumbering (CB then CC) that the model keeps as one train but the update stream removes at
+   the CB — keep it drawn through the 120 s recently-cancelled window. (b) Most others had no `mv` (phase-1 placement,
+   `pl` i/a) and came back > 2 km away: they stepped into berths the placement cannot place and were removed — hold the last
+   position (marked approximate) for a while instead. Decide with Rich whether 18.1's fade count should include these.
 
 ## Open problem (as found 2026-11-05 morning; superseded by fix round 1 above)
 
