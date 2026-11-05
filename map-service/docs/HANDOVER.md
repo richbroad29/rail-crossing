@@ -50,7 +50,21 @@ then the repo's `CLAUDE.md`. Product intent is the Claude Doc "UK Live Train Map
 | 3 carriages | Not started. Rich has subscribed to Darwin Push Port + snapshots on RDM. |
 | 4 enthusiast features, launch | Not started. |
 
-## Fix round 1 — DONE locally 2026-11-05 (read this before the older notes below)
+## Fix round 2 — MERGED 2026-11-05 (`55f2575`), NOT yet deployed
+
+CONTRACT 18.1-18.5: the harness's headline excludes "slower than predicted" waits and counts re-appearances as fades;
+impossible spans (> 60 m/s implied) are withdrawn (201 berths nationally, at most 12 per area); a departing train stays at
+the platform until TRUST reports it left or it steps (extensions every 30 s, capped at 15 min); gap chains give spans to
+unspanned berths between spanned ones (1,028 built nationally, half by the beside fallback); the recorder now follows the
+page's ingest rule (it wrote the wrong continuation `after` when a train stepped twice in one second).
+Six-region respan (state 2026-11-05 21:10), 12 s, 18.1 harness — round-1 build -> round-2 build:
+fades per train-hour 0.94 -> 0.27 overall (sussex 0.66 -> 0.24, london 1.02 -> 0.18, glasgow 0.93 -> 0.11,
+manchester 2.31 -> 0.84; rural samples too small); headline absorbed 95.1 -> 95.2 % (sussex 93.2, london 97.8,
+glasgow 96.0, manchester 89.0). Backward 0, catch-up <= 1.5x, accel bound held. Remaining fades: 40 behind, 46
+re-appearances, 12 gaps (11 continuations the service could not make when the previous span was itself a continuation:
+`continuation()` returns `fallback`; worth a look). Fades still miss < 0.1 everywhere.
+
+## Fix round 1 — DONE 2026-11-05 (service deployed at 0161a0d)
 
 Diagnosis, design and measured results are in CONTRACT section 17. Merged on `claude/map-service` and **the service is DEPLOYED** (VPS `~/rail-map` at `0161a0d`, 2026-11-05 21:45 UTC;
 rollback point `cf74eaf`). The live recordings now carry continuation lines. The phase 2 PAGE is still not published. Service 283 tests, page 221 tests + 28/28 mutations, all on Node 20.
