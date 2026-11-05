@@ -38,7 +38,7 @@ const DEFAULT = path.join(__dirname, 'fixtures', 'sussex-10min-iid.jsonl.gz');
 function load(file) {
   let buf = file === '-' ? fs.readFileSync(0) : fs.readFileSync(file);
   if (buf[0] === 0x1f && buf[1] === 0x8b) buf = zlib.gunzipSync(buf);        // gzip by content, not by name
-  const ev = [], spans = new Map(), conts = new Map(), canonOf = new Map(), skipped = { bad: 0, unknown: 0 };
+  const ev = [], spans = new Map(), conts = new Map(), skipped = { bad: 0, unknown: 0 };
   buf.toString('utf8').split('\n').forEach((l) => {
     if (!l.trim()) return;
     let o;
@@ -47,7 +47,7 @@ function load(file) {
     if (o.event === 'span') {
       if (!(o.data.id && o.data.path)) skipped.bad++;
       // CONTRACT 17.1: a continuation line {id, after, of, ...} is what GET span/<of>?after=<after> returned; plain lines are GET span/<id>.
-      else if (o.data.after && o.data.of) { conts.set(o.data.after + '>' + o.data.of, o.data); canonOf.set(o.data.id, o.data.of); }
+      else if (o.data.after && o.data.of) { conts.set(o.data.after + '>' + o.data.of, o.data); }
       else spans.set(o.data.id, o.data);
     }
     else if (o.event === 'snapshot' || o.event === 'update') {
@@ -57,7 +57,7 @@ function load(file) {
     } else skipped.unknown++;
   });
   ev.sort((a, b) => a.t - b.t);
-  return { events: ev, spans, conts, canonOf, skipped };
+  return { events: ev, spans, conts, skipped };
 }
 
 function run(rec, opt) {
@@ -68,15 +68,9 @@ function run(rec, opt) {
   const clock = engine.createClock({ lagMs: opt.lagMs });
   // spans arrive a little after they are first asked for
   const asked = new Map(), prepared = new Map();
-  // A continuation key is `after>of`. The recording holds the answers the page would have got, keyed by the recorded
-  // canonical ids; the page may ask `after` a continuation id it drew (a chain), which ends exactly where the canonical
-  // span it continues ends, so it is looked up by that span. No line = the service errored: hasFailed, canonical kept.
-  const contRaw = (key) => {
-    const raw = rec.conts && rec.conts.get(key);
-    if (raw || !rec.canonOf) return raw || null;
-    const cut = key.indexOf('>'), c = rec.canonOf.get(key.slice(0, cut));
-    return c ? rec.conts.get(c + '>' + key.slice(cut + 1)) || null : null;
-  };
+  // A continuation key is `after>of`. The recorder writes the answers a page would have got, keyed by the id the page DREW the
+  // previous berth on (CONTRACT 17.1), so the lookup is exact. No line = the service errored: hasFailed, canonical kept.
+  const contRaw = (key) => (rec.conts && rec.conts.get(key)) || null;
   const spans = {
     contKey: require('../spans.js').contKey,
     peek(id) {
