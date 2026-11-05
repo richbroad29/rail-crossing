@@ -434,3 +434,17 @@ departure time - t0. The page needs no change: a same-berth re-issue already upd
 Darwin forecast departure times replace "booked + TRUST lateness" as the expected departure where Darwin has a forecast
 (they include delays announced before a train moves, which TRUST cannot).
 
+
+### 18.5 Gap chains (service)
+
+Measured on the respanned recordings (18.1 harness): re-appearances — a train dropping off the track and fading back in
+further on — are now the biggest kind of fade in Sussex, Glasgow and Cambrian. Nearly all are a train passing through
+berths with NO span between two spanned berths: sussex 76 holes (54 of them a single berth), median 141 s and 1.2 km;
+manchester 26 (23 single), london 58 (median 3 berths). Junction berths and berths no station-to-station chain walks.
+
+After the station chains, build GAP CHAINS: for a run of 1..`spans.maxGapBerths` (default 4) unspanned berths whose
+best-previous berth (most-used learned or SMART edge into the run) and best-next berth (out of it) both have spans, route
+directed from the previous berth's span END to the next berth's span START (same `dir` rules as 17.1 (a); within
+`2 x crow distance + 500 m`), and cut that route among the run's berths with the 17.2 weights. Spans get ids and rules like
+any other (`rule.start = rule.end = 'gap'`), are subject to 18.2's speed rule, and never replace a station-chain span.
+Report `diagnostics.spans.gapChains` (built, noRoute, tooFast). Measure: re-appearances per region before/after.
