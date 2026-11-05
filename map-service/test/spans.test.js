@@ -384,6 +384,15 @@ test('CHAINS stay bounded: replans do not accumulate chains nothing refers to; o
   assert.equal(w.sb.chains.size, size0, 'nothing but the current chains is left');
 });
 
+test('18.5 a hole of a few metres is not a hole: the previous span ends where the next starts, so there is nothing to draw and no span is made', () => {
+  // chain 2 with a single arrival berth right where chain 1 ends: P end == N start
+  const w = gapWorld(['0031'], { cfg: { minGapMetres: 1e9 } });
+  assert.equal(w.sb.forBerth(w.id('0031')), null, 'a route no longer than minGapMetres is refused');
+  assert.equal(w.sb.status().gapChains.noRoute, 1);
+  const ok = gapWorld(['0031'], { cfg: { minGapMetres: 10 } });
+  assert.ok(ok.sb.forBerth(ok.id('0031')), 'the 4.7 km hole of the other tests is still filled');
+});
+
 test('18.5 + 18.2: a gap that would imply more than maxImpliedMps gets no span and is counted as tooFast; it is not an "impossible" station berth', () => {
   const w = gapWorld(['0031'], { medians: { '0031': 5 } });                   // 4.7 km in 5 s
   assert.equal(w.sb.forBerth(w.id('0031')), null);

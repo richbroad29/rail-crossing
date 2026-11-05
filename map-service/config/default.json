@@ -112,6 +112,7 @@
     "maxSpans": 120000,
     "maxImpliedMps": 60,
     "maxGapBerths": 4,
+    "minGapMetres": 10,
     "maxJoins": 50000,
     "sameMetres": 2,
     "besideMetres": 120,

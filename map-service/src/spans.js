@@ -414,14 +414,15 @@ class SpanBuilder {
       if (!pe || !ne) return null;
       const crow = metresBetween(pe.end, ne.start);
       const maxLength = 2 * crow + (this.cfg.joinDetourM || 500);
+      const minLen = this.cfg.minGapMetres === undefined ? 10 : this.cfg.minGapMetres;     // a "hole" of a few metres is not one: spans of millimetres only strand a train
       let r = this.track.route(pe.end, ne.start, { avoidSidings: false, maxLength }) || null;
-      if (!r || !(r.length > 0)) {
+      if (!r || !(r.length > minLen)) {
         // The 17.1 (b) "beside" step: parallel tracks and opposite running leave no directed route, so go to the nearest reachable point
         // within `besideMetres` of where the next span starts, staying on a running line (the step into that berth then gets a continuation).
         let near = [];
         try { near = this.track.nearestOnTrack(ne.start.lat, ne.start.lon, { k: 8, maxDist: this.cfg.besideMetres || 120, avoidSidings: true }) || []; } catch (_) { near = []; }
         r = near.length ? this.track.route(pe.end, near, { avoidSidings: false, maxLength }) || null : null;
-        if (!r || !(r.length > 0)) return null;
+        if (!r || !(r.length > minLen)) return null;
         r.gapBeside = true;                                  // remembered on the (cached) route: a rebuilt chain object must still count as beside
       }
       this.routes.set(chain.key, r);
