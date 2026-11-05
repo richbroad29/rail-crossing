@@ -241,7 +241,8 @@ class App {
   /**
    * Does this train call at the berth's station, and for how long? (sections 10 and 11) With `wantDepart` (the motion planner, not the
    * transit learner), a calling train also gets `departAt`: the epoch ms of its expected departure from the station, the booked
-   * departure plus TRUST lateness when known (section 17.4; the same lateness `derive()` shows as svc.late).
+   * departure plus TRUST lateness when known (section 17.4; the same lateness `derive()` shows as svc.late), and `departedAt`: the epoch ms
+   * of the TRUST departure report from this station, once there is one (section 18.3: it ends the planner's dwell extension).
    */
   _berthInfo(t, keyId, wantDepart = false) {
     const a = this.graph.anchors.get(keyId);
@@ -259,13 +260,33 @@ class App {
           const nowSec = Math.floor(this.now() / 1000) * 1000, l = london(nowSec);
           const day = m.act ? m.act.runDay : m.dayNum;
           const late = m.act && m.act.lateMins !== null && m.act.lateMins !== undefined ? m.act.lateMins : 0;
-          info.departAt = Math.round(nowSec + ((p.dep + late) - ((l.dayNum - day) * 1440 + l.minutes)) * 60000);
+          const sinceMidnight = (l.dayNum - day) * 1440 + l.minutes;
+          info.departAt = Math.round(nowSec + ((p.dep + late) - sinceMidnight) * 60000);
+          const sec = m.act ? this._departureReport(m.act, set, p.dep) : -1;
+          if (sec >= 0) info.departedAt = Math.round(nowSec + (sec / 60 - sinceMidnight) * 60000);
         }
         return info;
       }
       return { beh: 'passes', dwellSecs: null };
     }
     return { beh: null, dwellSecs: null };
+  }
+
+  /**
+   * Seconds since the schedule day's London midnight of the TRUST DEPARTURE report from this station (any of its TIPLOCs' STANOXs) for
+   * the call booked to leave at `bookedMins`; the one whose planned time is nearest if the train reported more than one. -1 when none.
+   */
+  _departureReport(act, tiplocs, bookedMins) {
+    if (!act.evN) return -1;
+    const ctx = this.ctx(), stanox = new Set();
+    for (const tl of tiplocs) { const x = ctx.stanoxOf(tl); if (x) stanox.add(x); }
+    let best = -1, bestD = Infinity;
+    for (const e of this.trust.events(act)) {
+      if (!e.dep || e.offroute || !stanox.has(e.stanox)) continue;
+      const d = Math.abs((e.plannedSec >= 0 ? e.plannedSec : e.actualSec) / 60 - bookedMins);
+      if (d < bestD) { bestD = d; best = e.actualSec; }
+    }
+    return best;
   }
 
   _learnTransit(t, keyId, secs) {

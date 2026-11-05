@@ -33,7 +33,14 @@
 //      maxPinDeviation, 1.5 berth lengths), and the boundaries stay in order along the route. TD names a berth for the signal
 //      it stands in rear of, so the signal is at the berth's END (`signalAt: 'end'`); `'start'` is the alternative the
 //      measurement tool compares. The rate per TD area is reported by status().
-//   4. Span ids are `sp_<hash>` of what defines the span, so they are stable; a berth is re-cut only
+//   4. IMPOSSIBLE SPANS (section 18.2). A chain walk that crosses berths nobody has observed can give one berth the whole
+//      station-to-station route (live: 32.8 km for a berth that trains clear in 115 s). A berth gets NO span, and its trains keep
+//      their phase-1 positions, when its length over its own learned PASS median, or its chain's route length over the sum of the
+//      chain's medians (learned, or the section 17.2 partial fill), exceeds `maxImpliedMps` (default 60 m/s, a little over
+//      125 mph). A chain with no learned median at all is cut in equal shares of nothing, so it has no speed to test and is kept.
+//      A span that was built before the medians said so is withdrawn the same way, and a berth that stops being impossible gets
+//      its span back at the next plan. status().impossible counts the berths and chains by TD area.
+//   5. Span ids are `sp_<hash>` of what defines the span, so they are stable; a berth is re-cut only
 //      when learning moves it by more than `recomputeFraction` (10 %) of its length, and then its id
 //      changes. Superseded ids stay readable (the page may still hold one).
 //
@@ -92,6 +99,7 @@ class SpanBuilder {
     this.hasJoins = typeof track.snapAlong === 'function' && typeof track.walk === 'function' && typeof track.nearestOnTrack === 'function';
     this.signalAt = config.signalAt || 'end';
     this.pinLog = [];
+    this.impossible = new Map();      // keyId -> 'berth' | 'chain': berths with NO span because the speed it implies is too high (18.2)
     this.stats = { platform: { tried: 0, used: 0, refused: 0 }, chains: 0, built: 0, noRoute: 0, noSnap: 0, recut: 0, kept: 0, shared: 0, byArea: new Map(), rules: { stop: 0, signal: 0, learned: 0, equal: 0 } };
   }
 
@@ -311,8 +319,11 @@ class SpanBuilder {
       const a = idx[s], b = idx[s + 1];
       for (let j = a; j <= b; j++) bound[j] = anchor.has(j) ? anchor.get(j) : anchor.get(a) + (anchor.get(b) - anchor.get(a)) * ((cw[j] - cw[a]) / (cw[b] - cw[a]));
     }
-    return { L, bound, how, cutBy: learned ? 'learned' : known.length ? 'partial' : 'equal' };
+    return { L, bound, how, cutBy: learned ? 'learned' : known.length ? 'partial' : 'equal', meds, sumSecs: known.length ? cw[n] : 0 };
   }
+
+  /** `spans.maxImpliedMps`: the fastest a berth's (or chain's) span may imply, in m/s. Absent = 60; a huge value turns the rule off. */
+  _maxMps() { const v = this.cfg.maxImpliedMps; return Number.isFinite(v) && v > 0 ? v : 60; }
 
   _build(chain) {
     const g = this.graph;
@@ -321,11 +332,17 @@ class SpanBuilder {
     const cut = this._cut(chain, route);
     if (!cut) { this.stats.noRoute++; return; }
     const n = chain.berths.length;
+    const maxMps = this._maxMps();
+    const chainFast = cut.sumSecs > 0 && cut.L / cut.sumSecs > maxMps;
     for (let i = 0; i < n; i++) {
       const keyId = chain.berths[i];
       if (chain.build && !chain.build.has(keyId)) continue;                 // claimed by an earlier chain: that span stands
       const d0 = cut.bound[i], d1 = cut.bound[i + 1], len = d1 - d0;
       if (!(len > 0)) continue;
+      const m = cut.meds[i];
+      const why = chainFast ? 'chain' : (m !== null && m > 0 && len / m > maxMps) ? 'berth' : null;
+      if (why) { this._withdraw(keyId, why); continue; }
+      this.impossible.delete(keyId);
       const last = i === n - 1, first = i === 0 && chain.firstIsDep;
       const stop = last ? len : first ? 0 : null;
       const rule = { start: cut.how[i], end: cut.how[i + 1], cutBy: cut.cutBy };
@@ -343,6 +360,17 @@ class SpanBuilder {
       this.byBerth.set(keyId, rec); this.byId.set(id, rec);
       this.stats.built++;
     }
+  }
+
+  /** Section 18.2: this berth gets no span. One it already had is superseded (its id stays readable) and its trains fall back to phase 1. */
+  _withdraw(keyId, why) {
+    this.impossible.set(keyId, why);
+    const old = this.byBerth.get(keyId);
+    if (!old) return;
+    this.byBerth.delete(keyId); this.byId.delete(old.id);
+    this.retired.set(old.id, old);
+    while (this.retired.size > Math.max(1000, (this.cfg.maxSpans || 120000) / 4)) this.retired.delete(this.retired.keys().next().value);
+    this.stats.recut++;
   }
 
   /** Cut chains until `budgetMs` is spent. Returns the number of chains cut. Never throws. */
@@ -512,8 +540,15 @@ class SpanBuilder {
     const areas = {};
     let tried = 0, pinned = 0;
     for (const [a, v] of s.byArea) { tried += v.berths; pinned += v.pinned; areas[a] = { ...v, rate: v.berths ? Math.round(1000 * v.pinned / v.berths) / 1000 : null }; }
+    const imp = { maxImpliedMps: this._maxMps(), berths: 0, byBerth: 0, byChain: 0, byArea: {} };
+    for (const [k, why] of this.impossible) {
+      const a = this.graph.areaOf[k] || '?';
+      const e = imp.byArea[a] || (imp.byArea[a] = { berths: 0, byBerth: 0, byChain: 0 });
+      imp.berths++; e.berths++;
+      if (why === 'chain') { imp.byChain++; e.byChain++; } else { imp.byBerth++; e.byBerth++; }
+    }
     return {
-      berthsWithSpans: this.byBerth.size, chains: s.chains, queued: this.queue.length, built: s.built, noRoute: s.noRoute, noSnap: s.noSnap, recut: s.recut, kept: s.kept, sharedBerths: s.shared,
+      berthsWithSpans: this.byBerth.size, impossible: imp, chains: s.chains, queued: this.queue.length, built: s.built, noRoute: s.noRoute, noSnap: s.noSnap, recut: s.recut, kept: s.kept, sharedBerths: s.shared,
       rules: this.rules(),
       joins: { same: j.same, direct: j.direct, beside: j.beside, straight: j.straight, fallback: j.fallback },
       joinStore: { size: this.joins.size, max: this.cfg.maxJoins || 50000, unknownPrev: j.unknownPrev, evicted: j.evicted },

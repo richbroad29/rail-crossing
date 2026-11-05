@@ -409,7 +409,11 @@ class TrainModel {
     if (this.motion) {
       let p = null;
       try { p = this.motion.plan(t, this.now()); } catch (_) { p = null; }
-      if (p) { o.mv = p.mv; if (!p.mv.held) due = p.heldAt; }
+      if (p) {
+        o.mv = p.mv;
+        if (!p.mv.held) due = p.heldAt;
+        if (p.extendAt && p.extendAt < due) due = p.extendAt;         // a departure plan extends its dwell before it falls due (section 18.3)
+      }
     }
     if (t.svcDueAt && t.svcDueAt < due) due = t.svcDueAt;
     t.json = JSON.stringify(o);

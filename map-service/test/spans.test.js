@@ -133,12 +133,13 @@ test('PLATFORM: a platform the pack does not have, or a platform route that is a
 });
 
 test('PROPORTIONAL to the learned median PASS time once every berth in the chain has one', () => {
-  const w = world({ medians: { '0001': 10, '0003': 20, '0005': 30, '0007': 20, '0009': 20 } });
+  const NO_SPEED_LIMIT = { maxImpliedMps: 1e9 };       // these medians are seconds on a 28 km fake route: the cut is the subject, not 18.2
+  const w = world({ medians: { '0001': 10, '0003': 20, '0005': 30, '0007': 20, '0009': 20 }, cfg: NO_SPEED_LIMIT });
   w.sb.settle();
   [['0001', 10], ['0003', 20], ['0005', 30], ['0007', 20], ['0009', 20]].forEach(([b, m]) => assert.ok(Math.abs(w.sb.forBerth(w.id(b)).length - L * m / 100) < 1, `${b}`));
   assert.equal(w.sb.rules().cutLearned, 5);
   // One berth unlearned: it takes the MEAN of the known medians (section 17.2), not equal shares for the whole chain.
-  const w2 = world({ medians: { '0001': 10, '0003': 20, '0005': 30, '0007': 20 } });
+  const w2 = world({ medians: { '0001': 10, '0003': 20, '0005': 30, '0007': 20 }, cfg: NO_SPEED_LIMIT });
   w2.sb.settle();
   [['0001', 10], ['0003', 20], ['0005', 30], ['0007', 20], ['0009', 20]].forEach(([b, m]) => assert.ok(Math.abs(w2.sb.forBerth(w2.id(b)).length - L * m / 100) < 1, `partial ${b}`));
   assert.deepEqual([w2.sb.rules().cutLearned, w2.sb.rules().cutPartial, w2.sb.rules().cutEqual], [0, 5, 0]);
@@ -195,6 +196,80 @@ test('no route between the stops: no spans, counted; a station that will not sna
   const c = world({ track: { stationSnaps() { throw new Error('boom'); }, route() { throw new Error('boom'); }, slice() { throw new Error('boom'); } } });
   assert.doesNotThrow(() => c.sb.settle());
   assert.equal(c.sb.size, 0);
+});
+
+// ---- contract section 18.2: impossible spans -------------------------------------------------------------------------------
+
+test('18.2 a berth whose span implies more than maxImpliedMps over ITS OWN pass median gets no span; the rest of the chain keeps its own', () => {
+  // L is ~28 km over five berths. 0003 clears in 40 s, the others in 200 s.
+  const meds = { '0001': 200, '0003': 40, '0005': 200, '0007': 200, '0009': 200 };
+  const w = world({ medians: meds });
+  w.sb.settle();
+  assert.equal(w.sb.size, 5, 'cut in proportion to the medians every berth implies the same speed (route / sum of medians = 33 m/s)');
+  assert.equal(w.sb.status().impossible.berths, 0);
+  // Pinned boundaries are what make one berth long and quick: 0001 ends 1 km along and 0003 ends 12 km along (signal refs 1 and 3 = the
+  // berth ids), so 0003 is 11 km that trains clear in 40 s (275 m/s) while 0001 is 1 km in 200 s and 0005 5.3 km in 200 s.
+  const track = fakeTrack({ signals: [{ ref: '1', d: 1000 }, { ref: '3', d: 12000 }] });
+  const pinned = world({ track, medians: meds, cfg: { maxPinDeviation: 100 } });
+  pinned.sb.settle();
+  assert.equal(pinned.sb.forBerth(pinned.id('0003')), null, '11 km in 40 s: no span');
+  assert.equal(pinned.sb.byBerth.get(pinned.id('0003')), undefined);
+  assert.ok(pinned.sb.forBerth(pinned.id('0001')), 'its neighbours are judged on their own medians');
+  const imp = pinned.sb.status().impossible;
+  assert.deepEqual([imp.maxImpliedMps, imp.berths, imp.byBerth, imp.byChain], [60, 1, 1, 0]);
+  assert.deepEqual(imp.byArea, { LA: { berths: 1, byBerth: 1, byChain: 0 } }, 'counted by TD area');
+});
+
+test('18.2 a chain whose route length over the sum of its medians is too fast gets no spans at all; unlearned chains are not judged', () => {
+  const fast = { '0001': 10, '0003': 10, '0005': 10, '0007': 10, '0009': 10 };       // 28 km in 50 s
+  const w = world({ medians: fast });
+  w.sb.settle();
+  assert.equal(w.sb.size, 0);
+  const imp = w.sb.status().impossible;
+  assert.deepEqual([imp.berths, imp.byBerth, imp.byChain], [5, 0, 5]);
+  assert.equal(w.sb.status().berthsWithSpans, 0);
+  // the PARTIAL fill counts: one learned berth stands for the chain's mean
+  const partial = world({ medians: { '0003': 10 } });
+  partial.sb.settle();
+  assert.equal(partial.sb.size, 0, 'one berth at 10 s: five berths of 10 s = 28 km in 50 s');
+  assert.equal(partial.sb.status().impossible.byChain, 5);
+  // nothing learned: equal shares of nothing, no speed to test
+  const none = world();
+  none.sb.settle();
+  assert.equal(none.sb.size, 5);
+  assert.equal(none.sb.status().impossible.berths, 0);
+  // a plausible chain (28 km in 840 s = 33 m/s) is kept
+  const ok = world({ medians: { '0001': 200, '0003': 40, '0005': 200, '0007': 200, '0009': 200 } });
+  ok.sb.settle();
+  assert.equal(ok.sb.size, 5);
+});
+
+test('18.2 maxImpliedMps is the knob: a huge value turns the rule off, a lower one removes more; absent means 60', () => {
+  const meds = { '0001': 100, '0003': 100, '0005': 100, '0007': 100, '0009': 100 };      // 28 km in 500 s = 56 m/s
+  const at = cfg => { const w = world({ medians: meds, cfg }); w.sb.settle(); return w.sb.size; };
+  assert.equal(at({}), 5, '56 m/s is under the default 60');
+  assert.equal(at({ maxImpliedMps: 50 }), 0);
+  assert.equal(at({ maxImpliedMps: 1e9 }), 5);
+  assert.equal(at({ maxImpliedMps: undefined }), 5);
+});
+
+test('18.2 a span built before the medians said it was impossible is withdrawn (its id stays readable); when the medians recover it comes back', () => {
+  const slow = { '0001': 200, '0003': 200, '0005': 200, '0007': 200, '0009': 200 };
+  const w = world({ medians: slow });
+  w.sb.settle();
+  const before = w.sb.forBerth(w.id('0003'));
+  assert.ok(before);
+  // trains start clearing every berth in 10 s: the ring buffer (200) is replaced by quick samples
+  for (const b of Object.keys(slow)) for (let i = 0; i < 400; i++) w.transit.add(w.id(b), 'express', 'passes', 10);
+  w.sb._planned.at = -Infinity; w.sb.settle();
+  assert.equal(w.sb.forBerth(w.id('0003')), null, 'withdrawn: its trains fall back to phase-1 positions');
+  assert.equal(w.sb.size, 0);
+  assert.ok(w.sb.get(before.id), 'the id a page already holds still resolves');
+  assert.equal(w.sb.status().impossible.byChain, 5);
+  for (const b of Object.keys(slow)) for (let i = 0; i < 400; i++) w.transit.add(w.id(b), 'express', 'passes', 200);
+  w.sb._planned.at = -Infinity; w.sb.settle();
+  assert.ok(w.sb.forBerth(w.id('0003')), 'and it comes back');
+  assert.equal(w.sb.status().impossible.berths, 0);
 });
 
 test('a berth used both to arrive and to depart ends the INCOMING span at the stop; the outgoing chain starts after it', () => {
@@ -337,7 +412,7 @@ test('WHOLE-CHAIN CUT (17.2): berths another chain already claimed still take th
   assert.equal(w.sb.size, 6, 'every berth has exactly one span');
   assert.equal(w.sb.stats.shared, 2);
   // Learned medians shape the whole cut too: chain 2's unclaimed berths have none, the claimed ones do -> 'partial'.
-  const w2 = world({ rows, medians: { '0005': 10, '0007': 50 } });
+  const w2 = world({ rows, medians: { '0005': 10, '0007': 50 }, cfg: { maxImpliedMps: 1e9 } });
   w2.sb.settle();
   assert.equal(w2.sb.byBerth.get(w2.id('0021')).rule.cutBy, 'partial');
   assert.equal(w2.sb.rules().cutPartial, w2.sb.size - 0 - w2.sb.rules().cutEqual - w2.sb.rules().cutLearned);
