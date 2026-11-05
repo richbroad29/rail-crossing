@@ -49,7 +49,7 @@ function isLocalRequest(req) {
 
 const SP = /"sp":"(sp_[0-9a-f]+)"/g;
 const TRAIN_ID = /^\{"id":"([^"]+)"/;
-const TRAIN_SP = /"mv":\{"sp":"(sp_[0-9a-f]+)"/;
+const TRAIN_SP = /"mv":\{"sp":"(sp_[0-9a-f]+)","t0":(\d+)/;
 
 /**
  * Builds the {t, event, data} lines, adding a `span` line the first time each span id is referenced since the last reset(), and, with
@@ -66,21 +66,26 @@ class LineMaker {
   constructor(spanFor, joinFor = null, maxTrainState = 20000) {
     this.spanFor = spanFor; this.joinFor = joinFor; this.maxTrainState = maxTrainState;
     this.seen = new Set();
-    this.drawn = new Map();               // train id -> {sp: its recorded mv.sp, drawn: the span id the page would have drawn it on}
+    this.drawn = new Map();               // train id -> {sp: its last plan's mv.sp, t0: that plan's mv.t0, drawn: the span id the page would have drawn it on}
   }
   reset() { this.seen.clear(); this.drawn.clear(); }
 
   /**
-   * The continuation lines for trains whose span changed: `trains` is [[id, mv.sp or null]]. Adds the new ids to `fresh`; returns the
+   * The continuation lines for trains whose span changed: `trains` is [[id, mv.sp or null, mv.t0]]. Adds the new ids to `fresh`; returns the
    * text and the per-train state to commit once the block is written.
+   *
+   * It follows the PAGE's rule for which upserts become plans (map/motion.js ingestMv): the same sp and t0 is the same berth refined; a t0 that
+   * is not later than the last plan's is an old step arriving late and is IGNORED (two berths stepped at the same second: the page keeps the
+   * first, so the next berth's `after` names the first's span, not the second's); anything else is a new plan, drawn after the last one.
    */
   _continuations(t, trains, fresh) {
     let text = '';
     const state = [];
-    for (const [id, sp] of trains) {
+    for (const [id, sp, t0] of trains) {
       const st = this.drawn.get(id);
       if (sp === null) { if (st) state.push([id, null]); continue; }          // no span now: the next one starts afresh
-      if (st && st.sp === sp) continue;
+      if (st && st.sp === sp && st.t0 === t0) continue;                       // the same berth, its timing refined
+      if (st && t0 <= st.t0) continue;                                        // an old step arriving late: the page never goes back
       let drawn = sp;
       if (st) {
         let body = null;
@@ -93,7 +98,7 @@ class LineMaker {
           }
         }
       }
-      state.push([id, { sp, drawn }]);
+      state.push([id, { sp, t0, drawn }]);
     }
     return { text, state };
   }
@@ -128,7 +133,7 @@ class LineMaker {
   snapshot(body, t, write) {
     let trains = null;
     if (this.joinFor) {
-      try { trains = JSON.parse(body).trains.map(x => [x.id, x.mv && typeof x.mv.sp === 'string' ? x.mv.sp : null]); } catch (_) { trains = null; }
+      try { trains = JSON.parse(body).trains.map(x => (x.mv && typeof x.mv.sp === 'string' && Number.isFinite(x.mv.t0) ? [x.id, x.mv.sp, x.mv.t0] : [x.id, null, 0])); } catch (_) { trains = null; }
     }
     this._emit(t, 'snapshot', body, body, write, trains);
   }
@@ -137,7 +142,7 @@ class LineMaker {
     let trains = null;
     if (this.joinFor) {
       trains = [];
-      for (const j of u.upsert) { const a = TRAIN_ID.exec(j); if (a) { const b = TRAIN_SP.exec(j); trains.push([a[1], b ? b[1] : null]); } }
+      for (const j of u.upsert) { const a = TRAIN_ID.exec(j); if (a) { const b = TRAIN_SP.exec(j); trains.push(b ? [a[1], b[1], Number(b[2])] : [a[1], null, 0]); } }
     }
     this._emit(u.serverTime, 'update', json, u.upsert.length ? json : null, write, trains, this.joinFor && u.remove && u.remove.length ? u.remove : null);
   }

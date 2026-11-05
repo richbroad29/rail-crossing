@@ -135,42 +135,66 @@ test('RECORDER: the drawn-span state is reset with each segment, bounded, forgot
     assert.ok(!JSON.stringify(second).includes(c1[0].data.id), 'the first segment\'s continuation is not in the second file');
   } finally { await rig.stop(); }
   const body = id => ({ id, length: 1, path: [[0, 0], [0, 1]], stop: null });
-  const tr = (id, sp) => JSON.stringify({ id, hc: '1A00', ...(sp ? { mv: { sp, t0: 1 } } : {}), lat: 1, lon: 1 });
+  const tr = (id, sp, t0 = 1) => JSON.stringify({ id, hc: '1A00', ...(sp ? { mv: { sp, t0 } } : {}), lat: 1, lon: 1 });       // t0 rises with each step: the page ignores one that does not
   const upd = (t, ...trains) => ({ serverTime: t, upsert: trains, remove: [] });
   // bounded: a cap of one train; the older one is forgotten, so its next step is drawn on its own span (no line)
   const joins = [];
   const m = new LineMaker(body, (a, o) => { joins.push(a); return body('sp_j' + joins.length); }, 1);
-  m.update(upd(1, tr('tA', 'sp_a0'), tr('tB', 'sp_b0')), () => true);
-  m.update(upd(2, tr('tA', 'sp_a1'), tr('tB', 'sp_b1')), () => true);
+  m.update(upd(1, tr('tA', 'sp_a0', 1), tr('tB', 'sp_b0', 1)), () => true);
+  m.update(upd(2, tr('tA', 'sp_a1', 2), tr('tB', 'sp_b1', 2)), () => true);
   assert.deepEqual(joins, ['sp_b0'], 'only the remembered train got a continuation');
   // a train with no span now starts afresh; so does a removed one
   joins.length = 0;
-  m.update(upd(3, tr('tB', null)), () => true);
-  m.update(upd(4, tr('tB', 'sp_b2')), () => true);
+  m.update(upd(3, tr('tB', null, 3)), () => true);
+  m.update(upd(4, tr('tB', 'sp_b2', 4)), () => true);
   assert.equal(joins.length, 0, 'drawn afresh after a gap in spans');
-  m.update(upd(5, tr('tB', 'sp_b3')), () => true);
+  m.update(upd(5, tr('tB', 'sp_b3', 5)), () => true);
   assert.deepEqual(joins, ['sp_b2'], 'and remembered again from there');
   m.update({ serverTime: 6, upsert: [], remove: ['tB'] }, () => true);
   joins.length = 0;
-  m.update(upd(7, tr('tB', 'sp_b4')), () => true);
+  m.update(upd(7, tr('tB', 'sp_b4', 7)), () => true);
   assert.equal(joins.length, 0, 'a removed train is forgotten');
   // a block the file refused is not remembered: the next line must still carry the continuation, with the same after
   const m2 = new LineMaker(body, () => body('sp_cccccccccc'), 10);
-  m2.update(upd(1, tr('tC', 'sp_a0')), () => true);
+  m2.update(upd(1, tr('tC', 'sp_a0', 1)), () => true);
   let refused = '', kept = '';
-  m2.update(upd(2, tr('tC', 'sp_a1')), t => { refused = t; return false; });
+  m2.update(upd(2, tr('tC', 'sp_a1', 2)), t => { refused = t; return false; });
   assert.match(refused, /"after":"sp_a0"/);
-  m2.update(upd(3, tr('tC', 'sp_a1')), t => { kept = t; return true; });
+  m2.update(upd(3, tr('tC', 'sp_a1', 3)), t => { kept = t; return true; });
   assert.match(kept, /"id":"sp_cccccccccc","after":"sp_a0","of":"sp_a1"/, 'written again, with the same after');
   m2.reset();
   assert.equal(m2.drawn.size, 0); assert.equal(m2.seen.size, 0);
   // a snapshot seeds the state
   const m3 = new LineMaker(body, () => body('sp_dddddddddd'), 10);
-  m3.snapshot(JSON.stringify({ serverTime: 1, feedStale: false, trains: [JSON.parse(tr('tD', 'sp_a0')), JSON.parse(tr('tE', null))] }), 1, () => true);
+  m3.snapshot(JSON.stringify({ serverTime: 1, feedStale: false, trains: [JSON.parse(tr('tD', 'sp_a0', 1)), JSON.parse(tr('tE', null, 1))] }), 1, () => true);
   let out = '';
-  m3.update(upd(2, tr('tD', 'sp_a1'), tr('tE', 'sp_e1')), t => { out = t; return true; });
+  m3.update(upd(2, tr('tD', 'sp_a1', 2), tr('tE', 'sp_e1', 2)), t => { out = t; return true; });
   assert.match(out, /"after":"sp_a0","of":"sp_a1"/);
   assert.equal((out.match(/"after"/g) || []).length, 1, 'tE had no span in the snapshot');
+});
+
+test('RECORDER follows the page\'s ingest rule: a step whose t0 is not later than the last plan\'s is ignored, so the next berth\'s `after` names the span the page kept (real sequence, Gatwick 2026-11-05: R245 and F245 at one second, then 0253)', () => {
+  const body = id => ({ id, length: 1, path: [[0, 0], [0, 1]], stop: null });
+  const tr = (id, sp, t0) => JSON.stringify({ id, hc: '1A00', ...(sp ? { mv: { sp, t0, eta: t0 + 1000 } } : {}), lat: 1, lon: 1 });
+  const asks = [];
+  const m = new LineMaker(body, (after, of) => { asks.push(after + '>' + of); return body('sp_j' + asks.length); }, 100);
+  const out = [];
+  const w = t => { out.push(t); return true; };
+  const upd = (t, ...trains) => ({ serverTime: t, upsert: trains, remove: [] });
+  // tov306m: ...0237, R245 (sp_bb09243000) and F245 (sp_fff41720d7) stepped at the SAME t0, then 0253 (sp_dfc7f542fc)
+  m.update(upd(1, tr('tov306m', 'sp_96f75bbaef', 1793905570000)), w);
+  m.update(upd(2, tr('tov306m', 'sp_bb09243000', 1793905607000)), w);
+  m.update(upd(3, tr('tov306m', 'sp_fff41720d7', 1793905607000)), w);          // same t0: the page drops this plan
+  m.update(upd(4, tr('tov306m', 'sp_dfc7f542fc', 1793905754000)), w);
+  // the page drew R245 on the first continuation (sp_j1); F245 was dropped, so 0253 follows sp_j1. Counting F245 would ask for sp_j2>... instead
+  assert.deepEqual(asks, ['sp_96f75bbaef>sp_bb09243000', 'sp_j1>sp_dfc7f542fc'], 'after = what the page drew R245 on, the last berth it kept');
+  assert.match(out.join(''), /"after":"sp_j1","of":"sp_dfc7f542fc"/);
+  // an older step arriving late is ignored too; a same-sp same-t0 upsert is a refinement and changes nothing
+  asks.length = 0;
+  m.update(upd(5, tr('tov306m', 'sp_dfc7f542fc', 1793905754000)), w);
+  m.update(upd(6, tr('tov306m', 'sp_e59f54b819', 1793905700000)), w);
+  m.update(upd(7, tr('tov306m', 'sp_81a5377f8d', 1793905800000)), w);
+  assert.deepEqual(asks, ['sp_j2>sp_81a5377f8d'], 'drawn after the continuation the page drew the last kept berth on');
 });
 
 test('RECORDER: /debug/record writes the same continuation lines as the rolling record', async () => {
@@ -183,6 +207,7 @@ test('RECORDER: /debug/record writes the same continuation lines as the rolling 
       r.on('error', reject); r.end();
     });
     await until(() => rig.app.debugTaps === 1, 2000, 'the tap');
+    rig.clock.now = NOW + 5000;                                            // a later step: the page ignores one that is not later than the last plan
     rig.td([['CA', 'LA', '2K22', g.berth(k1), g.berth(k2)]]);
     const lines = await pending;
     const c = lines.filter(l => l.event === 'span' && l.data.after);
