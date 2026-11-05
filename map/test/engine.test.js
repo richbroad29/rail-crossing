@@ -512,3 +512,74 @@ test('the speed bound is 1.2 m/s^2 in both directions, in every frame: a departu
   assert.ok(vmax > 8, 'it moved: ' + vmax);
   assert.ok(worst <= 1.2 * 1.02 + 1e-6, 'largest frame-to-frame change of speed: ' + worst.toFixed(3) + ' m/s^2');
 });
+
+// ---- 17.3: the catch-up limit follows the REFERENCE, and never falls faster than the braking bound ---------------------------
+// A slow span (10 m/s) is followed by a fast one (50 m/s). The step that says so arrives late: the reference is already
+// running on the fast span while the train is still on the slow one, 600 m behind. It is chasing something doing 50 m/s.
+function chase(cfg) {
+  const a = line('a', 51, -0.1, 1200), e = endOf(a), b = line('b', e.lat, e.lon, 1000);
+  const plans = [plan(a, 0, 120000)], st = E.newState(); let vmaxOnA = 0, worstVcapOver = 0;
+  drive(st, plans, 5000, 100000, 60, (s, R) => {
+    if (R >= 60000 && plans.length === 1) plans.push(plan(b, 60000, 80000));           // a's reference is now 20 m/s (1200 m in 60 s); b's is 50 m/s
+    if (s.k === 0 && s.v > vmaxOnA) vmaxOnA = s.v;
+    if (s.vcap > 0) worstVcapOver = Math.max(worstVcapOver, s.v / (s.vcap * 1.5));
+  }, cfg);
+  return { vmaxOnA, worstVcapOver, st };
+}
+test('17.3: the limit is cap x the cruise speed of the span the REFERENCE is on when that is a later one', () => {
+  const r = chase();
+  assert.ok(r.vmaxOnA > 1.5 * 20 + 3, 'on the slow span it was allowed past 1.5 x its own 20 m/s because the reference runs at 50: ' + r.vmaxOnA.toFixed(1));
+  assert.ok(r.vmaxOnA <= 1.5 * 50 + 1e-6, 'but never past 1.5 x the reference\'s span: ' + r.vmaxOnA.toFixed(1));
+  assert.ok(r.worstVcapOver <= 1 + 1e-9, 'es.vcap is the limit the cap is measured against: speed / (1.5 x vcap) = ' + r.worstVcapOver.toFixed(4));
+  assert.ok(r.st.vcap >= 0 && isFinite(r.st.vcap));
+});
+
+test('17.3: the limit falls no faster than the braking bound, so a speed allowed a moment ago is shed at the bound, not cut in one frame', () => {
+  const a = line('a', 51, -0.1, 4000), plans = [plan(a, 0, 200000)], st = E.newState();      // 20 m/s: the plain limit is 30 m/s
+  E.advance(st, plans, 5000, CFG, st);
+  st.v = 60; st.vallow = 75;                                                                    // it was being let go at 60: the reference had been on a faster span
+  let pv = st.v, worst = 0, vAfter1s = null, first = null;
+  drive(st, plans, 5000 + 1000 / 60, 60000, 60, (s, R) => {
+    if (first == null) first = s.v;
+    worst = Math.max(worst, Math.abs(s.v - pv) * 60); pv = s.v;
+    if (vAfter1s == null && R >= 6000) vAfter1s = s.v;
+  });
+  assert.ok(first > 59.8 && first < 60.01, 'the first frame did not snap down to the 30 m/s limit: ' + first);
+  assert.ok(worst <= 1.2 * 1.02 + 1e-6, 'largest frame-to-frame change of speed: ' + worst.toFixed(3));
+  assert.ok(vAfter1s > 55 && vAfter1s < 60, 'after a second it has shed about brk x 1 s: ' + vAfter1s);
+  assert.ok(st.v < 31 && st.vallow < 31, 'and it came down to the plain limit in the end: ' + st.v);
+});
+
+test('17.3: after a fade jump the remembered allowance is dropped (the train is somewhere else now)', () => {
+  const a = line('a', 51, -0.1, 600), e = endOf(a), b = line('b', e.lat + 300 / 110540, e.lon, 600);   // 300 m gap: a fade
+  const plans = [plan(a, 0, 30000), plan(b, 30000, 60000)], st = E.newState();
+  drive(st, plans, 5000, 29000, 60);
+  st.vallow = 200;                                                                                // a big allowance in hand when the jump comes
+  drive(st, plans, 29000, 40000, 60);
+  assert.equal(st.fades, 1);
+  assert.ok(st.vallow < 40, 'the 200 m/s allowance did not survive the jump: ' + st.vallow);
+});
+
+// ---- 17.4: a departure stands for `dwell` seconds, then leaves ------------------------------------------------------------------
+test('17.4: a departure (stop 0) with a long dwell stands the whole dwell and leaves on time; dwell 0 leaves at once', () => {
+  const L = 800, T = 1300, P = E.makeProfile(L, T, 0, 1200, CFG.acc), o = { s: 0, v: 0 };
+  near(P.D, 1200, 1e-9, 'the dwell is not clipped to 90 % of the time (that would send it off 2 minutes early)');
+  for (const tau of [0, 0.01, 300, 1199.9]) { E.refAt(P, tau, o); assert.equal(o.s, 0, 'standing at ' + tau); assert.equal(o.v, 0); }
+  E.refAt(P, 1215, o); assert.ok(o.s > 0 && o.s < L, 'leaving: ' + o.s);
+  E.refAt(P, T, o); near(o.s, L, 1e-6);
+  const go = E.makeProfile(L, 100, 0, 0, CFG.acc);
+  E.refAt(go, 0, o); assert.equal(o.s, 0);
+  E.refAt(go, 5, o); assert.ok(o.s > 5 && o.v > 5, 'moving within seconds: ' + o.s + ' ' + o.v);
+  near(E.makeProfile(L, 30, 0, 1000, CFG.acc).D, 27, 1e-9);                                    // a dwell that cannot fit: never less than a call was always given (90 %)
+  near(E.makeProfile(L, 600, 0, 590, CFG.acc).D, 580, 1e-9);                                   // otherwise a departure keeps 20 s to move
+  near(E.makeProfile(L, 1300, 400, 1200, CFG.acc).D, 1170, 1e-9);                              // a call mid-span keeps the 90 % limit
+});
+
+test('17.4: the engine holds a departing train at its origin for the whole dwell, then runs it away', () => {
+  const a = line('a', 51, -0.1, 800), plans = [plan(a, 0, 1300000, { stop: 0, dwell: 1200 })], st = E.newState();
+  let maxS = 0;
+  drive(st, plans, 5000, 1190000, 5, (s) => { maxS = Math.max(maxS, s.s); });
+  assert.ok(maxS < 0.5 && st.v < 0.01, 'standing until the dwell is up: ' + maxS);
+  drive(st, plans, 1190000, 1290000, 30);
+  assert.ok(st.s > 300, 'and gone by the end of the span\'s time: ' + st.s);
+});

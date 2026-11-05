@@ -17,8 +17,12 @@ const TEST = fs.readFileSync(path.join(__dirname, 'engine.test.js'), 'utf8');
 
 const MUTATIONS = [
   ['rule 5: the catch-up limit is 3x, not 1.5x', 'cap: 1.5,', 'cap: 3,'],
-  ['rule 5: the catch-up limit is not enforced', 'var vmax = cfg.cap * Math.max(vc, o.vcp);', 'var vmax = 1e9;'],
-  ['rule 5: the cap ignores the span we are leaving (speed snapped down on entering a slower one)', 'var vmax = cfg.cap * Math.max(vc, o.vcp);', 'var vmax = cfg.cap * vc; o.vcp = 0;'],
+  ['rule 5: the catch-up limit is not enforced', 'var vmax = cfg.cap * Math.max(vc, o.vcp, vref);', 'var vmax = 1e9;'],
+  ['rule 5: the cap ignores the span we are leaving (speed snapped down on entering a slower one)', 'var vmax = cfg.cap * Math.max(vc, o.vcp, vref);', 'var vmax = cfg.cap * Math.max(vc, vref); o.vcp = 0; o.vallow = 0;'],
+  ['rule 5 (17.3): the cap ignores the span the REFERENCE is on (a train chasing a faster reference is held to its own span\'s limit)', 'var vref = cur.j > o.k ? cur.vc : 0;', 'var vref = 0;'],
+  ['rule 5 (17.3): the limit is cut in one frame when it falls (no decay at the braking bound)', 'if (o.vallow > vmax) vmax = Math.max(vmax, o.vallow - cfg.brk * h);', ''],
+  ['rule 5 (17.3): the remembered allowance survives a fade jump', 'o.snap = true; o.vcp = 0; o.vallow = 0; }', 'o.snap = true; o.vcp = 0; }'],
+  ['17.4: a departure\'s dwell is clipped to 90 % of its time like any call (a 25-minute stand leaves early)', 'var Dmax = S === 0 ? Math.max(T * 0.9, T - 20) : T * 0.9;', 'var Dmax = T * 0.9;'],
   ['bound: speed may rise faster than 1.2 m/s^2', 'acc: 1.2,', 'acc: 3,'],
   ['bound: speed may fall faster than 1.2 m/s^2', 'brk: 1.2,', 'brk: 3,'],
   ['batched steps / jumps: a gap is slid across instead of faded', 'if (gap > cfg.slideM) {', 'if (false) {'],

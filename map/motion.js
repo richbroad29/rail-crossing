@@ -94,6 +94,8 @@
 
   // How far apart two stopped trains must sit before they are drawn as separate trains, and how far
   // they are fanned apart sideways when they are not. Display only: the real position is untouched.
+  // Two consecutive spans that meet further apart than this get a continuation (CONTRACT 17.1).
+  var CONT_GAP_M = 2;
   var FAN_JOIN_M = 14, FAN_GAP_M = 9, FAN_RATE = 40;
 
   function createStore(opts) {
@@ -165,19 +167,41 @@
         return;
       }
       if (last && mv.t0 <= last.t0) return;                              // an old step arriving late: never go back
-      var p = engine.makePlan(mv, spans ? spans.peek(mv.sp) : null, ecfg);
+      var p = engine.makePlan(mv, null, ecfg);                           // geometry is attached by resolvePlans, in order
       p.recvAt = now;
-      if (!p.span) r.missing++;
+      r.missing++;
       plans.push(p);
       r.mvSeen = true;
+      if (spans) resolvePlans(r, false);
     }
-    function attachMissing(r) {
-      var plans = r.plans, n = 0;
+
+    // Attach geometry to the plans that have none, oldest first, and ask for what is missing (CONTRACT 17.1).
+    // A plan is drawn on its berth's own span, UNLESS the span the train was drawn on just before it ends more than
+    // CONT_GAP_M from where this one starts (two ways drawn for one platform, a chain cut over a longer route...):
+    // then it is drawn on the CONTINUATION of that span, which starts exactly where the last one ended. p.drawSp is
+    // the id the page actually drew the berth on, and is what the next berth's `after` names. Until the continuation
+    // arrives the plan has no geometry (the train waits at the end of the span, as for any span still loading);
+    // if the request fails, the canonical span is kept. A service that does not answer continuations (the cache has
+    // no contKey) leaves every plan on its canonical span.
+    // Runs only for a train with plans missing geometry, so the common frame does none of it.
+    function resolvePlans(r, urgent) {
+      var plans = r.plans, n = 0, blocked = false;
       for (var i = 0; i < plans.length; i++) {
         var p = plans[i];
         if (p.span) continue;
-        var sp = spans.peek(p.sp);
-        if (sp) engine.attachSpan(p, sp, ecfg); else n++;
+        var canon = spans.peek(p.sp);
+        if (!canon) spans.need(p.sp, urgent);                             // every canonical span is asked for at once; they are only ATTACHED in order
+        var prev = i > 0 ? plans[i - 1] : null;
+        if (blocked || !canon || (prev && !prev.span)) { blocked = true; n++; continue; }   // the previous berth's own geometry decides which span this one needs
+        var use = canon, id = p.sp;
+        if (prev && spans.contKey && engine.spanGap(prev.span, canon) > CONT_GAP_M) {
+          if (p.contKey == null) p.contKey = spans.contKey(prev.drawSp || prev.sp, p.sp) || '';
+          var c = p.contKey ? spans.peek(p.contKey) : null;
+          if (c) { use = c; id = c.id; }
+          else if (p.contKey && !spans.hasFailed(p.contKey)) { spans.need(p.contKey, urgent); n++; blocked = true; continue; }
+        }
+        p.drawSp = id;
+        engine.attachSpan(p, use, ecfg);
       }
       r.missing = n;
     }
@@ -219,7 +243,6 @@
     function track(r, now) {
       var plans = r.plans;
       if (!plans || !plans.length) return false;
-      if (r.missing && spans) attachMissing(r);
       var es = r.es;
       if (!es) {
         if (!plans[0].span) return false;
@@ -390,9 +413,7 @@
           if (hidden && hidden[r.cls] && r.id !== always) return;
           var tracked = false;
           if (useTrack && r.plans && (!box || (r.cy >= box[0] && r.cy <= box[2] && r.cx >= box[1] && r.cx <= box[3] || r.id === always))) {
-            if (r.missing) {
-              for (var q = 0; q < r.plans.length; q++) if (!r.plans[q].span) spans.need(r.plans[q].sp, r.id === always);
-            }
+            if (r.missing) resolvePlans(r, r.id === always);
             tracked = track(r, now);
           } else if (r.mode === 'track') leaveTrack(r, now);
           if (!tracked) {
