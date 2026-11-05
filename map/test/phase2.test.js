@@ -49,23 +49,35 @@ test('track-following is off below the view threshold and in reduced motion', ()
   assert.equal(red.get('t1').mode, 'glide');
 });
 
-test('geometry still on its way: the train is drawn in the glide, then slides onto the track without a jump', () => {
+function geometryArrives(latOffsetM) {
   const a = span('a', 51, -0.1, 600), spans = cacheOf([]);
   const s = M.createStore({ spans, clock: identityClock }); s.setView(true, null);
-  s.applySnapshot([wire('t1', { lat: 51.0001, lon: -0.1 + 300 / KX(51), mv: mv('a', 0, 30000) })], 15000);
+  s.applySnapshot([wire('t1', { lat: 51 + latOffsetM / 110540, lon: -0.1 + 300 / KX(51), mv: mv('a', 0, 30000) })], 15000);
   s.fill(15000, null);
   assert.equal(s.get('t1').mode, 'glide');
   assert.ok(spans.asked.includes('a'), 'it asked for the span');
   spans.put(a);
-  let last = null, worst = 0;
-  for (let t = 15016; t < 17000; t += 16) {
+  const alphas = [], moves = []; let last = null;
+  for (let t = 15016; t < 18000; t += 16) {
     s.fill(t, null);
     const r = s.get('t1');
-    if (last) worst = Math.max(worst, Math.hypot((r.cx - last[0]) * KX(51), (r.cy - last[1]) * 110540));
-    last = [r.cx, r.cy];
+    if (last) moves.push(Math.hypot((r.cx - last[0]) * KX(51), (r.cy - last[1]) * 110540));
+    last = [r.cx, r.cy]; alphas.push(r.alpha);
   }
-  assert.equal(s.get('t1').mode, 'track');
-  assert.ok(worst < 2.5, 'no frame moved more than a couple of metres: ' + worst);
+  return { r: s.get('t1'), alphas, moves };
+}
+test('geometry still on its way, a few metres off: the train slides onto the track without a jump', () => {
+  const { r, moves } = geometryArrives(3);
+  assert.equal(r.mode, 'track');
+  assert.ok(Math.max.apply(null, moves) < 2.5, 'no frame moved more than a couple of metres: ' + Math.max.apply(null, moves));
+});
+test('geometry arrives and the track is further than 5 m from where it was drawn: it fades in on the track, it is never slid across the gap', () => {
+  const { r, alphas, moves } = geometryArrives(40);
+  assert.equal(r.mode, 'track');
+  assert.ok(alphas[0] < 0.5, 'invisible on its first frame on the track: ' + alphas[0]);
+  assert.equal(alphas[alphas.length - 1], 1, 'and fully there after a moment');
+  assert.ok(moves.slice(1).every((m) => m < 1.2), 'after the first frame nothing slides: ' + Math.max.apply(null, moves.slice(1)));
+  assert.equal(r.es.offx, 0); assert.equal(r.es.offy, 0);
 });
 
 test('rule 8: a renumbered train keeps its object, its engine state and its distance travelled', () => {
@@ -92,6 +104,18 @@ test('a step that arrives out of order is ignored; a re-timed berth updates its 
   assert.equal(s.get('t1').plans.length, 1);
   assert.equal(s.get('t1').plans[0].held, true);
   assert.equal(s.get('t1').plans[0].eta, 70000);
+});
+
+test('two steps for one train in a single update are processed in order: both plans are kept, the middle span is not skipped', () => {
+  const a = span('a', 51, -0.1, 400), b = span('b', 51, -0.1 + 400 / KX(51), 400), c = span('c', 51, -0.1 + 800 / KX(51), 400);
+  const spans = cacheOf([a, b, c]);
+  const s = M.createStore({ spans, clock: identityClock }); s.setView(true, null);
+  s.applySnapshot([wire('t1', { mv: mv('a', 0, 20000) })], 5000);
+  s.applyUpdate([wire('t1', { mv: mv('b', 20000, 40000) }), wire('t1', { mv: mv('c', 40000, 60000) })], null, 45000);
+  const r = s.get('t1');
+  assert.deepEqual(r.plans.map((p) => p.sp), ['a', 'b', 'c']);
+  for (let t = 45000; t < 52000; t += 16) s.fill(t, null);
+  assert.ok(r.es.k >= 1 || r.hist.length >= 1, 'the train is on its way through b');
 });
 
 test('a train that loses its motion plan goes back to the glide from where it is drawn (no jump)', () => {
@@ -210,12 +234,13 @@ function fakeMap(layers) {
   return {
     getStyle: () => ({ sources: { openmaptiles: { type: 'vector' } }, layers: [{ id: 'lbl', type: 'symbol' }] }),
     getLayer: (id) => layers.find((l) => l.id === id), removeLayer: (id) => { const i = layers.findIndex((l) => l.id === id); if (i >= 0) layers.splice(i, 1); },
-    addLayer: (l) => layers.push(l), getSource: (id) => sources[id], removeSource: (id) => { delete sources[id]; },
+    addLayer: (l, before) => { const i = before ? layers.findIndex((x) => x.id === before) : -1; if (i >= 0) layers.splice(i, 0, l); else layers.push(l); }, getSource: (id) => sources[id], removeSource: (id) => { delete sources[id]; },
     addSource: (id, s) => { sources[id] = Object.assign({ setData(d) { this.data = d; } }, s); }
   };
 }
 // evaluate ['interpolate', ['linear'], ['zoom'], z0, v0, z1, v1, ...] at zoom z
 function interp(e, z) {
+  if (typeof e === 'number') return e;
   const st = e.slice(3);
   if (z <= st[0]) return st[1];
   for (let i = 2; i < st.length; i += 2) if (z <= st[i]) { const f = (z - st[i - 2]) / (st[i] - st[i - 2]); return st[i - 1] + (st[i + 1] - st[i - 1]) * f; }
@@ -235,17 +260,30 @@ test('railway lines at every zoom: lo to zoom 8, hi 8 to 11, tiles from 11, same
     assert.equal(x.paint['line-color'], y.paint['line-color']);
     assert.deepEqual(x.paint['line-width'], y.paint['line-width']);
   });
+  assert.ok(interp(loC.paint['line-opacity'], 5) === 0 && interp(loC.paint['line-opacity'], 8.3) >= 0.9, 'the pale outline is off when zoomed out and full by zoom 8');
+  // draw order: every outline under every line, so a fading piece's white outline never washes out the dark line below it
+  const order = layers.map((l) => l.id), lastCase = Math.max.apply(null, order.map((id, i) => (/case$/.test(id) ? i : -1))), firstCore = Math.min.apply(null, order.map((id, i) => (/case$|ties$/.test(id) ? 99 : i)));
+  assert.ok(lastCase < firstCore, 'outlines first, lines after: ' + order.join(' < '));
   // thin and calm zoomed out, legible at the street
-  assert.ok(interp(lo.paint['line-width'], 5) <= 1 && interp(lo.paint['line-width'], 6) <= 1.1, 'thin at zoom 5-6');
+  assert.ok(interp(lo.paint['line-width'], 5) <= 1.4 && interp(lo.paint['line-width'], 6) <= 1.7, 'thin at zoom 5-6');
+  // the width curve is one smooth curve: it only ever grows with zoom, and its slope never jumps (no step at any hand-over)
+  const wc = L.WIDTH.core; let prevSlope = null;
+  for (let i = 1; i < wc.length && wc[i][0] <= 13; i++) {                 // zoom 3 to 13 covers every hand-over; above it is the tile layer alone
+    const slope = (wc[i][1] - wc[i - 1][1]) / (wc[i][0] - wc[i - 1][0]);
+    assert.ok(slope > 0, 'grows at ' + wc[i][0]);
+    if (prevSlope != null) assert.ok(Math.abs(slope - prevSlope) <= 0.3 + 1e-9, 'slope change at zoom ' + wc[i - 1][0] + ': ' + prevSlope + ' to ' + slope);
+    prevSlope = slope;
+  }
+  [lo, hi, tile].forEach((l) => assert.equal(interp(l.paint['line-opacity'], 20), 1, l.id + ' core is fully opaque: the same dark colour at every zoom'));
   assert.ok(interp(tile.paint['line-width'], 16) >= 5);
-  // coverage never drops: at every zoom the combined opacity of the pieces that draw is high
+  // coverage never drops: each piece fades in OVER the one below it, so the combined opacity is full at every zoom
   for (let z = 0; z <= 14; z += 0.05) {
     let miss = 1;
     [[lo, 'lo'], [hi, 'hi'], [tile, 'tile']].forEach(([l]) => {
       const inRange = z >= (l.minzoom || 0) && z < (l.maxzoom == null ? 99 : l.maxzoom);
       if (inRange) miss *= 1 - interp(l.paint['line-opacity'], z);
     });
-    assert.ok(1 - miss >= 0.68, 'line visible at zoom ' + z.toFixed(2) + ': ' + (1 - miss).toFixed(2));
+    assert.ok(1 - miss >= 0.995, 'line fully drawn at zoom ' + z.toFixed(2) + ': ' + (1 - miss).toFixed(3));
   }
   // the dark theme changes colours only
   const dark = []; const m2 = fakeMap(dark); L.addNetworkLayers(m2, 'dark');

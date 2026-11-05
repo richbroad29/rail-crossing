@@ -95,7 +95,7 @@ test('profile edge cases: stop at the very end, stop at the very start, dwell lo
 });
 
 // ---- the clock ------------------------------------------------------------------------------------------
-test('rule 1: the render clock runs 10 s behind the server clock, and uses the least-delayed message', () => {
+test('rule 1: the render clock runs 12 s behind the server clock, and uses the least-delayed message', () => {
   const c = E.createClock();
   c.observe(1000000, 1000250);                    // this one took 250 ms to arrive
   c.observe(1002000, 1002050);                    // this one 50 ms: the better estimate
@@ -103,8 +103,8 @@ test('rule 1: the render clock runs 10 s behind the server clock, and uses the l
   assert.ok(sv > 1003000 - 250 && sv <= 1003000 - 50 + 1e-6, 'slewing from the first offset toward the best one: ' + (sv - 1003000));
   const c2 = E.createClock();
   c2.observe(500000, 500000);                     // zero delay: server time == client time
-  near(c2.render(600000), 590000, 1e-6);
-  assert.equal(c2.lagMs, 10000);
+  near(c2.render(600000), 588000, 1e-6);
+  assert.equal(c2.lagMs, 12000);
 });
 
 test('the render clock slews: its offset never jumps, so the render time never lurches', () => {
@@ -121,8 +121,8 @@ test('the render clock slews: its offset never jumps, so the render time never l
 test('rule 2: with a plan and no trouble the drawn train keeps the reference speed', () => {
   const sp = line('a', 51, -0.1, 600), plans = [plan(sp, 0, 30000)];
   const st = E.newState();
-  drive(st, plans, 5000, 20000, 60);
-  near(st.s, 20 * 20, 12, 'at 20 s it has covered 400 m');
+  drive(st, plans, 5000, 14000, 60);
+  near(st.s, 20 * 14, 8, 'at 14 s it has covered 280 m (still before the stopping curve, which starts about 10 s before the end)');
   near(st.v, 20, 0.3);
   assert.ok(st.alpha > 0 && st.x === st.x);
 });
@@ -131,18 +131,18 @@ test('rule 3: with no step the train brakes to a stop HOLD_M short of the end an
   const sp = line('a', 51, -0.1, 600), plans = [plan(sp, 0, 30000)];
   const st = E.newState();
   let reached = 0;
-  drive(st, plans, 5000, 120000, 30, (s, R) => { assert.ok(s.s <= 600 - CFG.holdM + 0.01, 'never past the hold point at ' + R + ': ' + s.s); if (s.v < 0.05 && !reached) reached = R; });
+  drive(st, plans, 5000, 120000, 30, (s, R) => { assert.ok(s.s <= 600 - CFG.holdM + 0.01, 'never past the hold point at ' + R + ': ' + s.s); if (s.v < 0.5 && !reached) reached = R; });
   near(st.s, 570, 0.3, 'stopped 30 m short');
-  assert.equal(st.v, 0);
+  assert.ok(st.v < 0.01);
   assert.equal(st.wait, true, 'the waiting-at-a-signal state is on');
-  assert.ok(reached > 28000 && reached < 45000, 'it eased to a stop around the time it was due: ' + reached);
+  assert.ok(reached > 28000 && reached < 60000, 'it eased to a stop (under 0.5 m/s) within the minute after it was due: ' + reached);
 });
 
 test('rule 3: braking is gentle - it never decelerates harder than the braking limit on the way to the stop', () => {
   const sp = line('a', 51, -0.1, 800), plans = [plan(sp, 0, 40000)];
   const st = E.newState(); let pv = null, worst = 0;
-  drive(st, plans, 4000, 90000, 60, (s) => { if (pv != null && pv > 0.5) worst = Math.max(worst, (pv - s.v) * 60); pv = s.v; });
-  assert.ok(worst <= CFG.brk * 1.15, 'peak deceleration ' + worst.toFixed(2));
+  drive(st, plans, 4000, 90000, 60, (s, R) => { if (pv != null && R > 4020) worst = Math.max(worst, (pv - s.v) * 60); pv = s.v; });
+  assert.ok(worst <= 1.2 * 1.02, 'peak deceleration, every frame including the last centimetre: ' + worst.toFixed(3));
 });
 
 test('a short span: the hold margin shrinks so the train still stops inside it', () => {
@@ -200,10 +200,10 @@ test('rule 5: a very late step (3 minutes) - it waits the whole time, then catch
 });
 
 test('rule 5: lag is caught up but the catch-up speed is capped at 1.5x the span cruise speed', () => {
-  const [a, b] = twoSpans(), plans = [plan(a, 0, 30000)];
+  const a = line('a', 51, -0.1, 600), b = line('b', endOf(a).lat, endOf(a).lon, 3000), plans = [plan(a, 0, 30000)];
   const st = E.newState(); let sawCap = false, vmax = 0;
-  drive(st, plans, 5000, 120000, 60, (s, R) => {
-    if (R >= 40000 && plans.length === 1) plans.push(plan(b, 30000, 60000));      // 10 s late: a 200 m lag
+  drive(st, plans, 5000, 160000, 60, (s, R) => {
+    if (R >= 65000 && plans.length === 1) plans.push(plan(b, 30000, 180000));      // 35 s late: a 700 m lag (more than the gentle correction can hide)
     vmax = Math.max(vmax, s.v); if (s.pc) sawCap = true;
   });
   assert.ok(vmax <= 30 + 1e-6, 'cap held: ' + vmax);
@@ -246,7 +246,7 @@ test('held: a held call stands at the platform; releasing it (the next step) let
     if (R === 60000) plans[0].held = true;
   });
   near(st.s, 600, 0.5, 'held at the stop');
-  assert.equal(st.v, 0);
+  assert.ok(st.v < 0.01);
   plans.push(plan(b, 110000, 140000));
   drive(st, plans, 120000, 150000, 30);
   assert.equal(st.k, 1);
@@ -262,9 +262,9 @@ test('held on a pass: the train waits short of the end and shows waiting; "held"
 });
 
 // ---- spans, gaps, fades -------------------------------------------------------------------------------------
-test('rule 7: a small gap between spans is blended away, not jumped', () => {
+test('rule 7: a rounding-sized gap (3 m) between spans is blended away, not jumped', () => {
   const a = line('a', 51, -0.1, 600), e = endOf(a);
-  const b = line('b', e.lat + 40 / 110540, e.lon, 600);                     // starts 40 m north of where a ends
+  const b = line('b', e.lat + 3 / 110540, e.lon, 600);                     // starts 3 m north of where a ends
   const plans = [plan(a, 0, 30000), plan(b, 30000, 60000)];
   const st = E.newState();
   let prev = null, maxJump = 0, saw = false;
@@ -274,6 +274,7 @@ test('rule 7: a small gap between spans is blended away, not jumped', () => {
     if (s.offx !== 0 || s.offy !== 0) saw = true;
   });
   assert.ok(saw, 'a blend was in progress');
+  assert.equal(st.fades, 0);
   assert.ok(maxJump < 1.5 * 20 / 60 + 25 / 60 + 0.3, 'per-frame move stayed within speed + blend rate: ' + maxJump);
 });
 
@@ -290,16 +291,15 @@ test('rule 6: a gap over 2 km fades out, jumps while invisible, fades back in', 
   assert.equal(st.k, 1);
 });
 
-test('rule 6: a train drawn more than 2 km behind its reference fades and jumps; one a little behind does not', () => {
-  const a = line('a', 51, -0.1, 600), b = line('b', endOf(a).lat, endOf(a).lon, 3000, { points: 20 });
-  const plans = [plan(a, 0, 30000)];
-  const st = E.newState();
-  drive(st, plans, 5000, 20000, 30);
-  plans.push(plan(b, 25000, 125000));                                               // known very late: the reference is far along b
-  drive(st, plans, 20000, 300000, 30);
-  assert.ok(st.fades === 0 || st.fades === 1);
+test('rule 6: a train more than 2 km behind its reference fades and jumps; one merely waiting does not', () => {
+  const a = line('a', 51, -0.1, 600), b = line('b', endOf(a).lat, endOf(a).lon, 8000, { points: 40 });
+  const plans = [plan(a, 0, 30000)], st = E.newState(); let sawZero = false;
+  drive(st, plans, 5000, 130000, 30);                                               // waits at the signal for two minutes
+  plans.push(plan(b, 30000, 230000));                                               // the step was known late: the reference is 4 km along already
+  drive(st, plans, 130000, 160000, 30, (s) => { if (s.alpha === 0) sawZero = true; });
+  assert.equal(st.fades, 1); assert.ok(sawZero, 'it vanished while it jumped');
   const c = E.newState(); const slow = [plan(a, 0, 30000)];
-  drive(c, slow, 5000, 40000, 30);
+  drive(c, slow, 5000, 90000, 30);
   assert.equal(c.fades, 0, 'a train merely waiting does not fade');
 });
 
@@ -417,16 +417,21 @@ test('rule 8: nothing here looks at a headcode - identity is the caller\'s objec
   assert.ok(st.dist > d, 'distance accumulates on one state across the change');
 });
 
-test('rule 5: entering a slower span at catch-up speed is clamped to the new span\'s limit at once', () => {
+test('rule 5: entering a slower span at catch-up speed slows smoothly (<= the bound), under the HIGHER of the two spans\' caps', () => {
   const a = line('a', 51, -0.1, 600), e = endOf(a), b = line('b', e.lat, e.lon, 600);
-  const plans = [plan(a, 0, 30000)], st = E.newState(); let vAtCross = null, vBefore = 0;
-  drive(st, plans, 5000, 90000, 60, (s, R) => {
+  const plans = [plan(a, 0, 30000)], st = E.newState(); let vAtCross = null, vBefore = 0, pv = null, worstDec = 0, vmax = 0;
+  drive(st, plans, 5000, 120000, 60, (s, R) => {
     if (R >= 9000 && plans.length === 1) plans.push(plan(b, 12000, 72000));          // known early: the reference leaps ahead, a slow span (10 m/s) follows
     if (s.k === 0) vBefore = Math.max(vBefore, s.v);
     if (s.k === 1 && vAtCross == null) vAtCross = s.v;
+    if (pv != null && R > 5020) worstDec = Math.max(worstDec, Math.abs(pv - s.v) * 60);
+    vmax = Math.max(vmax, s.v); pv = s.v;
   });
-  assert.ok(vBefore > 25, 'it was catching up fast before the boundary: ' + vBefore);
-  assert.ok(vAtCross != null && vAtCross <= 1.5 * 10 + 1e-6, 'speed on entering the slow span: ' + vAtCross);
+  assert.ok(vBefore > 22, 'it was catching up fast before the boundary: ' + vBefore);
+  assert.ok(vAtCross > 15, 'entering the slow span it has NOT been snapped down to the new cap: ' + vAtCross);
+  assert.ok(worstDec <= 1.2 * 1.02 + 1e-6, 'no frame changed speed faster than the bound: ' + worstDec.toFixed(3));
+  assert.ok(vmax <= 1.5 * 20 + 1e-6, 'the cap against the higher cruise speed (20 m/s) held: ' + vmax);
+  assert.ok(st.v < 16, 'and it did slow to the new span: ' + st.v);
 });
 
 test('a step that is LATER than expected, delivered while the train is mid-span, slows it but never reverses it', () => {
@@ -441,16 +446,20 @@ test('a step that is LATER than expected, delivered while the train is mid-span,
   assert.equal(st.k, 1);
 });
 
-test('rule 7: a 300 m gap between spans is slid away no faster than the blend rate', () => {
+test('rule 7: a gap over 5 m (here 300 m) is NEVER slid across: the train fades out, jumps unseen, fades in', () => {
   const a = line('a', 51, -0.1, 600), e = endOf(a), b = line('b', e.lat + 300 / 110540, e.lon, 600);
   const plans = [plan(a, 0, 30000), plan(b, 30000, 60000)], st = E.newState();
-  let prev = null, maxJump = 0;
+  let prev = null, maxJump = 0, slid = false, hidden = 0;
   drive(st, plans, 5000, 70000, 60, (s) => {
-    if (prev) maxJump = Math.max(maxJump, Math.hypot((s.x - prev[0]) * KX(51), (s.y - prev[1]) * 110540));
-    prev = [s.x, s.y];
+    if (s.offx !== 0 || s.offy !== 0) slid = true;
+    if (prev && s.alpha > 0 && prev[2] > 0) maxJump = Math.max(maxJump, Math.hypot((s.x - prev[0]) * KX(51), (s.y - prev[1]) * 110540));
+    if (s.alpha === 0) hidden++;
+    prev = [s.x, s.y, s.alpha];
   });
-  assert.ok(maxJump < (30 + CFG.blendRate) / 60 + 0.3, 'per-frame move ' + maxJump.toFixed(2) + ' m');
-  assert.equal(st.fades, 0);
+  assert.equal(slid, false, 'no slide');
+  assert.equal(st.fades, 1); assert.ok(hidden >= 1, 'it was invisible while it jumped');
+  assert.ok(maxJump < 1.6 * 20 / 60 + 0.3, 'no visible frame moved more than the speed allows: ' + maxJump);
+  assert.equal(st.k, 1);
 });
 
 test('held with a stop mid-span: the train stands at the stop instead of carrying on after its dwell', () => {
@@ -470,4 +479,36 @@ test('even a stiff controller (kp = 1) can only slow a train that is AHEAD of a 
     prevDist = s.dist; prevS = s.s;
   }, stiff);
   void prevS;
+});
+
+test('batched steps: two steps delivered together are driven through IN ORDER, through the middle span, at up to the cap, with no slide', () => {
+  const a = line('a', 51, -0.1, 400), b = line('b', endOf(a).lat, endOf(a).lon, 400), c = line('c', endOf(b).lat, endOf(b).lon, 400);
+  const plans = [plan(a, 0, 20000)], st = E.newState();
+  let visitedB = false, prevDist = 0, vmax = 0, slid = false, onB = 0;
+  const ev = []; const cfg = Object.assign({}, CFG, { onEvent: (t) => ev.push(t) });
+  drive(st, plans, 5000, 100000, 60, (s, R) => {
+    if (R >= 45000 && plans.length === 1) { plans.push(plan(b, 20000, 40000)); plans.push(plan(c, 40000, 60000)); }   // the feed stalled, then delivered both
+    if (s.k === 1) { visitedB = true; const q = E.locate(b, s.s, { x: 0, y: 0, brg: 0 }); if (Math.abs(q.y - b.ys[0]) < 1e-6 && Math.abs(s.y - q.y) < 1e-6) onB++; }
+    if (s.offx !== 0 || s.offy !== 0) slid = true;
+    assert.ok(s.dist >= prevDist - 1e-9); prevDist = s.dist; vmax = Math.max(vmax, s.v);
+  }, cfg);
+  assert.ok(visitedB, 'it went THROUGH the middle span, not past it');
+  assert.ok(onB > 30, 'and was drawn on the middle span\'s own geometry for a while: ' + onB + ' frames');
+  assert.equal(st.k, 2, 'and on into the third');
+  assert.equal(slid, false, 'never slid across a gap'); assert.equal(st.fades, 0);
+  assert.ok(vmax <= 1.5 * 20 + 1e-6, 'catch-up cap held: ' + vmax);
+  assert.deepEqual(ev.filter((t) => t === 'transition').length, 2, 'two transitions, in order');
+});
+
+test('the speed bound is 1.2 m/s^2 in both directions, in every frame: a departure from rest, a catch-up, a stop', () => {
+  const a = line('a', 51, -0.1, 800), e = endOf(a), b = line('b', e.lat, e.lon, 800);
+  const plans = [plan(a, 0, 60000, { stop: 0, dwell: 0 })], st = E.newState();
+  let pv = null, worst = 0, vmax = 0;
+  drive(st, plans, 0, 150000, 60, (s, R) => {
+    if (R >= 30000 && plans.length === 1) plans.push(plan(b, 50000, 90000, { stop: 800, dwell: 20 }));
+    if (pv != null && R > 20) worst = Math.max(worst, Math.abs(s.v - pv) * 60);
+    pv = s.v; vmax = Math.max(vmax, s.v);
+  });
+  assert.ok(vmax > 8, 'it moved: ' + vmax);
+  assert.ok(worst <= 1.2 * 1.02 + 1e-6, 'largest frame-to-frame change of speed: ' + worst.toFixed(3) + ' m/s^2');
 });

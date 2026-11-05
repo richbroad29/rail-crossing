@@ -5,7 +5,7 @@
 // the page allocates nothing per frame; the answer is identical either way).
 //
 // THE RULES (each one has tests, and tests/mutation-check.js proves they fail when it is broken)
-//   1. The render clock R runs 10 s behind the server clock, so a berth step that happened a few
+//   1. The render clock R runs 12 s behind the server clock (CONTRACT section 16), so a berth step that happened a few
 //      seconds "in the future" of the drawing is usually already known when the train gets there.
 //   2. Within a span the train follows a reference profile: constant speed for a pass; decelerate,
 //      dwell, accelerate for a call. The drawn train tracks that reference with a bounded
@@ -24,17 +24,17 @@
   'use strict';
 
   var DEFAULTS = {
-    lagMs: 10000,        // render clock behind server clock
+    lagMs: 12000,        // render clock behind server clock
     holdM: 30,           // stop this far short of a span end when no step has come
     cap: 1.5,            // catch-up speed limit, x the span's cruise speed
-    acc: 2.0,            // m/s^2 the drawn train may speed up by
-    brk: 2.5,            // m/s^2 it may slow by
+    acc: 1.2,            // m/s^2 the drawn train may speed up by. 1.2 is a brisk but comfortable service rate
+    brk: 1.2,            // m/s^2 it may slow by (same bound: speed never changes faster than this, anywhere)
     kp: 0.04,            // 1/s: how hard lag is pulled in (extra m/s per metre behind)
     fadeM: 2000,         // further than this off: fade out, jump, fade in
     fadeSecs: 0.3,
     blendM: 0.2,         // gaps between spans smaller than this are ignored (the service rounds to 5 dp: ~1 m)
+    slideM: 5,           // a gap up to this is slid away; a bigger one is a different place: fade, never slide across it
     blendSecs: 0.9,      // time constant of the gap blend
-    blendRate: 25,       // m/s: the fastest a gap is slid away
     maxStep: 0.05,       // integration step, seconds
     headingRate: 120,    // degrees per second the body may turn
     chordM: 12,          // heading is the chord of the track +- this far
@@ -191,7 +191,7 @@
   function newState() {
     return { init: false, k: 0, s: 0, v: 0, t: 0, dist: 0, x: NaN, y: NaN, hdg: NaN, alpha: 1,
       fade: 0, fadeA: 0, tgtK: 0, tgtS: 0, offx: 0, offy: 0, wait: false, loading: false, ready: false, stopped: true,
-      pw: false, pc: false, fades: 0, capFrames: 0, frames: 0, maxRatio: 0, snap: false, lastRef: 0 };
+      pw: false, pc: false, vcp: 0, fades: 0, capFrames: 0, frames: 0, maxRatio: 0, snap: false, lastRef: 0 };
   }
   function copyState(a) { var o = newState(); for (var k in a) o[k] = a[k]; return o; }
 
@@ -220,12 +220,22 @@
 
   function emit(cfg, type, o, info) { if (cfg.onEvent) cfg.onEvent(type, o, info); }
 
+  // The fastest the train may be going HERE and still be able to stop at the hold point of the last span it
+  // knows about, braking at the bound: the stopping curve. (Used every step, and for a train just placed.)
+  function stopSpeed(o, plans, cfg) {
+    var m = o.k, before = 0;
+    while (m + 1 < plans.length && plans[m + 1].span) { before += plans[m].L; m++; }
+    var wall = before + (m + 1 < plans.length ? plans[m].L : plans[m].hold);
+    var room = wall - o.s; if (room < 0) room = 0;
+    return Math.sqrt(2 * cfg.brk * 0.85 * room);
+  }
+
   // Put the train where the reference is, with no history (first sight, or after a fade-out).
   function placeAtReference(o, plans, tR, cfg) {
     reference(o, plans, tR, cfg, ref);
     var j = ref.j, base = ref.c;
     for (var i = o.k; i < j; i++) base -= plans[i].L;      // position within plan j
-    o.k = j; o.s = Math.max(0, Math.min(plans[j].L, base)); o.v = ref.v;
+    o.k = j; o.s = Math.max(0, Math.min(plans[j].L, base)); o.v = Math.min(ref.v, stopSpeed(o, plans, cfg));
   }
 
   function startFade(o, plans, tR, cfg) {
@@ -244,16 +254,18 @@
     locate(a.span, a.L, posTmp); locate(b.span, 0, posTmp2);
     var gap = metresBetween(posTmp.x, posTmp.y, posTmp2.x, posTmp2.y, a.span);
     var info = { k: o.k, tR: tR, late: (tR - b.t0) / 1000, waited: o.pw, capped: o.pc, gap: gap };
-    if (gap > cfg.fadeM) {                         // not the same stretch of railway: do not race across
-      o.k++; o.s = 0; o.fade = 1; o.tgtK = o.k; o.tgtS = 0; o.fades++; emit(cfg, 'fade', o, { tR: tR, gap: gap });
-    } else {
-      if (gap > cfg.blendM) {
-        var dx = (posTmp.x - posTmp2.x) * a.span.kx, dy = (posTmp.y - posTmp2.y) * a.span.ky;
-        // keep any blend still in progress: it is added to, not replaced (so no jump on a double step)
-        o.offx += dx / a.span.kx; o.offy += dy / a.span.ky;
-      }
-      o.k++; o.s = Math.max(0, carry);
+    if (gap > cfg.slideM) {                        // not the same stretch of railway: fade out, jump unseen, fade in. Never slide across a gap
+      if (o.fade === 0) { o.fade = 1; o.tgtK = o.k + 1; o.tgtS = Math.max(0, carry); o.fades++; emit(cfg, 'fade', o, { tR: tR, gap: gap }); }
+      o.pw = false; o.pc = false;
+      emit(cfg, 'transition', o, info);
+      return;
     }
+    o.vcp = Math.max(o.vcp, profileOf(a, b, cfg).vc);   // the span we leave: its cruise speed still bounds the catch-up limit until we have slowed to the new one
+    if (gap > cfg.blendM) {
+      var dx = (posTmp.x - posTmp2.x) * a.span.kx, dy = (posTmp.y - posTmp2.y) * a.span.ky;
+      o.offx += dx / a.span.kx; o.offy += dy / a.span.ky;     // a rounding-sized gap: slid away
+    }
+    o.k++; o.s = Math.max(0, carry);
     if (o.v < 0.3) o.snap = true;                  // reversing at a terminus: turn at once, standing still
     o.pw = false; o.pc = false;
     emit(cfg, 'transition', o, info);
@@ -264,7 +276,7 @@
     // A fade is a three-beat: out, jump, in. The train keeps its way meanwhile.
     if (o.fade === 1) {
       o.alpha -= h / cfg.fadeSecs;
-      if (o.alpha <= 0) { o.alpha = 0; o.k = o.tgtK; o.s = o.tgtS; reference(o, plans, tR, cfg, ref); o.v = ref.v; o.offx = o.offy = 0; o.fade = 2; o.snap = true; }
+      if (o.alpha <= 0) { o.alpha = 0; o.k = o.tgtK; o.s = o.tgtS; reference(o, plans, tR, cfg, ref); o.v = Math.min(ref.v, stopSpeed(o, plans, cfg)); o.offx = o.offy = 0; o.fade = 2; o.snap = true; o.vcp = 0; }
     } else if (o.fade === 2) {
       o.alpha += h / cfg.fadeSecs;
       if (o.alpha >= 1) { o.alpha = 1; o.fade = 0; }
@@ -284,31 +296,29 @@
     var vdes = cur.v + e * cfg.kp;
     if (vdes < 0) vdes = 0;
     if (e > 0.02 && vdes < 0.25) vdes = Math.min(0.25, e * 2);     // the last few centimetres: creep onto the mark rather than stop short of it
-    var vmax = cfg.cap * vc;
+    var vmax = cfg.cap * Math.max(vc, o.vcp);       // entering a slower span: the higher of the two cruise speeds, until we have slowed to the new one
     if (vdes > vmax) { vdes = vmax; if (e > 0) { o.pc = true; o.capFrames++; } }
     // The end of the span is a wall until the next step is known and its geometry has arrived.
     var open = next && next.span, wall = -1;
     if (!open) wall = next ? p.L : p.hold;
     o.loading = !!next && !next.span;
+    // The stopping curve. The wall is the hold point of the LAST span we know about (not just this one), so a
+    // train catching up across several known spans starts slowing in time for it instead of meeting it at speed.
+    var vb = stopSpeed(o, plans, cfg);
+    if (vdes > vb) vdes = vb;
     var dv = vdes - o.v;
     if (dv > cfg.acc * h) dv = cfg.acc * h; else if (dv < -cfg.brk * h) dv = -cfg.brk * h;
     o.v += dv; if (o.v < 0) o.v = 0;
-    if (o.v > vmax) o.v = vmax;                     // the catch-up limit is a limit: never exceeded, even entering a slower span
-    if (!open) {                                    // the stopping curve to the wall: constant braking, so it stops ON it
-      var room = wall - o.s; if (room < 0) room = 0;
-      var vb = Math.sqrt(2 * cfg.brk * room);
-      if (o.v > vb) o.v = vb;
-    }
+    if (o.v > vmax) o.v = vmax;                     // the catch-up limit is a limit: never exceeded
+    if (o.vcp > 0 && o.v <= cfg.cap * vc) o.vcp = 0;
     var ds = o.v * h;
     o.s += ds; o.dist += ds;
-    if (!open && o.s > wall) { o.dist -= o.s - wall; o.s = wall; o.v = 0; }
-    if (open && o.s >= p.L) {
+    if (!open && o.s > wall) { o.dist -= o.s - wall; o.s = wall; }      // on the mark: the speed it still has is shed by the stopping curve, at the bound, over the next frames
+    if (open && o.s >= p.L && o.fade !== 1) {
       var guard = 0;
-      while (o.k + 1 < plans.length && plans[o.k + 1].span && o.s >= plans[o.k].L && guard++ < 8) transition(o, plans, tR, cfg);
-      var vcap2 = cfg.cap * Math.max(profileOf(plans[o.k], plans[o.k + 1] || null, cfg).vc, 0.5);
-      if (o.v > vcap2) o.v = vcap2;
+      while (o.fade !== 1 && o.k + 1 < plans.length && plans[o.k + 1].span && o.s >= plans[o.k].L && guard++ < 8) transition(o, plans, tR, cfg);
     }
-    // Waiting: stopped at the wall with the reference wanting to be past the expected time.
+    if (o.fade === 1 && o.s > plans[o.k].L) { o.dist -= o.s - plans[o.k].L; o.s = plans[o.k].L; }
     // Waiting is a stop that was NOT planned: short of a span end (at a signal). Standing at the platform
     // it called at, a little past its dwell, is just a train that has not left yet.
     var atWall = !open && o.s >= wall - 0.5 && o.v < 0.3;
@@ -350,9 +360,9 @@
       for (var i = 1; i <= n; i++) {
         var tR = t0 + h * i * 1000;
         step(o, plans, h, tR, cfg);
-        if (o.offx !== 0 || o.offy !== 0) {            // a gap between spans is slid away, never faster than blendRate
+        if (o.offx !== 0 || o.offy !== 0) {            // a rounding-sized gap between spans is slid away (a bigger one fades instead)
           var kxm = 111320 * Math.cos((o.y || 51) * Math.PI / 180), dm = Math.hypot(o.offx * kxm, o.offy * 110540);
-          var shrink = Math.min(dm * (1 - Math.exp(-h / cfg.blendSecs)), cfg.blendRate * h);
+          var shrink = dm * (1 - Math.exp(-h / cfg.blendSecs));
           if (dm - shrink < 0.01) { o.offx = 0; o.offy = 0; } else { var fs = (dm - shrink) / dm; o.offx *= fs; o.offy *= fs; }
         }
       }

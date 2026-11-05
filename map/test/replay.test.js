@@ -17,6 +17,44 @@ test('replay: the recordings are real: steps, spans, many trains', () => {
   assert.ok(r.recording.spans > 300);
 });
 
+test('replay: no frame-to-frame acceleration or deceleration above 1.2 m/s^2 anywhere in either recording', () => {
+  [iid, pers].forEach((rec, i) => {
+    const r = R.run(rec, { fps: 60 });                               // the finest time step: the bound must hold at 60 fps too
+    assert.equal(r.accelOver, 0, 'frames over the bound (recording ' + i + ')');
+    assert.ok(r.maxAccel <= 1.2 * 1.02 && r.maxDecel <= 1.2 * 1.02, 'max ' + r.maxAccel + ' / ' + r.maxDecel);
+    assert.ok(r.maxAccel > 1.0 || r.maxDecel > 1.0, 'and the bound is actually reached (the check is not vacuous): ' + r.maxAccel + ' / ' + r.maxDecel);
+  });
+});
+
+test('replay: the recordings contain batched steps (two steps for one train in one update) and they are replayed without a jump', () => {
+  let batched = 0;
+  iid.events.forEach((e) => { if (e.event !== 'update') return; const seen = {}; e.data.upsert.forEach((t) => { seen[t.id] = (seen[t.id] || 0) + 1; if (seen[t.id] === 2) batched++; }); });
+  assert.ok(batched >= 3, 'batched steps in the iid recording: ' + batched);
+  const r = R.run(iid, { fps: 20 });
+  assert.equal(r.teleports, 0); assert.equal(r.fades, 0);
+});
+
+test('replay reads CONTRACT section 16 recordings as the real /debug/record writes them: gzip or plain, unknown events and bad lines skipped, t as the clock', () => {
+  const fs = require('fs'), os = require('os'), zlib = require('zlib');
+  const lines = fs.readFileSync ? zlib.gunzipSync(fs.readFileSync(FIX('sussex-10min-iid.jsonl.gz'))).toString().trim().split('\n') : [];
+  const mangled = lines.map((l, i) => {
+    if (i % 50 === 7) return 'not json at all';
+    const o = JSON.parse(l);
+    if (o.event === 'update') delete o.data.serverTime;                    // the clock comes from t
+    return JSON.stringify(o);
+  });
+  mangled.splice(3, 0, JSON.stringify({ t: 1, event: 'ping', data: {} }), '');
+  const plain = path.join(os.tmpdir(), 'rm-sec16-' + process.pid + '.jsonl');
+  fs.writeFileSync(plain, mangled.join('\n'));
+  const rec = R.load(plain);                                                // plain text, no .gz
+  fs.unlinkSync(plain);
+  assert.ok(rec.skipped.bad >= 5 && rec.skipped.unknown === 1, JSON.stringify(rec.skipped));
+  const r = R.run(rec, { fps: 10 });
+  assert.ok(r.steps > 300 && r.backward === 0, r.steps + ' steps');
+  const text = R.report(r);
+  assert.match(text, /skipped \d+ unreadable, 1 of unknown kind/);
+});
+
 test('replay targets that the engine meets on both recordings: catch-up <= 1.5x, no backward moves, no fades, no teleports', () => {
   [iid, pers].forEach((rec, i) => {
     const r = R.run(rec, { fps: 20 });
@@ -30,7 +68,7 @@ test('replay targets that the engine meets on both recordings: catch-up <= 1.5x,
 
 test('replay: share absorbed by re-timing alone (regression bar; the 90 % target itself is reported by the CLI)', () => {
   const a = R.run(iid, { fps: 15 }), b = R.run(pers, { fps: 15 });
-  assert.ok(a.absorbed >= 0.84, 'noisy (iid +-25 %) recording: ' + (a.absorbed * 100).toFixed(1) + ' %');
+  assert.ok(a.absorbed >= 0.88, 'noisy (iid +-25 %) recording: ' + (a.absorbed * 100).toFixed(1) + ' %');
   assert.ok(b.absorbed >= 0.90, 'persistent-pace recording: ' + (b.absorbed * 100).toFixed(1) + ' %');
 });
 

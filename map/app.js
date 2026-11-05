@@ -100,12 +100,12 @@
   // ---- state ----------------------------------------------------------------------------------------
   var api = RM.api.createApi({ base: API_BASE });
   var spans = RM.spans.createSpanCache({ fetchSpan: function (id) { return api.getSpan(id); } });
-  var clock = RM.engine.createClock({ lagMs: Number(new URLSearchParams(location.search).get('lag')) || 10000 });
+  var clock = RM.engine.createClock({ lagMs: Number(new URLSearchParams(location.search).get('lag')) || 12000 });
   var store = motion.createStore({ reducedMotion: reduced, spans: spans, clock: clock });
   store.setHalo(L.THEME[theme].halo);
   var stations = [], stationByCrs = {};
   var sel = { type: null, id: null, crs: null, detail: null, path: null, timer: null, follow: false };
-  var lastBuf = null, frameN = 0, rafId = 0, lastFrameTs = 0, loopUntil = 0;
+  var lastPlaced = null, lastBuf = null, frameN = 0, rafId = 0, lastFrameTs = 0, loopUntil = 0;
   var viewBox = geo.GB_BBOX.slice();
   var stCache = { zb: -1, box: null, dots: [], names: [], theme: null };
   var pendingStation = null;
@@ -173,7 +173,9 @@
     return false;
   }
   function nameSize(s) { return s.tier === 1 ? 14 : s.tier === 2 ? 12.5 : 11.5; }
-  function bearingOf(r) { return r.ch === r.ch ? r.ch : r.lh === r.lh ? r.lh : r.hf === r.hf ? r.hf : 0; }
+  // Where and which way a train is DRAWN (the fan-out may have moved it sideways and squared it up): labels
+  // and the declutter boxes must follow the drawn body, not the real position, or a label lands on a neighbour.
+  function bearingOf(r) { return r.ph === r.ph ? r.ph : r.ch === r.ch ? r.ch : r.lh === r.lh ? r.lh : r.hf === r.hf ? r.hf : 0; }
 
   // A train with no heading at all is turned to run along the railway line underneath it, read back
   // from the map's own rail layer (a few per frame; the answer is kept until the train moves).
@@ -229,8 +231,8 @@
     var inView = [];
     for (i = 0; i < buf.n && inView.length < MAX_LABELS * 2; i++) {
       r = buf.order[i];
-      if (r.cy < vb[0] || r.cy > vb[2] || r.cx < vb[1] || r.cx > vb[3]) continue;
-      p = map.project([r.cx, r.cy]);
+      if (r.py < vb[0] || r.py > vb[2] || r.px < vb[1] || r.px > vb[3]) continue;
+      p = map.project([r.px, r.py]);
       var hd = bearingOf(r) * Math.PI / 180, tx = Math.sin(hd), ty = -Math.cos(hd);
       inView.push({ r: r, x: p.x, y: p.y, tx: tx, ty: ty });
       for (var k = 0; k < steps; k++) {
@@ -284,7 +286,7 @@
     for (i = 0; i < res.length && trainRecs.length < MAX_LABELS; i++) {
       var it = byRef.get(res[i].ref), alt = it.alts[res[i].alt];
       if (it.kind === 'st') { it.ref.lo = alt.lo; it.ref.la = alt.la; it.ref.lb = alt.lb; names.push(it.ref); }
-      else { it.ref.lo = alt.lo; if (!it.ref.pos) it.ref.pos = [0, 0]; it.ref.pos[0] = it.ref.cx; it.ref.pos[1] = it.ref.cy; trainRecs.push(it.ref); }
+      else { it.ref.lo = alt.lo; if (!it.ref.pos) it.ref.pos = [0, 0]; it.ref.pos[0] = it.ref.px; it.ref.pos[1] = it.ref.py; trainRecs.push(it.ref); }
     }
     return { names: names, trains: trainRecs };
   }
@@ -307,6 +309,7 @@
 
     var sd = stations.length ? stationData(zoom) : null;
     var placed = labelled && sd ? placeLabels(buf, zoom, sd, selTrainId) : null;
+    lastPlaced = placed;
     if (sd) layers = layers.concat(L.stationLayers({ dots: sd.dots, names: placed ? placed.names : sd.names, zoom: zoom, theme: theme, frame: frameN }));
 
     var rec = selTrainId ? store.get(selTrainId) : null;
@@ -806,5 +809,6 @@
       trains: store.size, zoom: map.getZoom()
     };
   };
+  debug.labels = function () { return lastPlaced; };
   debug.reset = function () { debug.intervals.length = 0; debug.js.length = 0; debug.fill.length = 0; };
 })();

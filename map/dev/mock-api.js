@@ -76,7 +76,7 @@ setInterval(() => {
     sim.TRAINS.forEach((t) => {
       if (t.ver <= c.sentVer) return;
       const w = sim.wireOf(t);
-      if (inBox(c.bbox, w)) { upsert.push(w); c.known.add(t.id); }
+      if (inBox(c.bbox, w)) { sim.wiresSince(t, c.sentVer).forEach((x) => upsert.push(x)); c.known.add(t.id); }
       else if (c.known.has(t.id)) { remove.push(t.id); c.known.delete(t.id); }
     });
     removedNow.forEach((id) => { if (c.known.delete(id)) remove.push(id); });

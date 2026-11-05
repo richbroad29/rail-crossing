@@ -40,7 +40,7 @@ function record(o) {
     sim.TRAINS.forEach((t) => {
       if (t.ver <= sentVer) return;
       const w = sim.wireOf(t);
-      if (inBox(w)) { spans(w); up.push(w); known.add(t.id); } else if (known.has(t.id)) { remove.push(t.id); known.delete(t.id); }
+      if (inBox(w)) { sim.wiresSince(t, sentVer).forEach((x) => { spans(x); up.push(x); }); known.add(t.id); } else if (known.has(t.id)) { remove.push(t.id); known.delete(t.id); }
     });
     rem.forEach((id) => { if (known.delete(id)) remove.push(id); });
     sentVer = sim.ver;

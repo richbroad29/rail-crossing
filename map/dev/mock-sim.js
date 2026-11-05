@@ -114,8 +114,17 @@ function createSim(o) {
       const dir = last ? 1 - last.dir : t.dir0;
       const run = T.genRun(world, t, dir, last ? last.end : t.start, t.rnd, noise);
       if (timescale !== 1) rescale(run);
+      batchStalls(t, run);
       t.runs.push(run);
       run.berths.forEach((e) => { e.run = run; t.flat.push(e); });
+    }
+  }
+  // A fast train through a very short berth: the feed delivers its two steps together (the first is held back
+  // until the second can go with it), so one update carries two steps for the train.
+  function batchStalls(t, run) {
+    if (t.cls !== 'express') return;
+    for (let i = 0; i + 1 < run.berths.length; i++) {
+      if (run.berths[i + 1].t0 - run.berths[i].t0 < 9000 && t.rnd() < 0.6) run.berths[i].deliverAt = run.berths[i + 1].deliverAt;
     }
   }
   function rescale(run) {
@@ -147,7 +156,7 @@ function createSim(o) {
       toc: pick(TOCS[cls]), hasSvc: cls !== 'special' && rnd() > 0.1, approx: rnd() < 0.05,
       prev: rnd() < 0.12 ? [headcode(cls)] : [], area: pick(AREAS), dir0: trnd() < 0.5 ? 0 : 1,
       firstSeenAt: now - rnd() * 600000, runs: [], flat: [], cursor: -1, ver: 0, berthN: Math.floor(rnd() * 900), uid: 'C' + id.toUpperCase().slice(0, 5),
-      trail: []
+      trail: [], stepLog: []
     };
     t.area = route.all.every((c) => ['VIC', 'CLJ', 'ECR', 'GTW', 'TBD', 'HHE', 'BTN', 'HOV', 'PLD'].includes(c)) ? 'LA' : t.area;
     // where in its run the train is now: phase through the nominal duration of a run
@@ -160,25 +169,34 @@ function createSim(o) {
     advance(t, now);
     t.ver = ++globalVer;
     t.wire = toWire(t, now); t.held = t.wire.mv ? t.wire.mv.held : false;
+    t.stepLog = [{ ver: t.ver, wire: t.wire }];
     return t;
   }
 
-  // Deliver every step whose delivery time has come. Returns true if the train moved to a new berth.
+  // Deliver every step whose delivery time has come, each as its own wire record, IN ORDER (a train whose feed
+  // stalled gets two or more in one tick). Returns true if the train moved to a new berth.
   function advance(t, now) {
     ensureRuns(t, now + 120000);
     let moved = false;
-    while (t.cursor + 1 < t.flat.length && t.flat[t.cursor + 1].deliverAt <= now) { t.cursor++; moved = true; }
-    if (moved) {
-      t.ver = ++globalVer;
-      const e = t.flat[t.cursor];
-      t.berthN++;
-      const p = anchor(t, e);
+    while (t.cursor + 1 < t.flat.length && t.flat[t.cursor + 1].deliverAt <= now) {
+      t.cursor++; moved = true; t.berthN++;
+      const e = t.flat[t.cursor], p = anchor(t, e);
       t.trail.push([+p.lat.toFixed(5), +p.lon.toFixed(5), e.t0]);
       if (t.trail.length > 40) t.trail.shift();
+      t.ver = ++globalVer;
+      t.wire = toWire(t, now); t.held = t.wire.mv ? t.wire.mv.held : false;
+      t.stepLog.push({ ver: t.ver, wire: t.wire }); if (t.stepLog.length > 8) t.stepLog.shift();
+    }
+    if (moved) {
       if (t.cursor > 60) { t.flat.splice(0, 30); t.cursor -= 30; }
       if (t.runs.length > 4) t.runs.shift();
     }
     return moved;
+  }
+  // The wire records a client that has seen version `since` still needs, oldest first (one per step).
+  function wiresSince(t, since) {
+    const out = t.stepLog.filter((x) => x.ver > since).map((x) => x.wire);
+    return out.length ? out : [t.wire];
   }
 
   // The phase-1 style placed position for the berth: the platform when it is a station berth, else mid-span.
@@ -408,9 +426,9 @@ function createSim(o) {
     TRAINS.forEach((t) => {
       const moved = advance(t, now);
       const e = t.flat[t.cursor], heldNow = !t.approx && mvOf(t, e, now).held;
-      if (moved || heldNow !== t.held || (tickN % 30 === 0 && t.hasSvc)) {
-        if (!moved) t.ver = ++globalVer;
-        t.held = heldNow; t.wire = toWire(t, now);
+      if (!moved && (heldNow !== t.held || (tickN % 30 === 0 && t.hasSvc))) {
+        t.ver = ++globalVer; t.held = heldNow; t.wire = toWire(t, now);
+        t.stepLog.push({ ver: t.ver, wire: t.wire }); if (t.stepLog.length > 8) t.stepLog.shift();
       }
     });
     if (tickN % 15 === 0 && TRAINS.size > 5) {
@@ -422,7 +440,7 @@ function createSim(o) {
   function takeRemoved() { const r = removedSince; removedSince = []; return r; }
 
   return {
-    STATIONS, BY_CRS, TRAINS, init, holdTrain, tick, takeRemoved, toWire, wireOf: (t) => t.wire, detail, board, stackAt, spawn,
+    STATIONS, BY_CRS, TRAINS, init, holdTrain, tick, takeRemoved, toWire, wireOf: (t) => t.wire, wiresSince, detail, board, stackAt, spawn,
     get ver() { return globalVer; }, span: (id) => world.SPANS.get(id) || null, network: (level) => world.network(level), world,
     searchRows: () => Array.from(TRAINS.values()).map((t) => {
       const seq = t.route.all; return { id: t.id, hc: t.hc, o: BY_CRS[seq[0]].name, d: BY_CRS[seq[seq.length - 1]].name };

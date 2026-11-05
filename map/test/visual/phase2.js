@@ -123,6 +123,22 @@ async function stacked(browser) {
     }, b);
     const heads = new Set(m.map((x) => Math.round(x.ph)));
     say(m.length >= 2 && heads.size === 1, tag + ': ' + m.length + ' stopped trains at Brighton all face ' + Array.from(heads).join('/') + ' deg (no cross), fan offsets ' + m.map((x) => x.fan.toFixed(1)).join(', '));
+    const lab = await page.evaluate(() => {
+      const map = RM.debug.map, placed = RM.debug.labels(), z = map.getZoom(), lat = map.getCenter().lat;
+      if (!placed) return null;
+      const lenPx = RM.motion.trainLenPx(z, lat), bodies = [];
+      RM.debug.store.forEach((r) => {
+        const c = map.project([r.px, r.py]), h = (r.ph === r.ph ? r.ph : 0) * Math.PI / 180, tx = Math.sin(h), ty = -Math.cos(h);
+        for (let o = -lenPx / 2; o <= lenPx / 2; o += 5) bodies.push({ id: r.id, x: c.x + tx * o, y: c.y + ty * o });
+      });
+      const bad = [];
+      placed.trains.forEach((r) => {
+        const c = map.project([r.pos[0], r.pos[1]]), w = r.hc.length * 8 + 6, hh = 15, cx = c.x + r.lo[0], cy = c.y + r.lo[1];
+        bodies.forEach((b) => { if (b.id !== r.id && Math.abs(b.x - cx) < w / 2 && Math.abs(b.y - cy) < hh / 2) bad.push(r.hc + ' over ' + b.id); });
+      });
+      return { labels: placed.trains.length, bad };
+    }, null);
+    say(lab && lab.labels >= 2 && lab.bad.length === 0, tag + ': ' + (lab ? lab.labels : 0) + ' headcode labels, none sits on another train' + (lab && lab.bad.length ? ' (' + lab.bad.join('; ') + ')' : ''));
     await L.shot(page, 'p2-stacked-' + tag);
     if (real(errors).length) { failed++; console.log('FAIL console errors:\n   ' + real(errors).join('\n   ')); }
     await ctx.close();
@@ -205,6 +221,73 @@ async function network(browser) {
       await page.evaluate(() => RM.debug.map.jumpTo({ center: [-2.6, 54.2], zoom: 5.2 }));
       await settle(page, 1500); await L.shot(page, 'p2-network-national-' + scheme);
     }
+    if (real(errors).length) { failed++; console.log('FAIL console errors:\n   ' + real(errors).join('\n   ')); }
+    await ctx.close();
+  }
+}
+
+// zoom 7 -> 9: the line's colour and width, read back from the map's own pixels, at every quarter zoom. Trains are
+// hidden so nothing but the line is under the probe. A step in colour or width at a hand-over would show here.
+async function sweep(browser) {
+  for (const scheme of ['light', 'dark']) {
+    const { page, ctx, errors } = await ctxFor(browser, 1440, 900, scheme);
+    await sleep(2500);
+    await page.evaluate(() => document.querySelectorAll('.chip[aria-pressed="true"]').forEach((b) => b.click()));
+    // a vertex of the Uckfield branch between Crowborough and Buxted (an isolated line: nothing else within 8 px even at zoom 7),
+    // with its neighbours (for the direction of the line there)
+    const target = [(stations.COH.lon + stations.BXD.lon) / 2, (stations.COH.lat + stations.BXD.lat) / 2];
+    const spot = await page.evaluate(async ([api, target]) => {
+      const g = await (await fetch(api + '/map/v1/network?level=hi')).json();
+      let best = null, bd = 1e9;
+      g.features.forEach((f) => { const c = f.geometry.coordinates; for (let i = 1; i + 1 < c.length; i++) { const d = Math.hypot(c[i][0] - target[0], c[i][1] - target[1]); if (d < bd) { bd = d; best = { a: c[i - 1], c: c[i], b: c[i + 1] }; } } });
+      return best;
+    }, [L.API, target]);
+    const rows = [];
+    for (let z = 7; z <= 9.001; z += 0.25) {
+      await page.evaluate(([c, z]) => RM.debug.map.jumpTo({ center: c, zoom: z }), [spot.c, z]);
+      await sleep(1600);
+      // read the map's own pixels across the line (a profile perpendicular to it, averaged along it) and measure it
+      const m = await page.evaluate((spot) => new Promise((resolve) => {
+        const map = RM.debug.map;
+        map.once('render', () => {
+          const gl = map.painter.context.gl, cv = map.getCanvas(), n = 121, cx = Math.round(cv.width / 2), cy = Math.round(cv.height / 2);
+          const x0 = cx - 60, y0 = cy - 60, buf = new Uint8Array(n * n * 4);
+          gl.readPixels(x0, cv.height - y0 - n, n, n, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+          const px = (x, y) => { const ix = Math.round(x - x0), iy = n - 1 - Math.round(y - y0); const i = (iy * n + ix) * 4; return [buf[i], buf[i + 1], buf[i + 2]]; };
+          const lum = (c) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+          const A = map.project(spot.a), B = map.project(spot.b), C = map.project(spot.c);
+          let dx = B.x - A.x, dy = B.y - A.y; const len = Math.hypot(dx, dy) || 1; dx /= len; dy /= len;
+          const nx = -dy, ny = dx, prof = [];
+          for (let t = -12; t <= 12; t += 0.5) {
+            let sum = 0, k = 0;
+            for (let u = -10; u <= 10; u += 2) { sum += lum(px(C.x + nx * t + dx * u, C.y + ny * t + dy * u)); k++; }
+            prof.push([t, sum / k]);
+          }
+          const far = prof.filter(([t]) => Math.abs(t) > 8).map(([, v]) => v).sort((p, q) => p - q), bg = far[far.length >> 1];
+          let peak = 0, area = 0;
+          prof.forEach(([t, v]) => { if (Math.abs(t) > 8) return; const d = Math.abs(v - bg); area += d * 0.5; if (d > peak) peak = d; });
+          let col = px(C.x, C.y), bd = -1;                // the strongest pixel within 3.5 px of the line's centre: its colour, free of the anti-aliasing of the edges
+          for (let t = -3.5; t <= 3.5; t += 0.5) { const c2 = px(C.x + nx * t, C.y + ny * t), d = Math.abs(lum(c2) - bg); if (d > bd) { bd = d; col = c2; } }
+          resolve({ rgb: col, contrast: Math.round(peak), width: +(area / Math.max(peak, 1)).toFixed(2) });
+        });
+        map.triggerRepaint();
+      }), spot);
+      rows.push([z, m]);
+      if ([7, 7.5, 8, 8.5, 9].includes(z)) await L.shot(page, 'p2-sweep-z' + String(z).replace('.', '_') + '-' + scheme);
+    }
+    console.log('     ' + scheme + ' zoom 7 -> 9: the rail line measured on the map pixels (the colour ON the line, its contrast with the ground, equivalent width in px):');
+    rows.forEach(([z, p]) => console.log('       z' + z.toFixed(2) + '  rgb(' + p.rgb.join(',') + ')  contrast ' + p.contrast + '  width ' + p.width));
+    const sheet = await ctx.newPage();
+    const zs = [7, 7.5, 8, 8.5, 9];
+    const imgs = zs.map((z) => 'data:image/png;base64,' + fs.readFileSync(path.join(L.CFG.out, 'p2-sweep-z' + String(z).replace('.', '_') + '-' + scheme + '.png')).toString('base64'));
+    await sheet.setContent('<body style="margin:0;background:#111;display:grid;grid-template-columns:repeat(5,1fr);gap:4px;width:3600px">' + imgs.map((u, i) => '<figure style="margin:0;position:relative"><img src="' + u + '" style="width:100%;display:block"><figcaption style="position:absolute;left:8px;top:6px;color:#fff;font:700 28px system-ui;text-shadow:0 0 4px #000">zoom ' + zs[i] + '</figcaption></figure>').join('') + '</body>');
+    await sheet.setViewportSize({ width: 3600, height: 520 });
+    await sheet.screenshot({ path: path.join(L.CFG.out, 'p2-sweep-sheet-' + scheme + '.png'), fullPage: true });
+    await sheet.close();
+    const cs = rows.map(([, p]) => p.rgb), ws = rows.map(([, p]) => p.width);
+    const dc = Math.max.apply(null, cs.slice(1).map((c, i) => Math.max.apply(null, c.map((v, k) => Math.abs(v - cs[i][k])))));
+    const dw = Math.max.apply(null, ws.slice(1).map((w, i) => Math.abs(w - ws[i])));
+    say(dc <= 30 && dw <= 0.75, scheme + ': no colour step (largest change between quarter-zoom steps ' + dc + '/255) and no width step (largest change ' + dw.toFixed(2) + ' px)');
     if (real(errors).length) { failed++; console.log('FAIL console errors:\n   ' + real(errors).join('\n   ')); }
     await ctx.close();
   }
@@ -297,6 +380,7 @@ module.exports = async function phase2(browser, only) {
   failed = 0;
   const run = (name, fn) => (!only || only === name) ? fn(browser) : null;
   await run('network', network);
+  await run('sweep', sweep);
   await run('views', trainViews);
   await run('stacked', stacked);
   await run('approx', approx);

@@ -229,7 +229,7 @@
       engine.advance(es, plans, rTime, ecfg, es);
       if (!es.init || es.x !== es.x) return false;
       if (!wasInit) {                              // first frame on the track
-        if (r.shown && Math.abs(r.cx - es.x) * 80000 < 40) { es.offx += r.cx - es.x; es.offy += r.cy - es.y; es.x = r.cx; es.y = r.cy; es.alpha = 1; es.fade = 0; }   // slide from where it was drawn
+        if (r.shown && Math.hypot((r.cx - es.x) * 69000, (r.cy - es.y) * 111000) < ecfg.slideM) { es.offx += r.cx - es.x; es.offy += r.cy - es.y; es.x = r.cx; es.y = r.cy; es.alpha = 1; es.fade = 0; }   // a few metres off: slide from where it was drawn; further than that it fades in on the track (never slides across a gap)
         r.mode = 'track';
       }
       while (es.k > 1) { r.hist.push(plans.shift()); es.k--; if (es.fade === 1) es.tgtK--; if (r.hist.length > 24) r.hist.shift(); }

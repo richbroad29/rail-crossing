@@ -45,3 +45,5 @@ tabs (a row tap selects the train), the national line layer at zoom 6 / 8 / 9.5 
 sheet) and a screen recording (`out/video/*.webm`). Without a browser: `node map/test/motion-replay.js`
 (four motion metrics on a recorded hour), `node map/test/mutation-check.js` (breaks each engine rule and
 requires a test to fail) and `node map/test/bench-engine.js` (engine CPU per frame for 1,500 trains).
+
+`phase2 sweep` reads the rail line's colour and width off the map's own pixels at every quarter zoom from 7 to 9 (an isolated branch line, trains hidden), light and dark, and fails on a step; it writes `p2-sweep-z*` and a contact sheet `p2-sweep-sheet-*.png`. `phase2 stacked` also checks that no headcode label sits on another train.

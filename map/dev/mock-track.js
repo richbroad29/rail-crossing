@@ -130,7 +130,7 @@ function createWorld(stationsByCrs) {
       const nb = Math.max(1, Math.min(10, Math.round(L / 620)));
       const rnd = mulberry(hash32(seq[i] + '>' + seq[i + 1]));
       const w = []; let sum = 0;
-      for (let k = 0; k < nb; k++) { const x = 0.75 + rnd() * 0.5; w.push(x); sum += x; }
+      for (let k = 0; k < nb; k++) { const x = rnd() < 0.07 ? 0.1 : 0.75 + rnd() * 0.5; w.push(x); sum += x; }   // now and then a very short berth (a junction throat): a fast train is through it in seconds
       let d = 0;
       for (let k = 0; k < nb; k++) {
         const d1 = k === nb - 1 ? L : d + L * w[k] / sum;
@@ -160,7 +160,7 @@ function createWorld(stationsByCrs) {
   function network(level) {
     const ck = level + ':' + LEGS.size;
     if (levelCache[ck]) return levelCache[ck];
-    const tol = level === 'lo' ? 250 : 4;
+    const tol = level === 'lo' ? 80 : 4;
     const features = [];
     LEGS.forEach((leg) => {
       const s = simplify(leg.path, tol);

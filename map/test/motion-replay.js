@@ -29,24 +29,34 @@ const zlib = require('zlib');
 const motion = require('../motion.js');
 const engine = require('../engine.js');
 
-const TARGETS = { absorbed: 0.9, catchUp: 1.5, backward: 0, fadesPerHour: 0.1 };
+const TARGETS = { absorbed: 0.9, catchUp: 1.5, backward: 0, fadesPerHour: 0.1, accel: 1.2 };
 const DEFAULT = path.join(__dirname, 'fixtures', 'sussex-10min-iid.jsonl.gz');
 
+// Reads CONTRACT section 16's recording format (the mock recorder's and the real /debug/record's): JSONL, one
+// {t, event, data} per line, event = snapshot | update | span. Unknown events and unreadable lines are skipped
+// and counted, not fatal. `t` is the server time the event was emitted; data.serverTime is used when present.
 function load(file) {
-  let buf = fs.readFileSync(file);
-  if (/\.gz$/.test(file)) buf = zlib.gunzipSync(buf);
-  const ev = [], spans = new Map();
+  let buf = file === '-' ? fs.readFileSync(0) : fs.readFileSync(file);
+  if (buf[0] === 0x1f && buf[1] === 0x8b) buf = zlib.gunzipSync(buf);        // gzip by content, not by name
+  const ev = [], spans = new Map(), skipped = { bad: 0, unknown: 0 };
   buf.toString('utf8').split('\n').forEach((l) => {
-    if (!l) return;
-    const o = JSON.parse(l);
-    if (o.event === 'span') spans.set(o.data.id, o.data);
-    else ev.push(o);
+    if (!l.trim()) return;
+    let o;
+    try { o = JSON.parse(l); } catch (e) { skipped.bad++; return; }
+    if (!o || typeof o !== 'object' || !o.data) { skipped.bad++; return; }
+    if (o.event === 'span') { if (o.data.id && o.data.path) spans.set(o.data.id, o.data); else skipped.bad++; }
+    else if (o.event === 'snapshot' || o.event === 'update') {
+      if (typeof o.t !== 'number') o.t = o.data.serverTime;
+      if (typeof o.t !== 'number') { skipped.bad++; return; }
+      ev.push(o);
+    } else skipped.unknown++;
   });
-  return { events: ev, spans };
+  ev.sort((a, b) => a.t - b.t);
+  return { events: ev, spans, skipped };
 }
 
 function run(rec, opt) {
-  opt = Object.assign({ fps: 30, lagMs: 10000, latencyMs: 100, spanLatencyMs: 150, warmupSecs: 60, engine: {} }, opt || {});
+  opt = Object.assign({ fps: 30, lagMs: 12000, latencyMs: 100, spanLatencyMs: 150, warmupSecs: 60, engine: {} }, opt || {});
   const ev = rec.events;
   if (!ev.length) throw new Error('empty recording');
   // the page's clock: it learns the server offset from message timestamps, like the real page does
@@ -68,6 +78,7 @@ function run(rec, opt) {
   const cfg = Object.assign({ lagMs: opt.lagMs }, opt.engine, {
     onEvent(type, es, info) {
       if (!measuring) return;
+      if (opt.onEvent) opt.onEvent(type, es, info);
       if (type === 'transition') {
         M.steps++;
         if (info.waited) M.waited++;
@@ -85,7 +96,7 @@ function run(rec, opt) {
   let now = ev[0].t;
   const t0 = now, tEnd = ev[ev.length - 1].t + 30000, dtMs = 1000 / opt.fps;
   let next = 0;
-  const S = { frames: 0, trainFrames: 0, maxRatioCapped: 0, maxRatio: 0, capFrames: 0, backward: 0, teleports: 0, maxJump: 0, maxAcc: 0, maxDec: 0, waitFrames: 0, lagSum: 0, lagN: 0, lagMax: 0, stops: 0 };
+  const S = { frames: 0, trainFrames: 0, maxRatioCapped: 0, maxRatio: 0, capFrames: 0, backward: 0, teleports: 0, maxJump: 0, maxAcc: 0, maxDec: 0, accOver: 0, waitFrames: 0, lagSum: 0, lagN: 0, lagMax: 0, stops: 0 };
   const prev = new Map();                                     // id -> {x, y, v, cx, cy, dist, fades}
   const kx = 111320 * Math.cos(51 * Math.PI / 180), ky = 110540;
   const cpuStart = process.hrtime.bigint();
@@ -94,7 +105,7 @@ function run(rec, opt) {
   for (; now <= tEnd; now += dtMs) {
     while (next < ev.length && ev[next].t + opt.latencyMs <= now) {
       const e = ev[next++], recv = e.t + opt.latencyMs;
-      clock.observe(e.data.serverTime, recv);
+      clock.observe(typeof e.data.serverTime === 'number' ? e.data.serverTime : e.t, recv);
       if (e.event === 'snapshot') store.applySnapshot(e.data.trains || [], recv, null);
       else store.applyUpdate(e.data.upsert, e.data.remove, recv);
     }
@@ -110,7 +121,7 @@ function run(rec, opt) {
       S.trainFrames++;
       if (opt.trace) opt.trace(r, es, now);
       const p = prev.get(r.id), dt = dtMs / 1000;
-      if (p && p.t === now - dtMs && es.fades === p.fades && es.alpha === 1) {
+      if (p && p.t === now - dtMs && es.fades === p.fades && es.alpha === 1 && p.alpha === 1) {
         const dx = (r.cx - p.x) * kx, dy = (r.cy - p.y) * ky, d = Math.hypot(dx, dy);
         const brg = r.ch * Math.PI / 180, along = dx * Math.sin(brg) + dy * Math.cos(brg);
         if (es.dist < p.dist - 1e-9) { S.backward++; if (opt.debug) opt.debug('dist', r, es, p, 0, now); }
@@ -119,6 +130,7 @@ function run(rec, opt) {
         if (d > allowed) { S.teleports++; if (d > S.maxJump) S.maxJump = d; if (opt.debug) opt.debug('teleport', r, es, p, d, now); }
         const acc = (es.v - p.v) / dt;
         if (acc > S.maxAcc) S.maxAcc = acc; if (-acc > S.maxDec) S.maxDec = -acc;
+        if (Math.abs(acc) > TARGETS.accel * 1.02 + 1e-6) { S.accOver++; if (opt.debug) opt.debug('accbound', r, es, p, acc, now); }
         if (opt.debug && (acc > 3 || -acc > 3)) opt.debug('acc', r, es, p, acc, now);
       }
       if (es.v > S.maxRatio * 0 && es.maxRatio > S.maxRatio) S.maxRatio = es.maxRatio;
@@ -131,14 +143,14 @@ function run(rec, opt) {
       }
       if (p && p.capFrames < es.capFrames) {
         S.capFrames++;
-        const vc = pl ? Math.max(pl.prof ? pl.prof.vc : 0.5, 0.5) : 1;
+        const vc = pl ? Math.max(pl.prof ? pl.prof.vc : 0.5, 0.5, es.vcp) : 1;     // the cap is against the higher cruise speed of the span left and the span entered, while slowing
         const ratio = es.v / vc;
         if (ratio > S.maxRatioCapped) S.maxRatioCapped = ratio;
         if (opt.debug && ratio > 1.55) opt.debug('ratio', r, es, p, ratio, now);
       }
       const q = p || {};
       q.t = now; q.x = r.cx; q.y = r.cy; q.v = es.v; q.dist = es.dist; q.fades = es.fades; q.capFrames = es.capFrames;
-      q.offx = es.offx; q.noff = es.offx === 0 && es.offy === 0; q.stopped = es.stopped; q.h = r.ch;
+      q.alpha = es.alpha; q.offx = es.offx; q.noff = es.offx === 0 && es.offy === 0; q.stopped = es.stopped; q.h = r.ch;
       prev.set(r.id, q);
     });
   }
@@ -146,19 +158,19 @@ function run(rec, opt) {
   const trainHours = S.trainFrames * (dtMs / 1000) / 3600;
   const out = {
     recording: { events: ev.length, spans: rec.spans.size, seconds: Math.round((tEnd - t0) / 1000), fps: opt.fps, lagMs: opt.lagMs, latencyMs: opt.latencyMs },
-    trainHours: +trainHours.toFixed(2), steps: M.steps,
+    skipped: rec.skipped, trainHours: +trainHours.toFixed(2), steps: M.steps,
     absorbed: M.steps ? M.absorbed / M.steps : 1,
     notAbsorbed: { waited: M.waited, capped: M.capped, bothOrLate: M.steps - M.absorbed - Math.max(M.waited, M.capped) },
     lateSecs: pct(M.late),
     catchUpMaxRatio: S.maxRatioCapped, anyFrameMaxRatio: S.maxRatio, catchUpFrames: S.capFrames,
     backward: S.backward,
     fades: M.fades, fadesPerTrainHour: trainHours ? M.fades / trainHours : 0,
-    teleports: S.teleports, maxJumpM: +S.maxJump.toFixed(2), maxAccel: +S.maxAcc.toFixed(2), maxDecel: +S.maxDec.toFixed(2),
+    teleports: S.teleports, maxJumpM: +S.maxJump.toFixed(2), maxAccel: +S.maxAcc.toFixed(3), maxDecel: +S.maxDec.toFixed(3), accelOver: S.accOver,
     waitShare: S.trainFrames ? S.waitFrames / S.trainFrames : 0,
     meanLagM: S.lagN ? S.lagSum / S.lagN : 0, maxLagM: S.lagMax,
     cpu: { totalMs: +cpuMs.toFixed(0), fillMsPerFrame: +(Number(engineNs) / 1e6 / S.frames).toFixed(3), trainFrames: S.trainFrames }
   };
-  out.pass = out.absorbed >= TARGETS.absorbed && out.catchUpMaxRatio <= TARGETS.catchUp + 1e-6 && out.backward === 0 && out.fadesPerTrainHour < TARGETS.fadesPerHour;
+  out.pass = out.absorbed >= TARGETS.absorbed && out.catchUpMaxRatio <= TARGETS.catchUp + 1e-6 && out.backward === 0 && out.fadesPerTrainHour < TARGETS.fadesPerHour && out.accelOver === 0;
   return out;
 }
 function pct(a) {
@@ -170,7 +182,7 @@ function pct(a) {
 function report(r) {
   const P = (v) => (v * 100).toFixed(1) + ' %', tick = (ok) => (ok ? 'PASS' : 'FAIL');
   const lines = [
-    'recording: ' + r.recording.events + ' events, ' + r.recording.spans + ' spans, ' + r.recording.seconds + ' s; ' + r.recording.fps + ' fps, render lag ' + r.recording.lagMs / 1000 + ' s, network ' + r.recording.latencyMs + ' ms',
+    'recording: ' + r.recording.events + ' events' + (r.skipped && (r.skipped.bad || r.skipped.unknown) ? ' (skipped ' + r.skipped.bad + ' unreadable, ' + r.skipped.unknown + ' of unknown kind)' : '') + ', ' + r.recording.spans + ' spans, ' + r.recording.seconds + ' s; ' + r.recording.fps + ' fps, render lag ' + r.recording.lagMs / 1000 + ' s, network ' + r.recording.latencyMs + ' ms',
     r.trainHours + ' train-hours measured, ' + r.steps + ' berth steps',
     '',
     'absorbed by re-timing alone   ' + P(r.absorbed).padStart(8) + '   target >= 90 %      ' + tick(r.absorbed >= TARGETS.absorbed),
@@ -181,7 +193,7 @@ function report(r) {
     'fades per train-hour          ' + r.fadesPerTrainHour.toFixed(3).padStart(8) + '   target < 0.1        ' + tick(r.fadesPerTrainHour < TARGETS.fadesPerHour) + '   (' + r.fades + ' fades)',
     '',
     'teleports (a move bigger than possible): ' + r.teleports + ' (largest ' + r.maxJumpM + ' m)',
-    'peak acceleration / deceleration drawn:  ' + r.maxAccel + ' / ' + r.maxDecel + ' m/s^2',
+    'acceleration / deceleration, max   ' + (r.maxAccel + ' / ' + r.maxDecel).padStart(8) + ' m/s^2   bound 1.2   ' + tick(r.accelOver === 0) + '   (' + r.accelOver + ' frames over)',
     'waiting at a signal: ' + P(r.waitShare) + ' of train-time;  drawn behind signalled position: mean ' + r.meanLagM.toFixed(1) + ' m, max ' + r.maxLagM.toFixed(0) + ' m',
     'cost: ' + r.cpu.fillMsPerFrame + ' ms per frame in store.fill (' + r.cpu.trainFrames + ' train-frames in ' + r.cpu.totalMs + ' ms)',
     '', r.pass ? 'ALL TARGETS MET' : 'TARGETS MISSED'
@@ -193,7 +205,7 @@ function arg(n, d) { const i = process.argv.indexOf('--' + n); if (i < 0) return
 if (require.main === module) {
   const file = process.argv[2] && !process.argv[2].startsWith('--') ? process.argv[2] : DEFAULT;
   const r = run(load(file), {
-    fps: Number(arg('fps', 30)), lagMs: Number(arg('lag', 10000)), latencyMs: Number(arg('latency', 100)),
+    fps: Number(arg('fps', 30)), lagMs: Number(arg('lag', 12000)), latencyMs: Number(arg('latency', 100)),
     spanLatencyMs: Number(arg('span-latency', 150)), warmupSecs: Number(arg('warmup', 60)),
     engine: arg('engine', null) ? JSON.parse(arg('engine')) : {}
   });

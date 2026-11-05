@@ -154,13 +154,15 @@
   var RAIL_IDS = ['rm-rail-case', 'rm-rail', 'rm-rail-ties'];
   var NET_IDS = ['rm-net-lo-case', 'rm-net-lo', 'rm-net-hi-case', 'rm-net-hi'];
   var NET_SOURCES = ['rm-net-lo', 'rm-net-hi'];
-  var LO_FADE = [7.7, 8.3], HI_FADE = [10.7, 11.4];
+  // Each piece fades IN over the one below it (so the line never thins during a hand-over: the lower piece
+  // stays fully drawn until the upper one is fully in), then the lower one is dropped just after.
+  var LO_FADE = [7.7, 8.3], HI_FADE = [10.7, 11.4], GONE = 0.1;
   var RAIL_MIN_ZOOM = HI_FADE[0];
   // Line width in px by zoom. Thin and calm when zoomed out (the national view must not be a scribble),
   // and unchanged from the tile layer's own curve from zoom 8 up. `core` is the line, `case` the outline.
   var WIDTH = {
-    core: [[3, 0.55], [5, 0.7], [6, 0.9], [7, 1.3], [8, 1.9], [10, 2.4], [13, 3.9], [16, 6], [19, 10]],
-    kase: [[3, 1.4], [5, 1.8], [6, 2.2], [7, 2.8], [8, 3.8], [10, 4.6], [13, 7], [16, 11], [19, 18]]
+    core: [[3, 0.9], [4, 1.1], [5, 1.3], [6, 1.6], [7, 1.9], [8, 2.2], [10, 2.6], [13, 3.9], [16, 6], [19, 10]],
+    kase: [[3, 2.0], [4, 2.4], [5, 2.8], [6, 3.2], [7, 3.6], [8, 4.0], [10, 4.8], [13, 7], [16, 11], [19, 18]]
   };
   function widthExpr(stops) {
     var e = ['interpolate', ['linear'], ['zoom']];
@@ -173,10 +175,8 @@
   function railFilter() {
     return ['all', ['==', ['get', 'class'], 'rail'], ['!', ['has', 'service']]];
   }
-  // opacity ramps: fade in over [a, b] / fade out over [a, b]
-  function fadeIn(r) { return ['interpolate', ['linear'], ['zoom'], r[0], 0, r[1], 0.92]; }
-  function fadeOut(r) { return ['interpolate', ['linear'], ['zoom'], r[0], 0.92, r[1], 0]; }
-  function fadeBoth(a, b) { return ['interpolate', ['linear'], ['zoom'], a[0], 0, a[1], 0.92, b[0], 0.92, b[1], 0]; }
+  // opacity: nothing until r[0], full from r[1] (the case outline tops out at 0.92, as it always has)
+  function rampIn(r, top) { return ['interpolate', ['linear'], ['zoom'], r[0], 0, r[1], top]; }
   function firstSymbolId(style) {
     var before = null;
     (style.layers || []).some(function (l) { if (l.type === 'symbol') { before = l.id; return true; } return false; });
@@ -192,15 +192,16 @@
     var before = firstSymbolId(style);
     var T = THEME[theme], filter = railFilter();
     RAIL_IDS.forEach(function (id) { if (map.getLayer(id)) map.removeLayer(id); });
+    var caseBefore = map.getLayer('rm-net-lo') ? 'rm-net-lo' : before;       // under the network lines too (see addNetworkLayers)
     map.addLayer({
       id: 'rm-rail-case', type: 'line', source: src, 'source-layer': 'transportation', filter: filter, minzoom: RAIL_MIN_ZOOM,
       layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: { 'line-color': T.railCase, 'line-opacity': fadeIn(HI_FADE), 'line-width': widthExpr(WIDTH.kase) }
-    }, before || undefined);
+      paint: { 'line-color': T.railCase, 'line-opacity': rampIn(HI_FADE, 0.92), 'line-width': widthExpr(WIDTH.kase) }
+    }, caseBefore || undefined);
     map.addLayer({
       id: 'rm-rail', type: 'line', source: src, 'source-layer': 'transportation', filter: filter, minzoom: RAIL_MIN_ZOOM,
       layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: { 'line-color': T.rail, 'line-opacity': ['interpolate', ['linear'], ['zoom'], HI_FADE[0], 0, HI_FADE[1], 1], 'line-width': widthExpr(WIDTH.core) }
+      paint: { 'line-color': T.rail, 'line-opacity': rampIn(HI_FADE, 1), 'line-width': widthExpr(WIDTH.core) }
     }, before || undefined);
     map.addLayer({
       id: 'rm-rail-ties', type: 'line', source: src, 'source-layer': 'transportation', filter: filter, minzoom: 13.5,
@@ -221,20 +222,29 @@
     NET_IDS.forEach(function (id) { if (map.getLayer(id)) map.removeLayer(id); });
     NET_SOURCES.forEach(function (id) { if (map.getSource(id)) map.removeSource(id); });
     var empty = { type: 'FeatureCollection', features: [] };
+    var defs = {};
     ['lo', 'hi'].forEach(function (lvl) {
       var sid = 'rm-net-' + lvl;
       map.addSource(sid, { type: 'geojson', data: netData[lvl] || empty, tolerance: lvl === 'lo' ? 0.8 : 0.4 });
-      var minzoom = lvl === 'lo' ? 0 : LO_FADE[0], maxzoom = lvl === 'lo' ? LO_FADE[1] : (always ? 24 : HI_FADE[1]);
-      var op = lvl === 'lo' ? fadeOut(LO_FADE) : fadeBoth(LO_FADE, HI_FADE);
-      var opCore = lvl === 'lo' ? ['interpolate', ['linear'], ['zoom'], LO_FADE[0], 1, LO_FADE[1], 0]
-        : ['interpolate', ['linear'], ['zoom'], LO_FADE[0], 0, LO_FADE[1], 1, HI_FADE[0], 1, HI_FADE[1], 0];
-      if (always && lvl === 'hi') { op = ['interpolate', ['linear'], ['zoom'], LO_FADE[0], 0, LO_FADE[1], 0.92]; opCore = ['interpolate', ['linear'], ['zoom'], LO_FADE[0], 0, LO_FADE[1], 1]; }
+      // lo: full from the start, dropped just after hi is fully in. hi: fades in over the lo, stays full until the
+      // tiles are fully in (or for ever with `always`), then is dropped just after.
+      var minzoom, maxzoom, opCase, opCore;
+      // Zoomed out the white outline is left off: under a line only 1-2 px wide it blends with the line's edge and makes it
+      // read pale grey, which is not the rail colour. It eases in from zoom 5 to full at zoom 8.
+      if (lvl === 'lo') { minzoom = 0; maxzoom = LO_FADE[1] + GONE; opCase = ['interpolate', ['linear'], ['zoom'], 5, 0, 8, 0.92]; opCore = 1; }
+      else { minzoom = LO_FADE[0]; maxzoom = always ? 24 : HI_FADE[1] + GONE; opCase = rampIn(LO_FADE, 0.92); opCore = rampIn(LO_FADE, 1); }
       var layout = { 'line-cap': 'round', 'line-join': 'round' };
-      map.addLayer({ id: sid + '-case', type: 'line', source: sid, minzoom: minzoom, maxzoom: maxzoom, layout: layout,
-        paint: { 'line-color': T.railCase, 'line-opacity': op, 'line-width': widthExpr(WIDTH.kase) } }, before || undefined);
-      map.addLayer({ id: sid, type: 'line', source: sid, minzoom: minzoom, maxzoom: maxzoom, layout: layout,
-        paint: { 'line-color': T.rail, 'line-opacity': opCore, 'line-width': widthExpr(WIDTH.core) } }, before || undefined);
+      defs[lvl] = {
+        kase: { id: sid + '-case', type: 'line', source: sid, minzoom: minzoom, maxzoom: maxzoom, layout: layout,
+          paint: { 'line-color': T.railCase, 'line-opacity': opCase, 'line-width': widthExpr(WIDTH.kase) } },
+        core: { id: sid, type: 'line', source: sid, minzoom: minzoom, maxzoom: maxzoom, layout: layout,
+          paint: { 'line-color': T.rail, 'line-opacity': opCore, 'line-width': widthExpr(WIDTH.core) } }
+      };
     });
+    // ALL the outlines go under ALL the lines (lo case, hi case, [the tile layer's case], lo line, hi line, [tile line]):
+    // otherwise, while one piece fades in, its white outline washes out the dark line of the piece below it.
+    map.addLayer(defs.lo.kase, before || undefined); map.addLayer(defs.hi.kase, before || undefined);
+    map.addLayer(defs.lo.core, before || undefined); map.addLayer(defs.hi.core, before || undefined);
   }
   function setNetworkData(map, level, geojson) {
     netData[level === 'lo' ? 'lo' : 'hi'] = geojson;
