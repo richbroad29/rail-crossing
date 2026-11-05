@@ -23,7 +23,7 @@ const LATLON = { AAA: { lat: 51.0, lon: -1.0 }, BBB: { lat: 51.0, lon: -0.6 } };
  * `platforms` is set (platform 2 is 50 m further, so the shortest route never picks it by itself); a route is the straight line.
  * `signals`: [{ref, d (metres along the route), onRoute (default true), direction, onWay}].
  */
-function fakeTrack({ noRoute = false, noSnap = false, platforms = false, signals = null, routeScale = 1, joins = false, noJoinRoute = false } = {}) {
+function fakeTrack({ noRoute = false, noSnap = false, platforms = false, signals = null, routeScale = 1, joins = false, noJoinRoute = false, noDirected = false, near = false } = {}) {
   const calls = { route: [], stationSnaps: [] };
   const lib = {
     calls,
@@ -41,6 +41,7 @@ function fakeTrack({ noRoute = false, noSnap = false, platforms = false, signals
       const station = opts.avoidSidings === true;
       if (station) assert.ok(Array.isArray(a) && Array.isArray(b), 'station routes are ALWAYS between arrays of snaps, never single snaps');
       else if (noJoinRoute) return null;               // a directed join (17.1, 18.5): single directed snaps
+      else if (noDirected && !Array.isArray(b)) return null;      // parallel tracks: no DIRECTED route, but a route to a nearby point exists
       if (noRoute && station) return null;
       let best = null;
       for (const x of Array.isArray(a) ? a : [a]) for (const y of Array.isArray(b) ? b : [b]) {
@@ -56,7 +57,7 @@ function fakeTrack({ noRoute = false, noSnap = false, platforms = false, signals
   if (joins) {          // what spans.js needs for continuations and gap chains: directed snaps along a route
     lib.snapAlong = (route, d) => { const [lat, lon] = lib._at(route, Math.max(0, Math.min(route.length, d))); return { edge: 1, offset: d, dir: 0, lat, lon }; };
     lib.walk = () => null;
-    lib.nearestOnTrack = () => [];
+    lib.nearestOnTrack = (lat, lon) => (near ? [{ edge: 1, offset: 0, lat, lon }] : []);
   }
   if (signals) {
     lib.signals = () => signals.map((s, i) => ({ edge: s.onRoute === false ? 2 : 1, offset: s.d, ref: s.ref, direction: s.direction || 'unknown', side: 'left', onWay: !!s.onWay, dist: 1, lat: 0, lon: 0, kind: 1, id: i }));
@@ -349,6 +350,38 @@ test('18.5 NO ROUTE between the two spans: no gap spans, counted, no throw; a ho
   const noJoins = gapWorld(['0031'], { track: fakeTrack() });                       // no snapAlong: the pass cannot run
   assert.equal(noJoins.sb.forBerth(noJoins.id('0031')), null);
   assert.equal(noJoins.sb.status().gapChains.considered, 0);
+});
+
+test('18.5 BESIDE (amendment): when no directed route exists the gap routes to the nearest reachable point near the next span\'s start, as 17.1 (b); with that unavailable too it is noRoute', () => {
+  const w = gapWorld(['0031'], { track: fakeTrack({ joins: true, noDirected: true, near: true }) });
+  assert.ok(w.sb.forBerth(w.id('0031')), 'built from the beside route');
+  const st = w.sb.status().gapChains;
+  assert.deepEqual([st.built, st.beside, st.noRoute], [1, 1, 0]);
+  const prev = pathOf(w, '0003'), mine = pathOf(w, '0031');
+  assert.ok(near(prev[prev.length - 1], mine[0]), 'still starts exactly where the previous span ends');
+  // no nearby point either: no route
+  const none = gapWorld(['0031'], { track: fakeTrack({ joins: true, noDirected: true }) });
+  assert.equal(none.sb.forBerth(none.id('0031')), null);
+  assert.deepEqual([none.sb.status().gapChains.noRoute, none.sb.status().gapChains.beside], [1, 0]);
+  // a directed route wins when there is one
+  assert.equal(gapWorld(['0031'], { track: fakeTrack({ joins: true, near: true }) }).sb.status().gapChains.beside, 0);
+});
+
+test('CHAINS stay bounded: replans do not accumulate chains nothing refers to; once the superseded spans are gone so are their chains', () => {
+  const w = gapWorld(['0031', '0033']);
+  const size0 = w.sb.chains.size;
+  const live = () => { const k = new Set(); for (const r of w.sb.byBerth.values()) k.add(r.chainKey); for (const r of w.sb.retired.values()) k.add(r.chainKey); return k; };
+  for (let round = 0; round < 6; round++) {
+    // learning moves the station berths a lot each time, so the spans (and with them the gap chain's key) change
+    for (const b of ['0001', '0003', '0005', '0021', '0022', '0023', '0025']) for (let i = 0; i < 400; i++) w.transit.add(w.id(b), 'express', 'passes', b === '0003' ? 300 + 200 * round : 300);
+    w.sb._planned.at = -Infinity; w.sb.settle();
+    assert.ok(w.sb.byBerth.get(w.id('0031')), 'the gap is still spanned');
+    for (const k of w.sb.chains.keys()) assert.ok(live().has(k), `chain ${k} is referenced by a current or retained span`);
+  }
+  assert.ok(w.sb.chains.size > size0 || w.sb.retired.size === 0, 'superseded spans keep their chains readable while they are retained');
+  w.sb.retired.clear();                                                       // they age out
+  w.sb._planned.at = -Infinity; w.sb._planned.transit = -2; w.sb.settle();
+  assert.equal(w.sb.chains.size, size0, 'nothing but the current chains is left');
 });
 
 test('18.5 + 18.2: a gap that would imply more than maxImpliedMps gets no span and is counted as tooFast; it is not an "impossible" station berth', () => {

@@ -107,8 +107,8 @@ class SpanBuilder {
     this.hasJoins = typeof track.snapAlong === 'function' && typeof track.walk === 'function' && typeof track.nearestOnTrack === 'function';
     this.signalAt = config.signalAt || 'end';
     this.pinLog = [];
-    this.gap = { active: false, cursor: 0, seen: new Set(), considered: 0, built: 0, noRoute: 0, tooFast: 0 };       // the section 18.5 pass over this plan
-    this.gapTally = { considered: 0, built: 0, noRoute: 0, tooFast: 0 };       // the last COMPLETED pass
+    this.gap = { active: false, cursor: 0, seen: new Set(), considered: 0, built: 0, beside: 0, noRoute: 0, tooFast: 0 };       // the section 18.5 pass over this plan
+    this.gapTally = { considered: 0, built: 0, beside: 0, noRoute: 0, tooFast: 0 };       // the last COMPLETED pass
     this.impossible = new Map();      // keyId -> 'berth' | 'chain': berths with NO span because the speed it implies is too high (18.2)
     this.stats = { platform: { tried: 0, used: 0, refused: 0 }, chains: 0, built: 0, noRoute: 0, noSnap: 0, recut: 0, kept: 0, shared: 0, byArea: new Map(), rules: { stop: 0, signal: 0, learned: 0, equal: 0 } };
   }
@@ -176,7 +176,7 @@ class SpanBuilder {
     this.queue = chains.slice();
     this.stats.chains = chains.length;
     this._planned = { graph: g.version, transit: this.transit.version, at: this.now() };
-    this.gap = { active: true, cursor: 0, seen: new Set(), considered: 0, built: 0, noRoute: 0, tooFast: 0 };
+    this.gap = { active: true, cursor: 0, seen: new Set(), considered: 0, built: 0, beside: 0, noRoute: 0, tooFast: 0 };
   }
 
   _needsPlan() {
@@ -383,6 +383,17 @@ class SpanBuilder {
     return out;
   }
 
+  /**
+   * `this.chains` must not grow with every replan (gap chain keys carry span ids, which change): drop a chain once no current or retained
+   * (superseded, still readable) span and no queued chain refers to it. Called at the end of each completed gap pass.
+   */
+  _pruneChains() {
+    const live = new Set(this.queue.map(c => c.key));
+    for (const r of this.byBerth.values()) live.add(r.chainKey);
+    for (const r of this.retired.values()) live.add(r.chainKey);
+    for (const k of [...this.chains.keys()]) if (!live.has(k)) { this.chains.delete(k); this.routes.delete(k); }
+  }
+
   /** A gap span (18.5) is retired: superseded, its id stays readable. A station-chain span is left alone. */
   _retireGap(keyId) {
     const old = this.byBerth.get(keyId);
@@ -402,8 +413,17 @@ class SpanBuilder {
       const pe = P ? this._ends(P) : null, ne = N ? this._ends(N) : null;
       if (!pe || !ne) return null;
       const crow = metresBetween(pe.end, ne.start);
-      const r = this.track.route(pe.end, ne.start, { avoidSidings: false, maxLength: 2 * crow + (this.cfg.joinDetourM || 500) }) || null;
-      if (!r || !(r.length > 0)) return null;
+      const maxLength = 2 * crow + (this.cfg.joinDetourM || 500);
+      let r = this.track.route(pe.end, ne.start, { avoidSidings: false, maxLength }) || null;
+      if (!r || !(r.length > 0)) {
+        // The 17.1 (b) "beside" step: parallel tracks and opposite running leave no directed route, so go to the nearest reachable point
+        // within `besideMetres` of where the next span starts, staying on a running line (the step into that berth then gets a continuation).
+        let near = [];
+        try { near = this.track.nearestOnTrack(ne.start.lat, ne.start.lon, { k: 8, maxDist: this.cfg.besideMetres || 120, avoidSidings: true }) || []; } catch (_) { near = []; }
+        r = near.length ? this.track.route(pe.end, near, { avoidSidings: false, maxLength }) || null : null;
+        if (!r || !(r.length > 0)) return null;
+        r.gapBeside = true;                                  // remembered on the (cached) route: a rebuilt chain object must still count as beside
+      }
       this.routes.set(chain.key, r);
       while (this.routes.size > (this.cfg.routeCacheEntries || 300)) this.routes.delete(this.routes.keys().next().value);
       return r;
@@ -436,6 +456,8 @@ class SpanBuilder {
     const chain = { key: `gap:${pr.id}>${nr.id}:${g.keyOf[u]}`, gap: true, berths: run, build: new Set(run), prevId: pr.id, nextId: nr.id, firstIsDep: false };
     this.chains.set(chain.key, chain);
     const r = this._build(chain);
+    const rt = this.routes.get(chain.key);
+    if (r.built && rt && rt.gapBeside) gp.beside++;
     if (r.noRoute) gp.noRoute++;
     else if (r.tooFast && !r.built) gp.tooFast++;
     if (r.built) gp.built++;
@@ -455,7 +477,8 @@ class SpanBuilder {
       if (gp.cursor < n) return;
     }
     for (const rec of [...this.byBerth.values()]) if (rec.gap && !gp.seen.has(rec.keyId)) this._retireGap(rec.keyId);
-    this.gapTally = { considered: gp.considered, built: gp.built, noRoute: gp.noRoute, tooFast: gp.tooFast };
+    this.gapTally = { considered: gp.considered, built: gp.built, beside: gp.beside, noRoute: gp.noRoute, tooFast: gp.tooFast };
+    this._pruneChains();
     gp.active = false;
   }
 
