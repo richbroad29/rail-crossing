@@ -25,7 +25,7 @@ const { Recorder } = require('./record');
 const { TrackManager } = require('./track-manager');
 const { derive } = require('./progress');
 const { buildBoard } = require('./station-board');
-const { hhmm } = require('./time');
+const { hhmm, london } = require('./time');
 const log = require('./log');
 
 const { performance } = require('perf_hooks');
@@ -65,7 +65,7 @@ class App {
     this.trackManager = null;
     this.motion = new MotionPlanner({
       spans: { forBerth: id => (this.spans ? this.spans.forBerth(id) : null) }, transit: this.transit,
-      berthInfo: (t, keyId) => this._berthInfo(t, keyId), config: config.motion
+      berthInfo: (t, keyId) => this._berthInfo(t, keyId, true), config: config.motion
     });
     this.model = new TrainModel({
       graph: this.graph, now,
@@ -238,8 +238,12 @@ class App {
     this.model.touchAct(act);
   }
 
-  /** Does this train call at the berth's station, and for how long? (sections 10 and 11) */
-  _berthInfo(t, keyId) {
+  /**
+   * Does this train call at the berth's station, and for how long? (sections 10 and 11) With `wantDepart` (the motion planner, not the
+   * transit learner), a calling train also gets `departAt`: the epoch ms of its expected departure from the station, the booked
+   * departure plus TRUST lateness when known (section 17.4; the same lateness `derive()` shows as svc.late).
+   */
+  _berthInfo(t, keyId, wantDepart = false) {
     const a = this.graph.anchors.get(keyId);
     if (a === undefined) return { beh: 'passes', dwellSecs: null };
     const m = t.svc;
@@ -249,7 +253,16 @@ class App {
     for (let i = 0; i < m.rec.n; i++) {
       if (!set.has(m.index.tiplocAt(m.rec, i))) continue;
       const p = m.index.point(m.rec, i);
-      if (p.arr >= 0 || p.dep >= 0) return { beh: 'calls', dwellSecs: p.arr >= 0 && p.dep >= 0 ? (p.dep - p.arr) * 60 : null };
+      if (p.arr >= 0 || p.dep >= 0) {
+        const info = { beh: 'calls', dwellSecs: p.arr >= 0 && p.dep >= 0 ? (p.dep - p.arr) * 60 : null };
+        if (wantDepart && p.dep >= 0) {
+          const nowSec = Math.floor(this.now() / 1000) * 1000, l = london(nowSec);
+          const day = m.act ? m.act.runDay : m.dayNum;
+          const late = m.act && m.act.lateMins !== null && m.act.lateMins !== undefined ? m.act.lateMins : 0;
+          info.departAt = Math.round(nowSec + ((p.dep + late) - ((l.dayNum - day) * 1440 + l.minutes)) * 60000);
+        }
+        return info;
+      }
       return { beh: 'passes', dwellSecs: null };
     }
     return { beh: null, dwellSecs: null };
@@ -295,7 +308,7 @@ class App {
     if (cfg.record.enabled) {
       // One rolling record per region. `regions` absent = the original single Sussex box.
       const regions = Array.isArray(cfg.record.regions) && cfg.record.regions.length ? cfg.record.regions : [{ name: 'sussex', bbox: cfg.record.bbox }];
-      this.recorders = regions.map(r => new Recorder({ config: cfg.record, name: r.name, bbox: r.bbox, dataDir: this.dataDir, sse: this.sse, snapshot: this.snapshot, now: this.now, spanFor: id => (this.spans ? this.spans.get(id) : null) }));
+      this.recorders = regions.map(r => new Recorder({ config: cfg.record, name: r.name, bbox: r.bbox, dataDir: this.dataDir, sse: this.sse, snapshot: this.snapshot, now: this.now, spanFor: id => (this.spans ? this.spans.get(id) : null), joinFor: (after, of) => (this.spans ? this.spans.continuationBody(after, of) : null) }));
       this.recorders.forEach(r => r.start());
       this.recorder = this.recorders[0];
     }
@@ -417,7 +430,7 @@ class App {
       model: { trains: c.trains, placed: c.placed, unplaced: c.unplaced, anchoredBerths: gs.anchored, learnedEdges: gs.learnedEdges },
       clients: { sse: this.sse.size },
       diagnostics: {
-        trust: this.trust.status(), vstp: this.vstp.status(), transit: { series: this.transit.size, ...this.transit.stats },
+        trust: this.trust.status(), vstp: this.vstp.status(), transit: { series: this.transit.size, approxBytes: this.transit.bytes(), ...this.transit.stats },
         spans: this.spans ? this.spans.status() : 'no track pack loaded', track: this.trackManager ? this.trackManager.status() : { loaded: !!this.track }, record: this.recorders ? this.recorders.map(r => r.status()) : null
       }
     };

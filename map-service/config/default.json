@@ -87,11 +87,12 @@
     "ringSize": 200,
     "minSamples": 5,
     "maxSeconds": 1800,
-    "maxEntries": 60000,
+    "maxEntries": 100000,
     "saveIntervalSecs": 3600
   },
   "motion": {
     "heldMinGraceSecs": 30,
+    "maxDepartDwellSecs": 3600,
     "fallbackSpeedMps": { "express": 30, "stopping": 20, "ecs": 15, "freight": 12, "other": 15 }
   },
   "spans": {
@@ -105,7 +106,12 @@
     "maxPinDeviation": 1.5,
     "stepBudgetMs": 15,
     "routeCacheEntries": 300,
-    "maxSpans": 120000
+    "maxSpans": 120000,
+    "maxJoins": 50000,
+    "sameMetres": 2,
+    "besideMetres": 120,
+    "joinDetourM": 500,
+    "endsCacheEntries": 4096
   },
   "track": {
     "enabled": true,
@@ -132,6 +138,7 @@
     "segmentSecs": 600,
     "keepSegments": 36,
     "maxSegmentBytes": 12582912,
+    "maxTrainState": 20000,
     "maxDebugClients": 2,
     "maxDebugSecs": 3600
   },

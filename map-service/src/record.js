@@ -17,9 +17,17 @@
 //   {"t":..,"event":"snapshot","data":{"serverTime":..,"feedStale":..,"trains":[Train...]}}
 //   {"t":..,"event":"update","data":{"upsert":[Train...],"remove":[id...]}}
 //   {"t":..,"event":"span","data":{"id":"sp_..","length":..,"path":[[lat,lon]...],"stop":..}}
+//   {"t":..,"event":"span","data":{"id":"sp_..","after":"sp_..","of":"sp_..","length":..,"path":[[lat,lon]...],"stop":..}}
 //   {"t":..,"event":"end","data":null}                 (debug stream only)
 // A `span` line is written BEFORE the first line that references its id (a train's mv.sp) in a segment, or in a debug stream,
 // so any one segment replays with no network: nothing has to be fetched from /span/:id.
+//
+// CONTINUATION lines (section 17.1). The second span shape is what a page would fetch as GET /span/<of>?after=<after>: per train, when
+// its recorded mv.sp changes from P to S and S does not start where P (as the page DREW it) ends, the line carries the continuation
+// span, before the line that references S. `mv.sp` itself still says S (the berth's own span); the harness resolves (after, of) from
+// these lines exactly as the page resolves them from the API, and draws the continuation instead. The per-train state is the span id the
+// page would have drawn last, so a chain of continuations names each other. It is bounded (`maxTrainState`) and reset with each
+// segment, like the seen-set, so a segment replays on its own: a train's first plan in a segment is drawn on its own span.
 
 const fs = require('fs');
 const path = require('path');
@@ -40,16 +48,63 @@ function isLocalRequest(req) {
 }
 
 const SP = /"sp":"(sp_[0-9a-f]+)"/g;
+const TRAIN_ID = /^\{"id":"([^"]+)"/;
+const TRAIN_SP = /"mv":\{"sp":"(sp_[0-9a-f]+)"/;
 
 /**
- * Builds the {t, event, data} lines, adding a `span` line the first time each span id is referenced since the last reset().
- * `write(text)` returns true when the text was kept; ids are only remembered as written then (a dropped block never leaves a
- * later line pointing at a span the file does not contain).
+ * Builds the {t, event, data} lines, adding a `span` line the first time each span id is referenced since the last reset(), and, with
+ * `joinFor`, a continuation `span` line where a train's new span does not start where the one it was drawn on ends.
+ * `write(text)` returns true when the text was kept; ids and per-train state are only remembered as written then (a dropped block
+ * never leaves a later line pointing at a span the file does not contain).
  */
 class LineMaker {
-  constructor(spanFor) { this.spanFor = spanFor; this.seen = new Set(); }
-  reset() { this.seen.clear(); }
-  _emit(t, event, dataJson, idsFrom, write) {
+  /**
+   * @param {function(string):object|null} spanFor  span id -> body
+   * @param {function(string,string):object|null} [joinFor]  (after, of) -> the continuation body when one is needed, else null
+   * @param {number} [maxTrainState]  most trains whose last drawn span is remembered (oldest forgotten first)
+   */
+  constructor(spanFor, joinFor = null, maxTrainState = 20000) {
+    this.spanFor = spanFor; this.joinFor = joinFor; this.maxTrainState = maxTrainState;
+    this.seen = new Set();
+    this.drawn = new Map();               // train id -> {sp: its recorded mv.sp, drawn: the span id the page would have drawn it on}
+  }
+  reset() { this.seen.clear(); this.drawn.clear(); }
+
+  /**
+   * The continuation lines for trains whose span changed: `trains` is [[id, mv.sp or null]]. Adds the new ids to `fresh`; returns the
+   * text and the per-train state to commit once the block is written.
+   */
+  _continuations(t, trains, fresh) {
+    let text = '';
+    const state = [];
+    for (const [id, sp] of trains) {
+      const st = this.drawn.get(id);
+      if (sp === null) { if (st) state.push([id, null]); continue; }          // no span now: the next one starts afresh
+      if (st && st.sp === sp) continue;
+      let drawn = sp;
+      if (st) {
+        let body = null;
+        try { body = this.joinFor(st.drawn, sp); } catch (_) { body = null; }
+        if (body) {
+          drawn = body.id;
+          if (!this.seen.has(body.id) && !fresh.includes(body.id)) {
+            text += `{"t":${t},"event":"span","data":${JSON.stringify({ id: body.id, after: st.drawn, of: sp, length: body.length, path: body.path, stop: body.stop })}}\n`;
+            fresh.push(body.id);
+          }
+        }
+      }
+      state.push([id, { sp, drawn }]);
+    }
+    return { text, state };
+  }
+
+  _commit(state, removed) {
+    for (const [id, v] of state) { this.drawn.delete(id); if (v) this.drawn.set(id, v); }
+    if (removed) for (const id of removed) this.drawn.delete(id);
+    while (this.drawn.size > this.maxTrainState) this.drawn.delete(this.drawn.keys().next().value);
+  }
+
+  _emit(t, event, dataJson, idsFrom, write, trains = null, removed = null) {
     let text = '';
     const fresh = [];
     if (this.spanFor && idsFrom) {
@@ -62,13 +117,29 @@ class LineMaker {
         if (sp) { text += `{"t":${t},"event":"span","data":${JSON.stringify(sp)}}\n`; fresh.push(id); }
       }
     }
+    const c = trains ? this._continuations(t, trains, fresh) : null;
+    if (c) text += c.text;
     text += `{"t":${t},"event":"${event}","data":${dataJson}}\n`;
-    if (write(text)) for (const id of fresh) this.seen.add(id);
+    if (write(text)) {
+      for (const id of fresh) this.seen.add(id);
+      if (c || removed) this._commit(c ? c.state : [], removed);
+    }
   }
-  snapshot(body, t, write) { this._emit(t, 'snapshot', body, body, write); }
+  snapshot(body, t, write) {
+    let trains = null;
+    if (this.joinFor) {
+      try { trains = JSON.parse(body).trains.map(x => [x.id, x.mv && typeof x.mv.sp === 'string' ? x.mv.sp : null]); } catch (_) { trains = null; }
+    }
+    this._emit(t, 'snapshot', body, body, write, trains);
+  }
   update(u, write) {
     const json = `{"upsert":[${u.upsert.join(',')}],"remove":${JSON.stringify(u.remove)}}`;
-    this._emit(u.serverTime, 'update', json, u.upsert.length ? json : null, write);
+    let trains = null;
+    if (this.joinFor) {
+      trains = [];
+      for (const j of u.upsert) { const a = TRAIN_ID.exec(j); if (a) { const b = TRAIN_SP.exec(j); trains.push([a[1], b ? b[1] : null]); } }
+    }
+    this._emit(u.serverTime, 'update', json, u.upsert.length ? json : null, write, trains, this.joinFor && u.remove && u.remove.length ? u.remove : null);
   }
 }
 
@@ -83,8 +154,9 @@ class Recorder {
    * @param {Snapshot} o.snapshot
    * @param {function} [o.now]
    * @param {function(string):object|null} [o.spanFor]  span id -> {id, length, path, stop} (for the `span` lines)
+   * @param {function(string,string):object|null} [o.joinFor]  (after, of) -> the continuation body when one is needed, else null
    */
-  constructor({ config, dataDir, sse, snapshot, now = Date.now, spanFor = null, name = 'sussex', bbox = null }) {
+  constructor({ config, dataDir, sse, snapshot, now = Date.now, spanFor = null, joinFor = null, name = 'sussex', bbox = null }) {
     if (!NAME_RE.test(name)) throw new Error(`record: region name "${name}" must be lower-case letters, digits and hyphens`);
     this.cfg = config; this.dir = path.join(dataDir, 'record'); this.sse = sse; this.snapshot = snapshot; this.now = now;
     this.name = name; this.prefix = `${name}-`;
@@ -93,7 +165,7 @@ class Recorder {
     this.fd = null; this.file = null; this.bytes = 0; this.segStart = 0;
     this.disabledUntil = 0;
     this.stats = { segments: 0, lines: 0, bytes: 0, droppedLines: 0, errors: 0, deleted: 0 };
-    this.maker = new LineMaker(spanFor);
+    this.maker = new LineMaker(spanFor, joinFor, config.maxTrainState || 20000);
     this.tap = { bbox: this.bbox, onUpdate: u => this._onUpdate(u) };
     this.enabled = config.enabled !== false;
     this.lastError = null;
@@ -175,7 +247,7 @@ function serveDebugRecord(app, req, res, q, sendJson) {
   app.debugTaps++;
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
   let done = false;
-  const maker = new LineMaker(app.spans ? id => app.spans.get(id) : null);
+  const maker = new LineMaker(app.spans ? id => app.spans.get(id) : null, app.spans ? (after, of) => app.spans.continuationBody(after, of) : null, cfg.maxTrainState || 20000);
   const write = text => { if (done) return false; if (res.writableLength > 1048576) { finish(); return false; } res.write(text); return true; };
   const tap = { bbox, onUpdate: u => maker.update(u, write) };
   const finish = () => {
