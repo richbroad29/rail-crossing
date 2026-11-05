@@ -393,7 +393,44 @@ At the cap, evict the least recently updated series instead of dropping new samp
 24 000 berths x their classes) fits with the service still <= 220 MB steady; report the series count and RSS after
 24 h live.
 
-### 17.6 Render delay
+### 17.6 Render delay — DECIDED: 12 s (Rich, 2026-11-05)
 
-Chosen by the lead from a sweep over all six recorded regions after 17.1-17.5, with the real feed-delay
-distribution per region (Sussex, 2026-11-05: step to page p50 1.2 s, p90 1.8 s, p95 2.0 s). Recorded here when chosen.
+Swept on all six regions after 17.1-17.5 (respanned recordings): 10/12/14/16 s give sussex 88.3/89.2/89.6/90.4 %,
+london 93.1/93.8/94.4/94.9 %, glasgow 87.1/88.0/88.5/89.5 %, manchester 78.2/79.6/80.5/81.6 % absorbed. Feed delay (step
+to service emit) is p50 1.2 s, p95 ~2 s in every region, so a longer delay buys little: what is left is prediction error
+and genuinely slow trains, not late data. Each extra second makes every train a second staler (~27 m at 60 mph).
+
+## 18. Fix round 2 (lead, 2026-11-05)
+
+### 18.1 The absorbed metric — DECIDED (Rich, 2026-11-05)
+
+A step is **slower than predicted** when the train left the berth (the next step's t0) later than the plan's `eta` by MORE
+than the render delay. No motion code could have known in time, so waiting at the wall for it is not a defect. The harness
+reports these separately and the 90 % target is measured on the other steps:
+`absorbed = absorbed steps / (all steps - slower-than-predicted steps that waited)`. It also reports the raw share, and
+calls them "slower than predicted", never "held": TD shows only that the train was slow, not why.
+
+The harness also counts a **re-appearance** as a fade: a train already drawn on the track that leaves track mode and comes
+back (re-init) fades in, which the viewer sees exactly like a fade.
+
+### 18.2 Impossible spans (service)
+
+Live respans showed 86 canonical spans over 4 km, up to 32.8 km for one berth (XA:0633, 285 m/s implied): a chain walk that
+crosses unobserved berths gives one berth the whole station-to-station route. A berth gets NO span (its trains keep phase-1
+positions) when its span length divided by its learned pass median, or the chain's route length divided by the sum of the
+chain's medians, exceeds `spans.maxImpliedMps` (default 60 m/s, a little over 125 mph). Report the count by TD area in
+`diagnostics.spans`. Measure on the respanned recordings how many fades it removes and how many steps lose track mode.
+
+### 18.3 Stay at the platform until it has left (service)
+
+A departure plan (17.4) must not run out of the platform on the clock alone. While the train has neither a TRUST departure
+report from that station nor a step out of the berth, the service re-issues its `mv` with the dwell extended (in steps of
+`motion.departExtendSecs`, default 30 s) BEFORE the current departure time is reached (the page renders 12 s behind, so an
+extension issued at the departure time itself arrives in time). A TRUST departure report ends the extension: dwell = reported
+departure time - t0. The page needs no change: a same-berth re-issue already updates dwell and eta.
+
+### 18.4 Later (phase 3)
+
+Darwin forecast departure times replace "booked + TRUST lateness" as the expected departure where Darwin has a forecast
+(they include delays announced before a train moves, which TRUST cannot).
+

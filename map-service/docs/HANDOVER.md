@@ -52,8 +52,8 @@ then the repo's `CLAUDE.md`. Product intent is the Claude Doc "UK Live Train Map
 
 ## Fix round 1 — DONE locally 2026-11-05 (read this before the older notes below)
 
-Diagnosis, design and measured results are in CONTRACT section 17. Merged on LOCAL `claude/map-service` (`4a56c8f`),
-**not pushed, not deployed**. Service 283 tests, page 221 tests + 28/28 mutations, all on Node 20.
+Diagnosis, design and measured results are in CONTRACT section 17. Merged on `claude/map-service` and **the service is DEPLOYED** (VPS `~/rail-map` at `0161a0d`, 2026-11-05 21:45 UTC;
+rollback point `cf74eaf`). The live recordings now carry continuation lines. The phase 2 PAGE is still not published. Service 283 tests, page 221 tests + 28/28 mutations, all on Node 20.
 
 Scored by re-spanning every recording made so far with this build (`map-service/dev/respan.js --state=<saved VPS state>`)
 and replaying through the new page harness. 12 s delay, before -> after:
@@ -78,11 +78,11 @@ The respan keeps recorded t0/eta, so the departure-dwell fix (17.4) is NOT in th
    XA:0633 32.8 km in 115 s (285 m/s), LN:TJ04 18 km in 58 s. A chain walk that jumps across unobserved berths gives one berth
    the whole station-to-station route. Proposed rule: no span when length / learned median implies > ~60 m/s (train glides,
    phase-1 style). Also make the harness count a re-init of an already-drawn train as a fade (it currently does not).
-2. Rich to decide: (a) render delay; (b) whether "waited" steps where the step came later than predicted + the delay (a train
-   genuinely held at a signal, drawn correctly standing) count against the 90 % target. Manchester's gap is mostly these.
-3. Deploy the service (push branch or bundle, then the deploy steps above; ask Rich), let it record a day, re-measure all
-   six regions from the LIVE recordings (which then carry continuation lines and the departure dwell), then ask Rich to
-   publish the phase 2 page. Then phase 3.
+2. DECIDED by Rich: render delay stays 12 s; "slower than predicted" waits are excluded from the 90 % target (CONTRACT 18.1).
+   Also agreed: stay at the platform until departed (18.3), Darwin forecast departures in phase 3 (18.4). Fix round 2 =
+   CONTRACT section 18.
+3. After round 2 is deployed and has recorded a day, re-measure all six regions from the LIVE recordings (no respan needed),
+   then ask Rich to publish the phase 2 page. Then phase 3.
 4. Rural regions need a full day of recording before their numbers mean anything.
 
 ## Open problem (as found 2026-11-05 morning; superseded by fix round 1 above)
