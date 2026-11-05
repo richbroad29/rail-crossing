@@ -156,18 +156,18 @@ test('store: the `after` of a chain is the id the previous berth was DRAWN on, n
 // ---- the replay harness, on a synthetic recording ----------------------------------------------------------------------
 // Three berths, 600 m each, 24 s apart, each starting 150 m (two parallel ways) from where the last one ended. The
 // recording either carries the continuation lines the recorder would write, or does not.
-function fixture(withContinuations) {
+function fixture(withContinuations, chainKeyedOnCanonical) {
   const A = wireSpan('sp_A', 51, -0.1, 600);
   const B = wireSpan('sp_B', endOf(A)[0] + 150 / 110540, endOf(A)[1], 600);
   const Bc = wireSpan('sp_AB', endOf(A)[0], endOf(A)[1], 600);                                  // after A, of B: starts where A ends
   const C = wireSpan('sp_C', endOf(B)[0] + 150 / 110540, endOf(B)[1], 600);                    // 150 m beyond where B ends
-  const Cc = wireSpan('sp_BC', endOf(Bc)[0], endOf(Bc)[1], 600);                                // after B, of C (as recorded: B is the CANONICAL id)
+  const Cc = wireSpan('sp_BC', endOf(Bc)[0], endOf(Bc)[1], 600);                                // after the continuation B was DRAWN on (sp_AB), of C: the recorder names the drawn id (CONTRACT 17.1)
   const T0 = 1800000000000, line = (t, event, data) => JSON.stringify({ t, event, data });
   const out = [];
   [A, B, C].forEach((w) => out.push(line(T0, 'span', w)));
   if (withContinuations) {
     out.push(line(T0, 'span', Object.assign({}, Bc, { after: 'sp_A', of: 'sp_B' })));
-    out.push(line(T0, 'span', Object.assign({}, Cc, { after: 'sp_B', of: 'sp_C' })));
+    out.push(line(T0, 'span', Object.assign({}, Cc, { after: chainKeyedOnCanonical ? 'sp_B' : 'sp_AB', of: 'sp_C' })));
   }
   const train = (sp, t0, eta) => wire('tr1', { mv: mv(sp, t0, eta) });
   out.push(line(T0 + 1000, 'snapshot', { serverTime: T0 + 1000, trains: [train('sp_A', T0, T0 + 24000)] }));
@@ -211,9 +211,11 @@ test('replay: continuation answers take the same simulated latency as plain span
   assert.ok(waits(20000) > 100, 'a slow answer holds the train at the end of the span: it is not drawn on the canonical span meanwhile');
 });
 
-test('replay: a continuation id the page drew can be the `after` of the next request (resolved through the recording\'s canonical ids)', () => {
-  const { drawn } = replay(fixture(true));
-  assert.ok(drawn.has('sp_BC'), 'the third berth\'s continuation was found although the page asked after sp_AB, and the line says after sp_B');
+test('replay: a chained continuation is found under the id the page DREW the previous berth on, and only there', () => {
+  assert.ok(replay(fixture(true)).drawn.has('sp_BC'), 'the line says after sp_AB, the id the page drew B on');
+  const { r, drawn } = replay(fixture(true, true));
+  assert.ok(!drawn.has('sp_BC') && drawn.has('sp_C'), 'a line keyed on the canonical sp_B is not what the page asked for: canonical kept');
+  assert.equal(r.fades, 1, 'and that join fades, as a missing answer should');
 });
 
 test('replay: recordings with no continuation lines at all replay as before (the committed ones)', () => {
