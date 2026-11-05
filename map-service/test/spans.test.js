@@ -23,7 +23,7 @@ const LATLON = { AAA: { lat: 51.0, lon: -1.0 }, BBB: { lat: 51.0, lon: -0.6 } };
  * `platforms` is set (platform 2 is 50 m further, so the shortest route never picks it by itself); a route is the straight line.
  * `signals`: [{ref, d (metres along the route), onRoute (default true), direction, onWay}].
  */
-function fakeTrack({ noRoute = false, noSnap = false, platforms = false, signals = null, routeScale = 1 } = {}) {
+function fakeTrack({ noRoute = false, noSnap = false, platforms = false, signals = null, routeScale = 1, joins = false, noJoinRoute = false, noDirected = false, near = false } = {}) {
   const calls = { route: [], stationSnaps: [] };
   const lib = {
     calls,
@@ -37,20 +37,28 @@ function fakeTrack({ noRoute = false, noSnap = false, platforms = false, signals
     },
     route(a, b, opts) {
       calls.route.push({ a, b, opts });
-      assert.ok(Array.isArray(a) && Array.isArray(b), 'routes are ALWAYS between arrays of snaps, never single snaps');
-      assert.equal(opts.avoidSidings, true);
       assert.ok(opts.maxLength > 0, 'a search bound is always given');
-      if (noRoute) return null;
+      const station = opts.avoidSidings === true;
+      if (station) assert.ok(Array.isArray(a) && Array.isArray(b), 'station routes are ALWAYS between arrays of snaps, never single snaps');
+      else if (noJoinRoute) return null;               // a directed join (17.1, 18.5): single directed snaps
+      else if (noDirected && !Array.isArray(b)) return null;      // parallel tracks: no DIRECTED route, but a route to a nearby point exists
+      if (noRoute && station) return null;
       let best = null;
-      for (const x of a) for (const y of b) {
+      for (const x of Array.isArray(a) ? a : [a]) for (const y of Array.isArray(b) ? b : [b]) {
         const len = (haversineKm(x, y) * 1000 + (x.extra || 0) + (y.extra || 0)) * routeScale;
         if (!best || len < best.length) best = { length: len, pieces: [{ e: 1, dir: 0, a: 0, b: len }], from: x, to: y, fromPt: x, toPt: y };
       }
+      if (best && !station && best.length > opts.maxLength) return null;
       return best;
     },
     slice(route, d0, d1) { return [lib._at(route, d0), lib._at(route, d1)]; },
     _at(route, d) { const t = d / route.length; return [route.fromPt.lat + (route.toPt.lat - route.fromPt.lat) * t, route.fromPt.lon + (route.toPt.lon - route.fromPt.lon) * t]; }
   };
+  if (joins) {          // what spans.js needs for continuations and gap chains: directed snaps along a route
+    lib.snapAlong = (route, d) => { const [lat, lon] = lib._at(route, Math.max(0, Math.min(route.length, d))); return { edge: 1, offset: d, dir: 0, lat, lon }; };
+    lib.walk = () => null;
+    lib.nearestOnTrack = (lat, lon) => (near ? [{ edge: 1, offset: 0, lat, lon }] : []);
+  }
   if (signals) {
     lib.signals = () => signals.map((s, i) => ({ edge: s.onRoute === false ? 2 : 1, offset: s.d, ref: s.ref, direction: s.direction || 'unknown', side: 'left', onWay: !!s.onWay, dist: 1, lat: 0, lon: 0, kind: 1, id: i }));
     lib.alongRoute = (route, edge, offset, withDir) => (edge === 1 ? (withDir ? { d: offset, reversed: !!route.reversed } : offset) : null);
@@ -133,12 +141,13 @@ test('PLATFORM: a platform the pack does not have, or a platform route that is a
 });
 
 test('PROPORTIONAL to the learned median PASS time once every berth in the chain has one', () => {
-  const w = world({ medians: { '0001': 10, '0003': 20, '0005': 30, '0007': 20, '0009': 20 } });
+  const NO_SPEED_LIMIT = { maxImpliedMps: 1e9 };       // these medians are seconds on a 28 km fake route: the cut is the subject, not 18.2
+  const w = world({ medians: { '0001': 10, '0003': 20, '0005': 30, '0007': 20, '0009': 20 }, cfg: NO_SPEED_LIMIT });
   w.sb.settle();
   [['0001', 10], ['0003', 20], ['0005', 30], ['0007', 20], ['0009', 20]].forEach(([b, m]) => assert.ok(Math.abs(w.sb.forBerth(w.id(b)).length - L * m / 100) < 1, `${b}`));
   assert.equal(w.sb.rules().cutLearned, 5);
   // One berth unlearned: it takes the MEAN of the known medians (section 17.2), not equal shares for the whole chain.
-  const w2 = world({ medians: { '0001': 10, '0003': 20, '0005': 30, '0007': 20 } });
+  const w2 = world({ medians: { '0001': 10, '0003': 20, '0005': 30, '0007': 20 }, cfg: NO_SPEED_LIMIT });
   w2.sb.settle();
   [['0001', 10], ['0003', 20], ['0005', 30], ['0007', 20], ['0009', 20]].forEach(([b, m]) => assert.ok(Math.abs(w2.sb.forBerth(w2.id(b)).length - L * m / 100) < 1, `partial ${b}`));
   assert.deepEqual([w2.sb.rules().cutLearned, w2.sb.rules().cutPartial, w2.sb.rules().cutEqual], [0, 5, 0]);
@@ -195,6 +204,239 @@ test('no route between the stops: no spans, counted; a station that will not sna
   const c = world({ track: { stationSnaps() { throw new Error('boom'); }, route() { throw new Error('boom'); }, slice() { throw new Error('boom'); } } });
   assert.doesNotThrow(() => c.sb.settle());
   assert.equal(c.sb.size, 0);
+});
+
+// ---- contract section 18.2: impossible spans -------------------------------------------------------------------------------
+
+test('18.2 a berth whose span implies more than maxImpliedMps over ITS OWN pass median gets no span; the rest of the chain keeps its own', () => {
+  // L is ~28 km over five berths. 0003 clears in 40 s, the others in 200 s.
+  const meds = { '0001': 200, '0003': 40, '0005': 200, '0007': 200, '0009': 200 };
+  const w = world({ medians: meds });
+  w.sb.settle();
+  assert.equal(w.sb.size, 5, 'cut in proportion to the medians every berth implies the same speed (route / sum of medians = 33 m/s)');
+  assert.equal(w.sb.status().impossible.berths, 0);
+  // Pinned boundaries are what make one berth long and quick: 0001 ends 1 km along and 0003 ends 12 km along (signal refs 1 and 3 = the
+  // berth ids), so 0003 is 11 km that trains clear in 40 s (275 m/s) while 0001 is 1 km in 200 s and 0005 5.3 km in 200 s.
+  const track = fakeTrack({ signals: [{ ref: '1', d: 1000 }, { ref: '3', d: 12000 }] });
+  const pinned = world({ track, medians: meds, cfg: { maxPinDeviation: 100 } });
+  pinned.sb.settle();
+  assert.equal(pinned.sb.forBerth(pinned.id('0003')), null, '11 km in 40 s: no span');
+  assert.equal(pinned.sb.byBerth.get(pinned.id('0003')), undefined);
+  assert.ok(pinned.sb.forBerth(pinned.id('0001')), 'its neighbours are judged on their own medians');
+  const imp = pinned.sb.status().impossible;
+  assert.deepEqual([imp.maxImpliedMps, imp.berths, imp.byBerth, imp.byChain], [60, 1, 1, 0]);
+  assert.deepEqual(imp.byArea, { LA: { berths: 1, byBerth: 1, byChain: 0 } }, 'counted by TD area');
+});
+
+test('18.2 a chain whose route length over the sum of its medians is too fast gets no spans at all; unlearned chains are not judged', () => {
+  const fast = { '0001': 10, '0003': 10, '0005': 10, '0007': 10, '0009': 10 };       // 28 km in 50 s
+  const w = world({ medians: fast });
+  w.sb.settle();
+  assert.equal(w.sb.size, 0);
+  const imp = w.sb.status().impossible;
+  assert.deepEqual([imp.berths, imp.byBerth, imp.byChain], [5, 0, 5]);
+  assert.equal(w.sb.status().berthsWithSpans, 0);
+  // the PARTIAL fill counts: one learned berth stands for the chain's mean
+  const partial = world({ medians: { '0003': 10 } });
+  partial.sb.settle();
+  assert.equal(partial.sb.size, 0, 'one berth at 10 s: five berths of 10 s = 28 km in 50 s');
+  assert.equal(partial.sb.status().impossible.byChain, 5);
+  // nothing learned: equal shares of nothing, no speed to test
+  const none = world();
+  none.sb.settle();
+  assert.equal(none.sb.size, 5);
+  assert.equal(none.sb.status().impossible.berths, 0);
+  // a plausible chain (28 km in 840 s = 33 m/s) is kept
+  const ok = world({ medians: { '0001': 200, '0003': 40, '0005': 200, '0007': 200, '0009': 200 } });
+  ok.sb.settle();
+  assert.equal(ok.sb.size, 5);
+});
+
+test('18.2 maxImpliedMps is the knob: a huge value turns the rule off, a lower one removes more; absent means 60', () => {
+  const meds = { '0001': 100, '0003': 100, '0005': 100, '0007': 100, '0009': 100 };      // 28 km in 500 s = 56 m/s
+  const at = cfg => { const w = world({ medians: meds, cfg }); w.sb.settle(); return w.sb.size; };
+  assert.equal(at({}), 5, '56 m/s is under the default 60');
+  assert.equal(at({ maxImpliedMps: 50 }), 0);
+  assert.equal(at({ maxImpliedMps: 1e9 }), 5);
+  assert.equal(at({ maxImpliedMps: undefined }), 5);
+});
+
+test('18.2 a span built before the medians said it was impossible is withdrawn (its id stays readable); when the medians recover it comes back', () => {
+  const slow = { '0001': 200, '0003': 200, '0005': 200, '0007': 200, '0009': 200 };
+  const w = world({ medians: slow });
+  w.sb.settle();
+  const before = w.sb.forBerth(w.id('0003'));
+  assert.ok(before);
+  // trains start clearing every berth in 10 s: the ring buffer (200) is replaced by quick samples
+  for (const b of Object.keys(slow)) for (let i = 0; i < 400; i++) w.transit.add(w.id(b), 'express', 'passes', 10);
+  w.sb._planned.at = -Infinity; w.sb.settle();
+  assert.equal(w.sb.forBerth(w.id('0003')), null, 'withdrawn: its trains fall back to phase-1 positions');
+  assert.equal(w.sb.size, 0);
+  assert.ok(w.sb.get(before.id), 'the id a page already holds still resolves');
+  assert.equal(w.sb.status().impossible.byChain, 5);
+  for (const b of Object.keys(slow)) for (let i = 0; i < 400; i++) w.transit.add(w.id(b), 'express', 'passes', 200);
+  w.sb._planned.at = -Infinity; w.sb.settle();
+  assert.ok(w.sb.forBerth(w.id('0003')), 'and it comes back');
+  assert.equal(w.sb.status().impossible.berths, 0);
+});
+
+// ---- contract section 18.5: gap chains ---------------------------------------------------------------------------------------
+
+/**
+ * Chain 1: AAA 0001 > 0003 > 0005 (arrives BBB). Chain 2: BBB 0021 > 0022 > 0023 > 0025 (arrives AAA), so 0023 starts half way along it.
+ * The gap: 0003 > g1 > ... > gk > 0023, berths no station-to-station walk crosses (0003's best-next is 0005, not g1).
+ */
+function gapWorld(gaps, { track = fakeTrack({ joins: true }), medians = {}, cfg = {}, extraRows = [] } = {}) {
+  const rows = [['LA', '0001', '0003', '111', 'D'], ['LA', '0003', '0005', '222', 'A'], ['LA', '0021', '0022', '222', 'D'], ['LA', '0022', '0023', '', ''], ['LA', '0023', '0025', '111', 'A'],
+    ...extraRows];
+  let prev = '0003';
+  for (const g of gaps) { rows.push(['LA', prev, g, '', '']); prev = g; }
+  if (gaps.length) rows.push(['LA', prev, '0023', '', '']);
+  const w = world({ rows, track, medians, cfg });
+  w.sb.settle();
+  return w;
+}
+const near = (a, b, eps = 2e-5) => Math.abs(a[0] - b[0]) < eps && Math.abs(a[1] - b[1]) < eps;
+const pathOf = (w, b) => w.sb.get(w.sb.forBerth(w.id(b)).id).path;
+
+test('18.5 SINGLE-BERTH HOLE: a berth between two spanned berths gets a gap span that starts where the previous span ends and ends where the next one starts', () => {
+  const w = gapWorld(['0031']);
+  const sp = w.sb.forBerth(w.id('0031'));
+  assert.ok(sp, 'the hole is filled');
+  const rec = w.sb.byBerth.get(w.id('0031'));
+  assert.deepEqual([rec.rule.start, rec.rule.end, sp.stop], ['gap', 'gap', null], 'a pass: no stop');
+  const prev = pathOf(w, '0003'), mine = pathOf(w, '0031'), next = pathOf(w, '0023');
+  assert.ok(near(prev[prev.length - 1], mine[0]), 'starts exactly where 0003 ends');
+  assert.ok(near(mine[mine.length - 1], next[0]), 'ends exactly where 0023 starts');
+  assert.ok(sp.length > 4000 && sp.length < 5200, `${sp.length} m: the 4.7 km between them`);
+  assert.deepEqual([w.sb.size, w.sb.status().gapChains.built, w.sb.status().gapChains.berths], [8, 1, 1]);
+  assert.equal(w.sb.byBerth.get(w.id('0003')).gap, undefined, 'the station chain berths are untouched');
+});
+
+test('18.5 MULTI-BERTH HOLE: up to maxGapBerths berths tile the route end to end; a longer hole, or a lower limit, gets none', () => {
+  const w = gapWorld(['0031', '0033', '0035', '0037']);
+  const gs = ['0031', '0033', '0035', '0037'];
+  const paths = gs.map(b => pathOf(w, b));
+  const prev = pathOf(w, '0003'), next = pathOf(w, '0023');
+  assert.ok(near(prev[prev.length - 1], paths[0][0]));
+  for (let i = 0; i + 1 < gs.length; i++) assert.ok(near(paths[i][paths[i].length - 1], paths[i + 1][0]), `${gs[i]} meets ${gs[i + 1]}`);
+  assert.ok(near(paths[3][paths[3].length - 1], next[0]));
+  const total = gs.reduce((a, b) => a + w.sb.forBerth(w.id(b)).length, 0);
+  assert.ok(total > 4000 && total < 5200);
+  gs.forEach(b => assert.equal(w.sb.byBerth.get(w.id(b)).rule.start, 'gap'));
+  assert.equal(w.sb.status().gapChains.built, 1, 'one chain');
+  // five berths is more than the default 4; three berths under a limit of 2
+  const five = gapWorld(['0031', '0033', '0035', '0037', '0039']);
+  for (const b of ['0031', '0033', '0035', '0037', '0039']) assert.equal(five.sb.forBerth(five.id(b)), null);
+  assert.equal(five.sb.status().gapChains.considered, 0);
+  const lim = gapWorld(['0031', '0033', '0035'], { cfg: { maxGapBerths: 2 } });
+  assert.equal(lim.sb.forBerth(lim.id('0031')), null);
+  const three = gapWorld(['0031', '0033', '0035'], { cfg: { maxGapBerths: 3 } });
+  assert.ok(three.sb.forBerth(three.id('0031')) && three.sb.forBerth(three.id('0035')));
+  assert.equal(gapWorld(['0031'], { cfg: { maxGapBerths: 0 } }).sb.size, 7, 'maxGapBerths 0 turns the pass off');
+});
+
+test('18.5 weights: the run is cut in proportion to its berths\' learned pass medians (the 17.2 weights)', () => {
+  const w = gapWorld(['0031', '0033'], { medians: { '0031': 300, '0033': 100 } });
+  const a = w.sb.forBerth(w.id('0031')).length, b = w.sb.forBerth(w.id('0033')).length;
+  assert.ok(Math.abs(a / b - 3) < 0.01, `${a} : ${b}`);
+});
+
+test('18.5 NO ROUTE between the two spans: no gap spans, counted, no throw; a hole with a missing library is skipped', () => {
+  const w = gapWorld(['0031'], { track: fakeTrack({ joins: true, noJoinRoute: true }) });
+  assert.equal(w.sb.forBerth(w.id('0031')), null);
+  assert.deepEqual([w.sb.status().gapChains.noRoute, w.sb.status().gapChains.built], [1, 0]);
+  assert.equal(w.sb.size, 7, 'the station chains stand');
+  const noJoins = gapWorld(['0031'], { track: fakeTrack() });                       // no snapAlong: the pass cannot run
+  assert.equal(noJoins.sb.forBerth(noJoins.id('0031')), null);
+  assert.equal(noJoins.sb.status().gapChains.considered, 0);
+});
+
+test('18.5 BESIDE (amendment): when no directed route exists the gap routes to the nearest reachable point near the next span\'s start, as 17.1 (b); with that unavailable too it is noRoute', () => {
+  const w = gapWorld(['0031'], { track: fakeTrack({ joins: true, noDirected: true, near: true }) });
+  assert.ok(w.sb.forBerth(w.id('0031')), 'built from the beside route');
+  const st = w.sb.status().gapChains;
+  assert.deepEqual([st.built, st.beside, st.noRoute], [1, 1, 0]);
+  const prev = pathOf(w, '0003'), mine = pathOf(w, '0031');
+  assert.ok(near(prev[prev.length - 1], mine[0]), 'still starts exactly where the previous span ends');
+  // no nearby point either: no route
+  const none = gapWorld(['0031'], { track: fakeTrack({ joins: true, noDirected: true }) });
+  assert.equal(none.sb.forBerth(none.id('0031')), null);
+  assert.deepEqual([none.sb.status().gapChains.noRoute, none.sb.status().gapChains.beside], [1, 0]);
+  // a directed route wins when there is one
+  assert.equal(gapWorld(['0031'], { track: fakeTrack({ joins: true, near: true }) }).sb.status().gapChains.beside, 0);
+});
+
+test('CHAINS stay bounded: replans do not accumulate chains nothing refers to; once the superseded spans are gone so are their chains', () => {
+  const w = gapWorld(['0031', '0033']);
+  const size0 = w.sb.chains.size;
+  const live = () => { const k = new Set(); for (const r of w.sb.byBerth.values()) k.add(r.chainKey); for (const r of w.sb.retired.values()) k.add(r.chainKey); return k; };
+  for (let round = 0; round < 6; round++) {
+    // learning moves the station berths a lot each time, so the spans (and with them the gap chain's key) change
+    for (const b of ['0001', '0003', '0005', '0021', '0022', '0023', '0025']) for (let i = 0; i < 400; i++) w.transit.add(w.id(b), 'express', 'passes', b === '0003' ? 300 + 200 * round : 300);
+    w.sb._planned.at = -Infinity; w.sb.settle();
+    assert.ok(w.sb.byBerth.get(w.id('0031')), 'the gap is still spanned');
+    for (const k of w.sb.chains.keys()) assert.ok(live().has(k), `chain ${k} is referenced by a current or retained span`);
+  }
+  assert.ok(w.sb.chains.size > size0 || w.sb.retired.size === 0, 'superseded spans keep their chains readable while they are retained');
+  w.sb.retired.clear();                                                       // they age out
+  w.sb._planned.at = -Infinity; w.sb._planned.transit = -2; w.sb.settle();
+  assert.equal(w.sb.chains.size, size0, 'nothing but the current chains is left');
+});
+
+test('18.5 a hole of a few metres is not a hole: the previous span ends where the next starts, so there is nothing to draw and no span is made', () => {
+  // chain 2 with a single arrival berth right where chain 1 ends: P end == N start
+  const w = gapWorld(['0031'], { cfg: { minGapMetres: 1e9 } });
+  assert.equal(w.sb.forBerth(w.id('0031')), null, 'a route no longer than minGapMetres is refused');
+  assert.equal(w.sb.status().gapChains.noRoute, 1);
+  const ok = gapWorld(['0031'], { cfg: { minGapMetres: 10 } });
+  assert.ok(ok.sb.forBerth(ok.id('0031')), 'the 4.7 km hole of the other tests is still filled');
+});
+
+test('18.5 + 18.2: a gap that would imply more than maxImpliedMps gets no span and is counted as tooFast; it is not an "impossible" station berth', () => {
+  const w = gapWorld(['0031'], { medians: { '0031': 5 } });                   // 4.7 km in 5 s
+  assert.equal(w.sb.forBerth(w.id('0031')), null);
+  const st = w.sb.status();
+  assert.deepEqual([st.gapChains.tooFast, st.gapChains.built], [1, 0]);
+  assert.equal(st.impossible.berths, 0);
+  const slow = gapWorld(['0031'], { medians: { '0031': 200 } });                // 24 m/s: fine
+  assert.ok(slow.sb.forBerth(slow.id('0031')));
+  // a station berth that 18.2 withdrew is offered to the gap pass too (here the same geometry, so the same verdict: still too fast)
+  const fakeSig = fakeTrack({ joins: true, signals: [{ ref: '1', d: 1000 }, { ref: '3', d: 12000 }] });
+  const both = gapWorld([], { track: fakeSig, medians: { '0001': 200, '0003': 40, '0005': 400 }, cfg: { maxPinDeviation: 100 } });
+  assert.equal(both.sb.forBerth(both.id('0003')), null, '18.2 removed it');
+  assert.equal(both.sb.status().impossible.byBerth, 1);
+  assert.equal(both.sb.status().gapChains.considered, 1, 'and the gap pass looked at the hole');
+  assert.equal(both.sb.status().gapChains.tooFast, 1);
+});
+
+test('18.5 never replaces a station-chain span: a berth a station chain later claims takes the station span, and a gap span whose hole closed is withdrawn', () => {
+  const w = gapWorld(['0031']);
+  const gapId = w.sb.forBerth(w.id('0031')).id;
+  assert.equal(w.sb.byBerth.get(w.id('0031')).gap, true);
+  // SMART now says trains arrive at BBB in 0031: a station chain claims it
+  w.graph.loadSmart(smartRows([['LA', '0001', '0003', '111', 'D'], ['LA', '0003', '0031', '222', 'A'], ['LA', '0021', '0022', '222', 'D'], ['LA', '0022', '0023', '', ''], ['LA', '0023', '0025', '111', 'A'],
+    ['LA', '0031', '0023', '', '']]), resolve);
+  w.sb._planned.at = -Infinity; w.sb.settle();
+  const rec = w.sb.byBerth.get(w.id('0031'));
+  assert.ok(rec && rec.gap !== true, 'the station chain 0001 > 0003 > 0031 now spans it');
+  assert.equal(rec.rule.end, 'stop');
+  assert.ok(w.sb.get(gapId), 'the superseded id still resolves');
+  // the hole closes without a station chain: the route vanishes, the gap span is withdrawn at the end of the pass
+  const w2 = gapWorld(['0031']);
+  const id2 = w2.sb.forBerth(w2.id('0031')).id;
+  w2.sb.track = fakeTrack({ joins: true, noJoinRoute: true }); w2.sb.routes.clear();
+  w2.sb._planned.at = -Infinity; w2.sb._planned.graph = -2; w2.sb.settle();
+  assert.equal(w2.sb.forBerth(w2.id('0031')), null);
+  assert.ok(w2.sb.get(id2) === null || w2.sb.get(id2).id === id2, 'a retired id never resolves to a different span');
+});
+
+test('18.5 a gap span survives a replan unchanged (same id), and a continuation can start from it like from any span', () => {
+  const w = gapWorld(['0031']);
+  const id = w.sb.forBerth(w.id('0031')).id;
+  w.sb._planned.at = -Infinity; w.sb._planned.transit = -2; w.sb.settle();
+  assert.equal(w.sb.forBerth(w.id('0031')).id, id, 'kept, not recut');
+  assert.ok(w.sb.continuation(id, w.sb.forBerth(w.id('0023')).id), 'resolves as a prev');
 });
 
 test('a berth used both to arrive and to depart ends the INCOMING span at the stop; the outgoing chain starts after it', () => {
@@ -337,7 +579,7 @@ test('WHOLE-CHAIN CUT (17.2): berths another chain already claimed still take th
   assert.equal(w.sb.size, 6, 'every berth has exactly one span');
   assert.equal(w.sb.stats.shared, 2);
   // Learned medians shape the whole cut too: chain 2's unclaimed berths have none, the claimed ones do -> 'partial'.
-  const w2 = world({ rows, medians: { '0005': 10, '0007': 50 } });
+  const w2 = world({ rows, medians: { '0005': 10, '0007': 50 }, cfg: { maxImpliedMps: 1e9 } });
   w2.sb.settle();
   assert.equal(w2.sb.byBerth.get(w2.id('0021')).rule.cutBy, 'partial');
   assert.equal(w2.sb.rules().cutPartial, w2.sb.size - 0 - w2.sb.rules().cutEqual - w2.sb.rules().cutLearned);

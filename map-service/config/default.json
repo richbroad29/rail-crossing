@@ -93,6 +93,9 @@
   "motion": {
     "heldMinGraceSecs": 30,
     "maxDepartDwellSecs": 3600,
+    "departExtendSecs": 30,
+    "departExtendLeadSecs": 5,
+    "departExtendMaxSecs": 900,
     "fallbackSpeedMps": { "express": 30, "stopping": 20, "ecs": 15, "freight": 12, "other": 15 }
   },
   "spans": {
@@ -107,6 +110,9 @@
     "stepBudgetMs": 15,
     "routeCacheEntries": 300,
     "maxSpans": 120000,
+    "maxImpliedMps": 60,
+    "maxGapBerths": 4,
+    "minGapMetres": 10,
     "maxJoins": 50000,
     "sameMetres": 2,
     "besideMetres": 120,

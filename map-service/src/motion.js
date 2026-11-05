@@ -18,8 +18,19 @@
 //          negative, at most `maxDepartDwellSecs` (3600); 0 means due to leave now. Without a booked departure it is 0, as before;
 //   held   true once  now > eta + max(30 s, p90 - median)  with no step: the train is waiting.
 //
-// `held` depends on the clock, so plan() also returns the instant it will flip: the model re-issues
-// the train then, instead of the client having to guess.
+// STAYING AT THE PLATFORM (section 18.3). A departure plan must not run out of the platform on the clock alone: with neither a TRUST
+// departure report from the station (`info.departedAt`) nor a step out of the berth, the expected departure is pushed back in steps
+// of `departExtendSecs` (30), and each step is issued `departExtendLeadSecs` (5) BEFORE the departure it replaces falls due (the page
+// draws about 12 s behind, so it has the extension long before the train would have moved). With departure D0 = t0 + the booked
+// dwell, the k-th extension is issued at D0 - lead + (k-1) x step, so the plan at any instant is a pure function of the clock:
+// k = 0 until D0 - lead, then 1 + floor((now - (D0 - lead)) / step). A TRUST departure report ends it: dwell = reported departure - t0.
+// A step ends it too: the train is then in a new berth and has a new plan. Extension stops `departExtendMaxSecs` (900) past D0, so a
+// train whose departure nobody ever reports, or whose step was missed, does not stand at the platform for ever; from there `held`
+// takes over as before. An extended eta is always later than now + lead + run, and `held` needs now > eta + grace, so extending can
+// neither flip `held` early nor loop: every `extendAt` is strictly in the future.
+//
+// `held` and the extension depend on the clock, so plan() also returns the instants they change: `heldAt` (when held flips) and
+// `extendAt` (the next extension, or null). The model re-issues the train at the earlier of the two, instead of the client guessing.
 
 const { classOf } = require('./transit');
 
@@ -47,7 +58,27 @@ class MotionPlanner {
     const dwell = calls && info.dwellSecs !== null && info.dwellSecs >= 0 ? Math.round(info.dwellSecs) : null;
     let medianSecs = null, spread = 0;
     // A train standing at its departure berth (section 17.4): wait until it is due to go, then run the span.
-    const departDwell = departure && Number.isFinite(info.departAt) ? Math.max(0, Math.min(this.cfg.maxDepartDwellSecs || 3600, Math.round((info.departAt - t.at) / 1000))) : null;
+    const maxDwell = this.cfg.maxDepartDwellSecs || 3600;
+    const dwellTo = ms => Math.max(0, Math.min(maxDwell, Math.round((ms - t.at) / 1000)));
+    const reported = departure && Number.isFinite(info.departedAt);
+    let departDwell = reported ? dwellTo(info.departedAt) : departure && Number.isFinite(info.departAt) ? dwellTo(info.departAt) : null;
+    let extendAt = null;
+    if (departDwell !== null && !reported) {
+      const step = (this.cfg.departExtendSecs === undefined ? 30 : this.cfg.departExtendSecs) * 1000;
+      const lead = (this.cfg.departExtendLeadSecs === undefined ? 5 : this.cfg.departExtendLeadSecs) * 1000;
+      const limit = (this.cfg.departExtendMaxSecs === undefined ? 900 : this.cfg.departExtendMaxSecs) * 1000;
+      if (step > 0) {
+        const d0 = t.at + departDwell * 1000;                 // the departure the clock alone would give
+        const first = d0 - lead;                              // the first extension is issued here
+        const lastAt = d0 + limit - lead;                     // none is issued after this: past it the departure stands
+        let k = nowMs >= first ? 1 + Math.floor((nowMs - first) / step) : 0;
+        const kMax = Math.floor((lastAt - first) / step) + 1;           // extensions issued by lastAt, the last one included
+        if (k > kMax) k = kMax;
+        departDwell = Math.round((d0 + k * step - t.at) / 1000);
+        const next = first + k * step;
+        extendAt = k < kMax && next > nowMs ? next : null;
+      }
+    }
     if (departDwell !== null) {
       const pass = this.transit.estimate(t.keyId, cls, 'passes');
       let run = pass ? pass.median : this.transit.passMedian(t.keyId);
@@ -55,7 +86,7 @@ class MotionPlanner {
       if (run === null) run = sp.length / ((this.cfg.fallbackSpeedMps || {})[cls] || 15);
       const eta = Math.round(t.at + (departDwell + run) * 1000);
       const heldAt = eta + Math.max((this.cfg.heldMinGraceSecs || 30), spread) * 1000;
-      return { mv: { sp: sp.id, t0: t.at, eta, stop: 0, dwell: departDwell, held: nowMs > heldAt }, heldAt };
+      return { mv: { sp: sp.id, t0: t.at, eta, stop: 0, dwell: departDwell, held: nowMs > heldAt }, heldAt, extendAt };
     }
     const own = this.transit.estimate(t.keyId, cls, calls ? 'calls' : 'passes');
     if (own) { medianSecs = own.median; spread = own.p90 - own.median; }
@@ -75,7 +106,7 @@ class MotionPlanner {
     // sp.stop === 0) it "starts standing here": stop 0 and dwell 0, never null (contract section 16). `stop: null` is a constant-speed pass.
     const stop = calls && sp.stop !== null && sp.stop !== undefined ? sp.stop : null;
     const mv = { sp: sp.id, t0: t.at, eta, stop, dwell: departure ? 0 : dwell, held: nowMs > heldAt };
-    return { mv, heldAt };
+    return { mv, heldAt, extendAt: null };
   }
 }
 

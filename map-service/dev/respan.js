@@ -4,7 +4,7 @@
 // Re-span a recording: rewrite the spans in recorded service output with THIS build's, so a change to spans.js (cuts, joins) can be
 // scored on real recordings, offline, before it is deployed.
 //
-//   node dev/respan.js --state=DIR --out=DIR [--pack=FILE] [--drawn] recording.jsonl [more.jsonl ...]
+//   node dev/respan.js --state=DIR --out=DIR [--pack=FILE] [--drawn] [--maxImpliedMps=N] [--maxGapBerths=N] recording.jsonl [more.jsonl ...]
 //
 // --state  a folder of saved VPS state: learned-graph.json, transit-times.json, smart-latest.json.gz, corpus-latest.json.gz,
 //          naptan-rail.csv and a track pack (track-pack-*.bin, or --pack=FILE). The learned graph and the learned transit times are
@@ -23,6 +23,9 @@
 //          mv.sp replaced by the span id it is drawn on (the continuation's id where one applies; the continuation span lines
 //          resolved from the file itself, exactly as the page resolves (after, of)). A harness that does not know `after`/`of` yet
 //          (the page's motion-replay before the page builder lands) can score that file and shows what the page will see.
+//
+// --maxImpliedMps / --maxGapBerths  override spans.maxImpliedMps (18.2; 1e9 turns it off) and spans.maxGapBerths (18.5; 0 turns it off), to
+//          measure each rule on its own. <out>/summary.json holds, per file, the sightings and the berths that had / lost a span.
 //
 // Prints, per file, trains seen / re-spanned / left without a span and the continuation lines written, and the join counts by how.
 
@@ -66,14 +69,17 @@ function drawnView(text) {
 
 const opt = {}, files = [];
 for (const a of process.argv.slice(2)) {
-  const m = /^--([a-z-]+)=(.*)$/.exec(a);
+  const m = /^--([A-Za-z-]+)=(.*)$/.exec(a);
   if (m) opt[m[1]] = m[2]; else if (a === '--drawn') opt.drawn = true; else if (!a.startsWith('--')) files.push(a);
 }
 if (!opt.state || !opt.out || !files.length) { console.error('usage: respan.js --state=DIR --out=DIR [--pack=FILE] [--drawn] recording.jsonl [...]'); process.exit(2); }
 
 async function buildApp(stateDir, packFile) {
   log.setSink(() => {});
-  const { config } = loadConfig({ env: {}, argv: [], overrides: { port: 0 } });
+  const spans = {};
+  if (opt.maxImpliedMps !== undefined) spans.maxImpliedMps = Number(opt.maxImpliedMps);
+  if (opt.maxGapBerths !== undefined) spans.maxGapBerths = Number(opt.maxGapBerths);
+  const { config } = loadConfig({ env: {}, argv: [], overrides: { port: 0, spans } });
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'respan-'));
   const clock = { now: Date.parse('2026-11-05T19:57:00Z') };                       // virtual: only stamps data, nothing here waits on it
   const pack = loadPack(packFile);
@@ -91,10 +97,21 @@ async function buildApp(stateDir, packFile) {
 /** One train as the recording has it, with its span replaced by this build's canonical one. Returns the JSON string, or null to leave it. */
 function respanTrain(app, t, tally) {
   tally.trains++;
-  if (!t.mv) return JSON.stringify(t);
   const k = app.graph.lookup(t.area, t.berth);
   const sp = k >= 0 ? app.spans.forBerth(k) : null;
-  if (!sp) { delete t.mv; tally.noSpan++; return JSON.stringify(t); }
+  if (!t.mv) {
+    // The recording's build had no span here. If this build has (a gap span, section 18.5), give the train the plan it would have got:
+    // the real planner over the berth's learned medians, at the step's own time. Without this a rule that ADDS spans cannot be measured.
+    if (sp && Number.isFinite(t.at)) {
+      let p = null;
+      try { p = app.motion.plan({ keyId: k, hc: t.hc, at: t.at, svc: null }, t.at); } catch (_) { p = null; }
+      if (p) { t.mv = p.mv; tally.added++; tally.had.add(`${t.area}:${t.berth}`); tally.hadAdded.add(`${t.area}:${t.berth}`); }
+    }
+    return JSON.stringify(t);
+  }
+  const bk = `${t.area}:${t.berth}`;
+  if (!sp) { delete t.mv; tally.noSpan++; tally.lost.add(bk); return JSON.stringify(t); }
+  tally.had.add(bk);
   const calls = t.mv.stop !== null && t.mv.stop !== undefined;
   t.mv.sp = sp.id;
   t.mv.stop = calls && sp.stop !== null ? Math.round(sp.stop) : null;
@@ -111,10 +128,11 @@ function respanTrain(app, t, tally) {
   fs.mkdirSync(opt.out, { recursive: true });
   const maker = new LineMaker(id => sb.get(id), (after, of) => sb.continuationBody(after, of), app.config.record.maxTrainState || 20000);
   const total = { trains: 0, respanned: 0, noSpan: 0, continuations: 0, spanLines: 0 };
+  const summary = [];
   for (const f of files) {
     const out = [];
     const write = text => { out.push(text); return true; };
-    const tally = { trains: 0, respanned: 0, noSpan: 0 };
+    const tally = { trains: 0, respanned: 0, noSpan: 0, had: new Set(), lost: new Set(), added: 0, hadAdded: new Set() };
     maker.reset();                                                               // each file replays on its own, like a recorded segment
     for (const line of fs.readFileSync(f, 'utf8').split('\n')) {
       if (!line) continue;
@@ -132,11 +150,13 @@ function respanTrain(app, t, tally) {
     const spans = (text.match(/"event":"span"/g) || []).length, conts = (text.match(/"after":"sp_/g) || []).length;
     fs.writeFileSync(path.join(opt.out, path.basename(f)), text);
     if (opt.drawn) { fs.mkdirSync(path.join(opt.out, 'drawn'), { recursive: true }); fs.writeFileSync(path.join(opt.out, 'drawn', path.basename(f)), drawnView(text)); }
-    console.error(`${path.basename(f)}: ${tally.trains} train sightings, ${tally.respanned} re-spanned, ${tally.noSpan} lost their span, ${spans} span lines (${conts} continuations)`);
+    summary.push({ file: path.basename(f), trains: tally.trains, respanned: tally.respanned, noSpan: tally.noSpan, added: tally.added, berthsAdded: [...tally.hadAdded], berthsWithSpan: [...tally.had], berthsWithout: [...tally.lost], continuations: conts });
+    console.error(`${path.basename(f)}: ${tally.trains} train sightings, ${tally.respanned} re-spanned, ${tally.noSpan} lost their span, ${tally.added} gained one, ${spans} span lines (${conts} continuations)`);
     for (const k of ['trains', 'respanned', 'noSpan']) total[k] += tally[k];
     total.spanLines += spans; total.continuations += conts;
   }
   console.error(`total: ${JSON.stringify(total)}`);
+  fs.writeFileSync(path.join(opt.out, 'summary.json'), JSON.stringify({ spans: sb.status(), files: summary }));
   console.error(`joins by how: ${JSON.stringify(sb.status().joins)}  store: ${JSON.stringify(sb.status().joinStore)}`);
   try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch (_) { /* best effort */ }
   process.exit(0);

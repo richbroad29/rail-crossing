@@ -353,13 +353,15 @@ test('SECTION 17.4: on a DEPARTURE berth dwell = seconds from t0 to the expected
   const frt = planner({ span: dep, info: { beh: 'calls', dwellSecs: 90, departAt: at + 60_000 } });
   feed(frt.store, 'freight', 'passes', [500, 500, 500, 500, 500]);
   assert.equal(frt.p.plan(train(), at).mv.eta, at + (60 + 20) * 1000, 'the fallback speed, not the freight median');
-  // clamps: due already (or overdue) is 0, never negative; a very long wait is capped at an hour
-  assert.equal(plan(at - 5 * 60_000).mv.dwell, 0);
-  assert.equal(plan(at).mv.dwell, 0);
+  // clamps: due already (or overdue) is 0 before section 18.3 extends it (one 30 s step: nothing has reported a departure), never
+  // negative; a very long wait is capped at an hour
+  assert.equal(plan(at - 5 * 60_000).mv.dwell, 30);
+  assert.equal(plan(at).mv.dwell, 30);
   assert.equal(plan(at + 5 * 3600_000).mv.dwell, 3600);
   assert.equal(plan(at + 5 * 3600_000).mv.eta, at + (3600 + 20) * 1000);
-  // held: only once the departure AND the run are past by the grace (a train standing at the platform is not held)
-  const p1 = planner({ span: dep, info: { beh: 'calls', dwellSecs: 90, departAt: at + 600_000 } }).p;
+  // held: only once the departure AND the run are past by the grace (a train standing at the platform is not held). Section 18.3 keeps a
+  // train that nobody has reported leaving standing, so with a TRUST departure report (dwell fixed) the old arithmetic is exact:
+  const p1 = planner({ span: dep, info: { beh: 'calls', dwellSecs: 90, departAt: at + 600_000, departedAt: at + 600_000 } }).p;
   assert.equal(p1.plan(train(), at + 500_000).mv.held, false, 'standing, 100 s before it is due');
   assert.equal(p1.plan(train(), at + 600_000 + 20_000 + 30_000).mv.held, false);
   const late = p1.plan(train(), at + 600_000 + 20_000 + 30_001);
@@ -401,7 +403,7 @@ test('SECTION 17.4 in the service: departAt is the booked departure plus the TRU
   } finally { await rig.stop(); }
 });
 
-test('SECTION 16 on the wire: a calling train on a departure berth is sent with mv.stop 0 and mv.dwell 0', async () => {
+test('SECTION 16 on the wire: a calling train on a departure berth is sent with mv.stop 0 and a numeric mv.dwell (an overdue, unreported departure is extended, 18.3)', async () => {
   const rig = await startRig();
   try {
     rig.td([['CC', 'LA', '1H15', null, '0006']]);                       // 1H15 calls at Southwick; 0006 is its berth
@@ -412,6 +414,116 @@ test('SECTION 16 on the wire: a calling train on a departure berth is sent with 
     await rig.settle(1300);
     const t = (await getJson(rig.port, '/map/v1/trains')).json.trains.find(x => x.hc === '1H15');
     assert.equal(t.svc.uid, 'C00001', 'matched, and it calls at Southwick');
-    assert.strictEqual(t.mv.stop, 0); assert.strictEqual(t.mv.dwell, 0);
+    assert.strictEqual(t.mv.stop, 0);
+    assert.strictEqual(t.mv.dwell, 30, 'booked 09:42, now 09:44 and nobody has reported it leaving: section 18.3 stands it at the platform for one step');
+  } finally { await rig.stop(); }
+});
+
+// ---- contract section 18.3: a departure plan stays at the platform until the train has left --------------------------------------
+
+const DEP = { id: 'sp_dep', length: 600, stop: 0 };       // run: 600 m at the express fallback of 30 m/s = 20 s
+
+test('SECTION 18.3: with nothing reported the dwell is extended in 30 s steps, each issued 5 s BEFORE the departure it replaces; a future booked departure stands until then', () => {
+  const at = 1_000_000, booked = at + 60_000;
+  const { p } = planner({ span: DEP, info: { beh: 'calls', dwellSecs: 90, departAt: booked } });
+  const at_ = now => p.plan(train(), now);
+  // booked departure in the future: the plan is the old one until 5 s before it is due
+  let r = at_(at + 1000);
+  assert.deepEqual([r.mv.dwell, r.mv.eta, r.mv.held, r.extendAt], [60, booked + 20_000, false, booked - 5000], 'the first extension is due 5 s before the booked departure');
+  assert.equal(at_(booked - 5001).mv.dwell, 60, 'one tick before the first extension: unchanged');
+  // the extension is issued at booked - 5 s: the departure moves from +60 s to +90 s, before the page (12 s behind) could have drawn it leave
+  r = at_(booked - 5000);
+  assert.deepEqual([r.mv.dwell, r.mv.eta, r.mv.stop, r.extendAt], [90, at + (90 + 20) * 1000, 0, booked + 25_000]);
+  assert.equal(at_(booked + 24_999).mv.dwell, 90);
+  assert.equal(at_(booked + 25_000).mv.dwell, 120);
+  // overdue by minutes with nothing reported: still standing, one step further each time
+  assert.equal(at_(booked + 4 * 60_000).mv.dwell, 60 + 30 * 9);
+  assert.equal(at_(booked + 4 * 60_000).mv.t0, at, 't0 never moves: only dwell and eta are re-issued');
+});
+
+test('SECTION 18.3: extending never makes held flip early and never loops: every extendAt is in the future and dwell only grows, until the cap', () => {
+  const at = 1_000_000, booked = at + 60_000;
+  const { p } = planner({ span: DEP, info: { beh: 'calls', dwellSecs: 90, departAt: booked } });
+  let lastDwell = -1, issues = 0;
+  for (let now = at; now <= booked + 15 * 60_000; now += 1000) {          // every tick across the booked time and the 15 minutes after it
+    const r = p.plan(train(), now);
+    assert.equal(r.mv.held, false, `held at +${(now - at) / 1000}s`);
+    assert.ok(r.mv.dwell >= lastDwell, 'dwell never shrinks');
+    assert.ok(r.mv.eta > now + 5000, 'the plan is always more than the lead ahead of the clock: it can never run out unannounced');
+    if (r.mv.dwell !== lastDwell && lastDwell >= 0) issues++;
+    lastDwell = r.mv.dwell;
+    if (r.extendAt !== null) assert.ok(r.extendAt > now, 'the next re-issue is strictly in the future');
+  }
+  assert.equal(issues, 31, 'one extension every 30 s from 5 s before the booked time to 15 minutes after it');
+  // the cap: 15 minutes past the booked departure the extension stops; from there held takes over exactly as before
+  const late = booked + 25 * 60_000;
+  const capped = p.plan(train(), late);
+  assert.equal(capped.extendAt, null);
+  assert.equal(capped.mv.held, true, 'a train nobody ever reported leaving is eventually held, not drawn standing for ever');
+  assert.equal(p.plan(train(), late + 1000).mv.dwell, capped.mv.dwell, 'and the plan is stable from there');
+});
+
+test('SECTION 18.3: a TRUST departure report ends the extension: dwell = reported departure - t0 (never negative, at most 3600), and held comes back', () => {
+  const at = 1_000_000, booked = at + 60_000, left = at + 200_000;
+  const { p } = planner({ span: DEP, info: { beh: 'calls', dwellSecs: 90, departAt: booked, departedAt: left } });
+  for (const now of [at + 1000, booked - 5000, booked + 60_000, left, left + 20_000]) {
+    const r = p.plan(train(), now);
+    assert.deepEqual([r.mv.dwell, r.mv.eta, r.extendAt], [200, left + 20_000, null], `at +${(now - at) / 1000}s`);
+  }
+  assert.equal(p.plan(train(), left + 20_000 + 30_000).mv.held, false);
+  assert.equal(p.plan(train(), left + 20_000 + 30_001).mv.held, true, 'reported gone, no step: the old held rule');
+  assert.equal(planner({ span: DEP, info: { beh: 'calls', dwellSecs: 90, departAt: booked, departedAt: at - 30_000 } }).p.plan(train(), at + 1000).mv.dwell, 0);
+  assert.equal(planner({ span: DEP, info: { beh: 'calls', dwellSecs: 90, departAt: booked, departedAt: at + 9 * 3600_000 } }).p.plan(train(), at + 1000).mv.dwell, 3600);
+});
+
+test('SECTION 18.3: only departure plans extend: arrival berths, passes, trains with no booked departure, and extension switched off (departExtendSecs 0)', () => {
+  const at = 1_000_000;
+  const arr = planner({ span: { id: 'sp_arr', length: 600, stop: 580 }, info: { beh: 'calls', dwellSecs: 90, departAt: at - 600_000 } }).p.plan(train(), at + 1000);
+  assert.deepEqual([arr.mv.dwell, arr.extendAt], [90, null]);
+  const pass = planner({ span: DEP, info: { beh: 'passes', dwellSecs: null, departAt: at - 600_000 } }).p.plan(train(), at + 1000);
+  assert.deepEqual([pass.mv.dwell, pass.extendAt], [null, null]);
+  const noBook = planner({ span: DEP, info: { beh: 'calls', dwellSecs: 90 } }).p.plan(train(), at + 1000);
+  assert.deepEqual([noBook.mv.dwell, noBook.extendAt], [0, null], 'no booked departure: as before');
+  const off = new MotionPlanner({ spans: { forBerth: () => DEP }, transit: new TransitStore({ minSamples: 3 }), berthInfo: () => ({ beh: 'calls', dwellSecs: 90, departAt: at - 600_000 }), config: { ...config().motion, departExtendSecs: 0 } });
+  assert.deepEqual([off.plan(train(), at + 1000).mv.dwell, off.plan(train(), at + 1000).extendAt], [0, null]);
+});
+
+test('SECTION 18.3 in the service: the departure is pushed back on the clock, a TRUST departure report fixes it, and the step out ends it', async () => {
+  const rig = await startRig();
+  try {
+    const T = require('./trust-helpers');
+    const ID = T.trainId('1H15');
+    const hh = (h, m, s = 0) => Date.UTC(2026, 10, 2, h, m, s);
+    rig.clock.now = hh(9, 39);                                            // 1H15 is booked to leave Southwick at 09:42
+    rig.td([['CC', 'LA', '1H15', null, '0006']]);
+    await until(() => rig.app.model.byId.size === 1, 2000, 'the train');
+    const g = rig.app.graph, key = g.lookup('LA', '0006'), next = g.lookup('LA', '0004');
+    rig.app.spans = { step() {}, forBerth: id => (id === key ? { id: 'sp_depart', length: 500, stop: 0 } : id === next ? { id: 'sp_next', length: 400, stop: null } : null) };
+    rig.app.model._touch([...rig.app.model.byId.values()][0]);
+    const mv = async () => (await getJson(rig.port, '/map/v1/trains')).json.trains.find(x => x.hc === '1H15').mv;
+    const at = async ms => { rig.clock.now = ms; await rig.settle(300); return mv(); };
+    let m = await at(hh(9, 39, 1));
+    assert.deepEqual([m.sp, m.stop, m.dwell], ['sp_depart', 0, 180], 'booked 09:42, three minutes from the step');
+    m = await at(hh(9, 41, 54));
+    assert.equal(m.dwell, 180, 'before 09:41:55 nothing changes');
+    m = await at(hh(9, 41, 57));
+    assert.equal(m.dwell, 210, 'issued 5 s early: the departure is now 09:42:30');
+    m = await at(hh(9, 42, 40));
+    assert.equal(m.dwell, 240, 'and again at 09:42:25: 09:43:00');
+    // TRUST: the train left Southwick at 09:42:50
+    rig.trust([T.activation({ id: ID, uid: 'C00001', originStanox: T.STANOX.LTLHMPT, depMs: hh(9, 30) }),
+      T.movement({ id: ID, stanox: T.STANOX.STHWICK, evt: 'DEPARTURE', actual: hh(9, 42, 50), planned: hh(9, 42), variation: 1 })]);
+    await rig.settle(300);
+    m = await mv();
+    assert.equal(m.dwell, 230, 'reported departure 09:42:50 minus t0 09:39:00');
+    const eta = m.eta;
+    for (const t of [hh(9, 43), hh(9, 44), hh(9, 46)]) { m = await at(t); assert.deepEqual([m.dwell, m.eta], [230, eta], 'no further extension'); }
+    // the step out: the train is in its next berth with its own plan, and the old berth's timer does nothing
+    rig.td([['CA', 'LA', '1H15', '0006', '0004']]);
+    await rig.settle(300);
+    m = await mv();
+    assert.deepEqual([m.sp, m.stop, m.dwell], ['sp_next', null, null]);
+    const t0 = m.t0;
+    for (const t of [hh(9, 47), hh(9, 50)]) { m = await at(t); assert.deepEqual([m.sp, m.t0, m.dwell], ['sp_next', t0, null]); }
   } finally { await rig.stop(); }
 });
