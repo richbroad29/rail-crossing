@@ -40,7 +40,15 @@
 //      125 mph). A chain with no learned median at all is cut in equal shares of nothing, so it has no speed to test and is kept.
 //      A span that was built before the medians said so is withdrawn the same way, and a berth that stops being impossible gets
 //      its span back at the next plan. status().impossible counts the berths and chains by TD area.
-//   5. Span ids are `sp_<hash>` of what defines the span, so they are stable; a berth is re-cut only
+//   5. GAP CHAINS (section 18.5). Junction berths, and berths no station-to-station walk crosses, are left between spanned berths:
+//      a train passing through them drops off the track and fades back in further on. After the station chains, a run of
+//      1..`maxGapBerths` (4) berths with no station-chain span, whose best-previous berth and best-next berth both have one, is routed
+//      from the previous span's END to the next span's START (directed, as the section 17.1 continuations are, within
+//      2 x the crow distance + 500 m) and cut among the run's berths with the same weights. `rule.start = rule.end = 'gap'`; the
+//      spans are passes (stop null), the 18.2 speed rule applies, and a station-chain span is never replaced (a berth that
+//      later gets one takes it). The first gap span starts exactly where the previous span ends and the last ends exactly where the
+//      next one starts. The pass runs after the station chains are cut, incrementally like them; status().gapChains reports it.
+//   6. Span ids are `sp_<hash>` of what defines the span, so they are stable; a berth is re-cut only
 //      when learning moves it by more than `recomputeFraction` (10 %) of its length, and then its id
 //      changes. Superseded ids stay readable (the page may still hold one).
 //
@@ -99,6 +107,8 @@ class SpanBuilder {
     this.hasJoins = typeof track.snapAlong === 'function' && typeof track.walk === 'function' && typeof track.nearestOnTrack === 'function';
     this.signalAt = config.signalAt || 'end';
     this.pinLog = [];
+    this.gap = { active: false, cursor: 0, seen: new Set(), considered: 0, built: 0, noRoute: 0, tooFast: 0 };       // the section 18.5 pass over this plan
+    this.gapTally = { considered: 0, built: 0, noRoute: 0, tooFast: 0 };       // the last COMPLETED pass
     this.impossible = new Map();      // keyId -> 'berth' | 'chain': berths with NO span because the speed it implies is too high (18.2)
     this.stats = { platform: { tried: 0, used: 0, refused: 0 }, chains: 0, built: 0, noRoute: 0, noSnap: 0, recut: 0, kept: 0, shared: 0, byArea: new Map(), rules: { stop: 0, signal: 0, learned: 0, equal: 0 } };
   }
@@ -166,6 +176,7 @@ class SpanBuilder {
     this.queue = chains.slice();
     this.stats.chains = chains.length;
     this._planned = { graph: g.version, transit: this.transit.version, at: this.now() };
+    this.gap = { active: true, cursor: 0, seen: new Set(), considered: 0, built: 0, noRoute: 0, tooFast: 0 };
   }
 
   _needsPlan() {
@@ -246,6 +257,7 @@ class SpanBuilder {
   _route(chain) {
     const hit = this.routes.get(chain.key);
     if (hit) { this.routes.delete(chain.key); this.routes.set(chain.key, hit); return hit; }
+    if (chain.gap) return this._gapRoute(chain);
     const a = this._snapsFor(chain.fromSt), b = this._snapsFor(chain.toSt);
     if (!a.length || !b.length) return null;
     const g = this.graph, sa = g.stations[chain.fromSt], sb = g.stations[chain.toSt];
@@ -284,7 +296,8 @@ class SpanBuilder {
     const anchor = new Map([[0, 0], [n, L]]);                        // boundary index -> metres along the route (the two stops)
     const how = new Array(n + 1).fill(null);                         // what fixed each boundary: 'stop' | 'signal'
     how[0] = how[n] = 'stop';
-    if (this.hasSignals) {
+    if (chain.gap) how.fill('gap');                                  // a gap run is cut wholly from its two end spans (rule.start = rule.end = 'gap')
+    if (this.hasSignals && !chain.gap) {
       // Candidate pins, then the largest set that keeps the boundaries in order (a stray match is dropped, not trusted).
       const pins = [];
       const slack = (this.cfg.maxPinDeviation || 1.5) * (L / n);
@@ -327,10 +340,11 @@ class SpanBuilder {
 
   _build(chain) {
     const g = this.graph;
+    const out = { noRoute: false, tooFast: false, built: 0 };
     const route = this._route(chain);
-    if (!route) { this.stats.noRoute++; return; }
+    if (!route) { this.stats.noRoute++; out.noRoute = true; return out; }
     const cut = this._cut(chain, route);
-    if (!cut) { this.stats.noRoute++; return; }
+    if (!cut) { this.stats.noRoute++; out.noRoute = true; return out; }
     const n = chain.berths.length;
     const maxMps = this._maxMps();
     const chainFast = cut.sumSecs > 0 && cut.L / cut.sumSecs > maxMps;
@@ -341,15 +355,20 @@ class SpanBuilder {
       if (!(len > 0)) continue;
       const m = cut.meds[i];
       const why = chainFast ? 'chain' : (m !== null && m > 0 && len / m > maxMps) ? 'berth' : null;
-      if (why) { this._withdraw(keyId, why); continue; }
-      this.impossible.delete(keyId);
+      if (why) {
+        out.tooFast = true;
+        if (chain.gap) this._retireGap(keyId); else this._withdraw(keyId, why);          // a gap chain's own berths are not "impossible": status() counts station chains
+        continue;
+      }
+      if (!chain.gap) this.impossible.delete(keyId);
       const last = i === n - 1, first = i === 0 && chain.firstIsDep;
-      const stop = last ? len : first ? 0 : null;
+      const stop = chain.gap ? null : last ? len : first ? 0 : null;
       const rule = { start: cut.how[i], end: cut.how[i + 1], cutBy: cut.cutBy };
       const old = this.byBerth.get(keyId);
+      if (old && chain.gap && !old.gap) continue;                           // a station-chain span is never replaced by a gap span
       if (old) {
         const moved = Math.abs(len - old.length) / old.length > (this.cfg.recomputeFraction || 0.1) || Math.abs(d0 - old.d0) / old.length > (this.cfg.recomputeFraction || 0.1) || old.chainKey !== chain.key;
-        if (!moved) { this.stats.kept++; continue; }
+        if (!moved) { this.stats.kept++; if (chain.gap) this.gap.seen.add(keyId); continue; }
         this.byId.delete(old.id);
         this.retired.set(old.id, old);
         while (this.retired.size > Math.max(1000, (this.cfg.maxSpans || 120000) / 4)) this.retired.delete(this.retired.keys().next().value);
@@ -357,9 +376,87 @@ class SpanBuilder {
       } else if (this.byBerth.size >= (this.cfg.maxSpans || 120000)) continue;
       const id = hash(`${g.keyOf[keyId]}|${chain.key}|${Math.round(d0)}|${Math.round(d1)}|${Math.round(cut.L)}`);
       const rec = { id, keyId, chainKey: chain.key, d0, d1, length: len, stop, rule };
+      if (chain.gap) { rec.gap = true; this.gap.seen.add(keyId); }
       this.byBerth.set(keyId, rec); this.byId.set(id, rec);
-      this.stats.built++;
+      this.stats.built++; out.built++;
     }
+    return out;
+  }
+
+  /** A gap span (18.5) is retired: superseded, its id stays readable. A station-chain span is left alone. */
+  _retireGap(keyId) {
+    const old = this.byBerth.get(keyId);
+    if (!old || !old.gap) return;
+    this.byBerth.delete(keyId); this.byId.delete(old.id);
+    this.retired.set(old.id, old);
+    while (this.retired.size > Math.max(1000, (this.cfg.maxSpans || 120000) / 4)) this.retired.delete(this.retired.keys().next().value);
+    this.stats.recut++;
+  }
+
+  // ---- gap chains (section 18.5) --------------------------------------------------------------------------------------
+
+  /** The directed route from the previous span's end to the next span's start, or null. Cached with the station routes. */
+  _gapRoute(chain) {
+    try {
+      const P = this._canon(chain.prevId), N = this._canon(chain.nextId);
+      const pe = P ? this._ends(P) : null, ne = N ? this._ends(N) : null;
+      if (!pe || !ne) return null;
+      const crow = metresBetween(pe.end, ne.start);
+      const r = this.track.route(pe.end, ne.start, { avoidSidings: false, maxLength: 2 * crow + (this.cfg.joinDetourM || 500) }) || null;
+      if (!r || !(r.length > 0)) return null;
+      this.routes.set(chain.key, r);
+      while (this.routes.size > (this.cfg.routeCacheEntries || 300)) this.routes.delete(this.routes.keys().next().value);
+      return r;
+    } catch (_) { return null; }
+  }
+
+  /** Is this berth cut by a station chain (a gap span does not count: it is the thing being planned)? */
+  _hasStationSpan(keyId) { const r = this.byBerth.get(keyId); return !!r && !r.gap; }
+
+  /**
+   * If berth `u` starts a run of 1..maxGapBerths berths with no station-chain span, between a berth that has one (u's best-previous) and
+   * a berth that has one (the best-next out of the run), build the gap chain over it. Never throws.
+   */
+  _gapFrom(u, maxGap) {
+    const g = this.graph, gp = this.gap;
+    if (this._hasStationSpan(u) || gp.seen.has(u)) return;
+    const P = g.bestNext(u, false);
+    if (P < 0 || P === u || !this._hasStationSpan(P)) return;
+    const run = [u];
+    let N = -1, cur = u;
+    for (;;) {
+      const nx = g.bestNext(cur, true);
+      if (nx < 0 || nx === P || run.includes(nx)) return;
+      if (this._hasStationSpan(nx)) { N = nx; break; }
+      if (run.length >= maxGap) return;
+      run.push(nx); cur = nx;
+    }
+    const pr = this.byBerth.get(P), nr = this.byBerth.get(N);
+    gp.considered++;
+    const chain = { key: `gap:${pr.id}>${nr.id}:${g.keyOf[u]}`, gap: true, berths: run, build: new Set(run), prevId: pr.id, nextId: nr.id, firstIsDep: false };
+    this.chains.set(chain.key, chain);
+    const r = this._build(chain);
+    if (r.noRoute) gp.noRoute++;
+    else if (r.tooFast && !r.built) gp.tooFast++;
+    if (r.built) gp.built++;
+  }
+
+  /** Run the gap pass for up to `until` (epoch ms); on its last berth, withdraw the gap spans this pass did not (re)build. */
+  _gapStep(until) {
+    const g = this.graph, gp = this.gap;
+    const maxGap = this.cfg.maxGapBerths === undefined ? 4 : this.cfg.maxGapBerths;
+    const n = g.keyOf.length;
+    if (maxGap > 0 && this.hasJoins) {
+      let i = 0;
+      while (gp.cursor < n) {
+        this._gapFrom(gp.cursor++, maxGap);
+        if ((++i & 63) === 0 && Date.now() >= until) break;
+      }
+      if (gp.cursor < n) return;
+    }
+    for (const rec of [...this.byBerth.values()]) if (rec.gap && !gp.seen.has(rec.keyId)) this._retireGap(rec.keyId);
+    this.gapTally = { considered: gp.considered, built: gp.built, noRoute: gp.noRoute, tooFast: gp.tooFast };
+    gp.active = false;
   }
 
   /** Section 18.2: this berth gets no span. One it already had is superseded (its id stays readable) and its trains fall back to phase 1. */
@@ -380,12 +477,13 @@ class SpanBuilder {
       const t0 = Date.now();
       let n = 0;
       while (this.queue.length && Date.now() - t0 < budgetMs) { this._build(this.queue.shift()); n++; }
+      if (!this.queue.length && this.gap.active) { this._gapStep(t0 + budgetMs); n++; }
       return n;
     } catch (_) { return 0; }
   }
 
   /** Run to completion (tests, tools). */
-  settle() { let guard = 0; while ((this._needsPlan() || this.queue.length) && guard++ < 100000) this.step(1e9); }
+  settle() { let guard = 0; while ((this._needsPlan() || this.queue.length || this.gap.active) && guard++ < 100000) this.step(1e9); }
 
   // ---- reading ------------------------------------------------------------------------------------------------------
 
@@ -548,7 +646,8 @@ class SpanBuilder {
       if (why === 'chain') { imp.byChain++; e.byChain++; } else { imp.byBerth++; e.byBerth++; }
     }
     return {
-      berthsWithSpans: this.byBerth.size, impossible: imp, chains: s.chains, queued: this.queue.length, built: s.built, noRoute: s.noRoute, noSnap: s.noSnap, recut: s.recut, kept: s.kept, sharedBerths: s.shared,
+      berthsWithSpans: this.byBerth.size, impossible: imp,
+      gapChains: { ...this.gapTally, berths: [...this.byBerth.values()].filter(r => r.gap).length, running: this.gap.active }, chains: s.chains, queued: this.queue.length, built: s.built, noRoute: s.noRoute, noSnap: s.noSnap, recut: s.recut, kept: s.kept, sharedBerths: s.shared,
       rules: this.rules(),
       joins: { same: j.same, direct: j.direct, beside: j.beside, straight: j.straight, fallback: j.fallback },
       joinStore: { size: this.joins.size, max: this.cfg.maxJoins || 50000, unknownPrev: j.unknownPrev, evicted: j.evicted },

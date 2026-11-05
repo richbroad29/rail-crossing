@@ -111,6 +111,7 @@
     "routeCacheEntries": 300,
     "maxSpans": 120000,
     "maxImpliedMps": 60,
+    "maxGapBerths": 4,
     "maxJoins": 50000,
     "sameMetres": 2,
     "besideMetres": 120,
