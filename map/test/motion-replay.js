@@ -14,12 +14,21 @@
 //   absorbed     share of berth steps absorbed by re-timing alone: between the step arriving and the drawn
 //                train crossing into the new span it never stopped to wait for the step and never needed
 //                the catch-up limit, so the whole correction was a gentle change of speed.   target >= 90 %
+//                CONTRACT 18.1: measured on the steps that were not SLOWER THAN PREDICTED. A step is slower than
+//                predicted when the train left the berth (the next step's t0) later than the plan's `eta` by more
+//                than the render delay: no motion code could have known, so a wait for it is not a defect.
+//                absorbed = absorbed steps / (all steps - slower-than-predicted steps that waited). The raw share
+//                (all steps in the denominator) is reported as absorbedRaw. TD shows only that the train was slow,
+//                not why: the word is "slower than predicted", never "held".
 //   catch-up     the highest speed, as a multiple of the span's cruise speed, in any frame where the
 //                catch-up limit was in force.                                                target <= 1.5x
 //   backward     frames in which a train moved backwards along its own heading by more than 2.5 m (spans are
 //                rounded to 5 dp, so adjacent span ends differ by up to ~2 m), or in which the distance
 //                travelled along the track decreased.                                              target 0
-//   fades        position fades (a jump of more than 2 km) per train-hour.                    target < 0.1
+//   fades        fades per train-hour, of three kinds: a GAP between consecutive spans that do not meet, a train
+//                BEHIND its reference by more than fadeM, and a RE-APPEARANCE (CONTRACT 18.1): a train already
+//                drawn on the track that left track mode and re-initialised. A train's first appearance is not a
+//                fade.                                                                         target < 0.1
 // and, not targets but what the viewer sees: teleports (a frame-to-frame move bigger than the train
 // could have made), peak acceleration, the share of train-time spent waiting at a signal, and how far
 // behind the signalled position the drawn trains run.
@@ -87,10 +96,21 @@ function run(rec, opt) {
     hasFailed(id) { const at = asked.get(id); return at != null && now >= at && id.indexOf('>') >= 0 && !contRaw(id); },
     need(id) { if (!asked.has(id)) asked.set(id, now + opt.spanLatencyMs); }
   };
-  const M = { steps: 0, absorbed: 0, waited: 0, capped: 0, late: [], fades: 0, inits: 0 };
-  let measuring = false;
+  const M = { steps: 0, absorbed: 0, waited: 0, capped: 0, late: [], fades: 0, fadesGap: 0, fadesBehind: 0, reappear: 0, reappearSlid: 0, readded: 0, inits: 0, slower: 0, slowerWaited: 0, slowerGapSecs: [] };
+  let measuring = false, curPlans = null;
+  // The engine's events carry the transition's index (info.k) but not the plans. The page's motion code is not changed for the
+  // harness's sake: run() wraps engine.advance (which motion.js calls through the module object) to remember the plans it was
+  // called with while an event fires, and puts the original back when the run ends.
+  const origAdvance = engine.advance;
+  engine.advance = function (prev, plans) { curPlans = plans; return origAdvance.apply(this, arguments); };
+  // Re-appearance bookkeeping. An init event carries only the engine state, so new states are collected as they fire and
+  // matched to their train record after the frame's fill. `inited` is the records initialised before (a record is one train's
+  // life in the store: a train the service removed and later re-adds is a new record, counted apart as `readded`, not as a
+  // fade: it vanished rather than leaving track mode).
+  const newInits = [], inited = new Map(), everInitId = new Set(), pendingFade = new Map();
   const cfg = Object.assign({ lagMs: opt.lagMs }, opt.engine, {
     onEvent(type, es, info) {
+      if (type === 'init') newInits.push({ es, measured: measuring });
       if (!measuring) return;
       if (opt.onEvent) opt.onEvent(type, es, info);
       if (type === 'transition') {
@@ -99,7 +119,16 @@ function run(rec, opt) {
         if (info.capped) M.capped++;
         M.late.push(info.late);
         if (!info.waited && !info.capped) M.absorbed++;
-      } else if (type === 'fade') M.fades++;
+        // CONTRACT 18.1: slower than predicted = the next step's t0 is later than this plan's eta by MORE than the render delay
+        const a = curPlans && curPlans[info.k], b = curPlans && curPlans[info.k + 1];
+        if (a && b && typeof a.eta === 'number' && typeof b.t0 === 'number') {
+          const over = b.t0 - a.eta;
+          if (over > opt.lagMs) { M.slower++; M.slowerGapSecs.push(over / 1000); if (info.waited) M.slowerWaited++; }
+        }
+      } else if (type === 'fade') {
+        M.fades++;
+        if (info && typeof info.gap === 'number') M.fadesGap++; else M.fadesBehind++;
+      }
       else if (type === 'init') M.inits++;
     }
   });
@@ -128,6 +157,19 @@ function run(rec, opt) {
     store.fill(now, null);
     engineNs += process.hrtime.bigint() - a;
     S.frames++;
+    if (newInits.length) {
+      const owner = new Map();
+      store.forEach((r) => { if (r.es) owner.set(r.es, r); });
+      newInits.forEach((n) => {
+        const r = owner.get(n.es);
+        if (!r) return;
+        if (inited.has(r)) { if (n.measured) { M.reappear++; M.fades++; pendingFade.set(r, true); } }       // the same record, initialised before: it left track mode and came back
+        else { if (everInitId.has(r.id) && n.measured) M.readded++; inited.set(r, true); everInitId.add(r.id); }
+      });
+      newInits.length = 0;
+    }
+    // a re-appearance within slideM of where the train was drawn slides in with no fade; further, it fades in (motion.js track())
+    if (pendingFade.size) pendingFade.forEach((_, r) => { if (r.es && r.es.init && r.mode === 'track') { if (r.es.alpha === 1 && r.es.fade === 0) M.reappearSlid++; pendingFade.delete(r); } });
     if (!measuring) continue;
     store.forEach((r) => {
       const es = r.es;
@@ -168,17 +210,27 @@ function run(rec, opt) {
       prev.set(r.id, q);
     });
   }
+  engine.advance = origAdvance;
   const cpuMs = Number(process.hrtime.bigint() - cpuStart) / 1e6;
   const trainHours = S.trainFrames * (dtMs / 1000) / 3600;
   const out = {
     recording: { events: ev.length, spans: rec.spans.size, continuations: rec.conts ? rec.conts.size : 0, seconds: Math.round((tEnd - t0) / 1000), fps: opt.fps, lagMs: opt.lagMs, latencyMs: opt.latencyMs },
     skipped: rec.skipped, trainHours: +trainHours.toFixed(2), steps: M.steps,
-    absorbed: M.steps ? M.absorbed / M.steps : 1,
+    // CONTRACT 18.1: `absorbed` is the headline the target is measured on (slower-than-predicted steps that waited are out of the
+    // denominator); `absorbedRaw` is the share of all steps, which is what `absorbed` was before 18.1.
+    absorbed: M.steps - M.slowerWaited > 0 ? M.absorbed / (M.steps - M.slowerWaited) : 1,
+    absorbedRaw: M.steps ? M.absorbed / M.steps : 1,
+    slowerThanPredicted: { steps: M.slower, waited: M.slowerWaited, overSecs: pct(M.slowerGapSecs) },
+    counts: { absorbed: M.absorbed, waited: M.waited, capped: M.capped },
     notAbsorbed: { waited: M.waited, capped: M.capped, bothOrLate: M.steps - M.absorbed - Math.max(M.waited, M.capped) },
     lateSecs: pct(M.late),
     catchUpMaxRatio: S.maxRatioCapped, anyFrameMaxRatio: S.maxRatio, catchUpFrames: S.capFrames,
     backward: S.backward,
     fades: M.fades, fadesPerTrainHour: trainHours ? M.fades / trainHours : 0,
+    // fades = gap + behind + reappearance. reappearancesSlid: re-appearances within slideM of where the train was drawn, which slid in
+    // with no visible fade (still counted above, per CONTRACT 18.1; subtract to see the strictly visible ones). readded: the service
+    // removed the train and later added it again (not a fade, not counted above).
+    fadeKinds: { gap: M.fadesGap, behind: M.fadesBehind, reappearance: M.reappear, reappearancesSlid: M.reappearSlid, readded: M.readded },
     teleports: S.teleports, maxJumpM: +S.maxJump.toFixed(2), maxAccel: +S.maxAcc.toFixed(3), maxDecel: +S.maxDec.toFixed(3), accelOver: S.accOver,
     waitShare: S.trainFrames ? S.waitFrames / S.trainFrames : 0,
     meanLagM: S.lagN ? S.lagSum / S.lagN : 0, maxLagM: S.lagMax,
@@ -186,6 +238,21 @@ function run(rec, opt) {
   };
   out.pass = out.absorbed >= TARGETS.absorbed && out.catchUpMaxRatio <= TARGETS.catchUp + 1e-6 && out.backward === 0 && out.fadesPerTrainHour < TARGETS.fadesPerHour && out.accelOver === 0;
   return out;
+}
+// Sums several run() results (e.g. the ten-minute recordings of one region) from the raw counts, never by averaging ratios.
+function aggregate(list) {
+  const A = { files: list.length, trainHours: 0, steps: 0, absorbedSteps: 0, waited: 0, capped: 0, slower: 0, slowerWaited: 0, fades: 0, fadesGap: 0, fadesBehind: 0, reappearance: 0, reappearancesSlid: 0, readded: 0, backward: 0, teleports: 0, accelOver: 0, catchUpMaxRatio: 0, trainFrames: 0 };
+  list.forEach((r) => {
+    A.trainHours += r.trainHours; A.steps += r.steps; A.absorbedSteps += r.counts.absorbed; A.waited += r.counts.waited; A.capped += r.counts.capped;
+    A.slower += r.slowerThanPredicted.steps; A.slowerWaited += r.slowerThanPredicted.waited;
+    A.fades += r.fades; A.fadesGap += r.fadeKinds.gap; A.fadesBehind += r.fadeKinds.behind; A.reappearance += r.fadeKinds.reappearance; A.reappearancesSlid += r.fadeKinds.reappearancesSlid; A.readded += r.fadeKinds.readded;
+    A.backward += r.backward; A.teleports += r.teleports; A.accelOver += r.accelOver; A.trainFrames += r.cpu.trainFrames;
+    if (r.catchUpMaxRatio > A.catchUpMaxRatio) A.catchUpMaxRatio = r.catchUpMaxRatio;
+  });
+  A.absorbedRaw = A.steps ? A.absorbedSteps / A.steps : 1;
+  A.absorbed = A.steps - A.slowerWaited > 0 ? A.absorbedSteps / (A.steps - A.slowerWaited) : 1;
+  A.fadesPerTrainHour = A.trainHours ? A.fades / A.trainHours : 0;
+  return A;
 }
 function pct(a) {
   if (!a.length) return null;
@@ -199,12 +266,13 @@ function report(r) {
     'recording: ' + r.recording.events + ' events' + (r.skipped && (r.skipped.bad || r.skipped.unknown) ? ' (skipped ' + r.skipped.bad + ' unreadable, ' + r.skipped.unknown + ' of unknown kind)' : '') + ', ' + r.recording.spans + ' spans' + (r.recording.continuations ? ' + ' + r.recording.continuations + ' continuations' : '') + ', ' + r.recording.seconds + ' s; ' + r.recording.fps + ' fps, render lag ' + r.recording.lagMs / 1000 + ' s, network ' + r.recording.latencyMs + ' ms',
     r.trainHours + ' train-hours measured, ' + r.steps + ' berth steps',
     '',
-    'absorbed by re-timing alone   ' + P(r.absorbed).padStart(8) + '   target >= 90 %      ' + tick(r.absorbed >= TARGETS.absorbed),
+    'absorbed by re-timing alone   ' + P(r.absorbed).padStart(8) + '   target >= 90 %      ' + tick(r.absorbed >= TARGETS.absorbed) + '   (of the steps not slower than predicted)',
+    '  raw, all steps: ' + P(r.absorbedRaw) + ';  slower than predicted (left the berth more than ' + r.recording.lagMs / 1000 + ' s after the plan\'s eta): ' + r.slowerThanPredicted.steps + ' steps, ' + r.slowerThanPredicted.waited + ' of them waited and are out of the headline',
     '  (steps that waited at a signal: ' + r.notAbsorbed.waited + ', that hit the catch-up cap: ' + r.notAbsorbed.capped + '; seconds the drawn train crossed after the step p5/p50/p95/max: ' +
       (r.lateSecs ? [r.lateSecs.p5, r.lateSecs.p50, r.lateSecs.p95, r.lateSecs.max].join('/') : 'n/a') + ')',
     'catch-up speed, max           ' + (r.catchUpMaxRatio.toFixed(3) + 'x').padStart(8) + '   target <= 1.5x      ' + tick(r.catchUpMaxRatio <= TARGETS.catchUp + 1e-6) + '   (' + r.catchUpFrames + ' capped frames)',
     'backward moves                ' + String(r.backward).padStart(8) + '   target 0            ' + tick(r.backward === 0),
-    'fades per train-hour          ' + r.fadesPerTrainHour.toFixed(3).padStart(8) + '   target < 0.1        ' + tick(r.fadesPerTrainHour < TARGETS.fadesPerHour) + '   (' + r.fades + ' fades)',
+    'fades per train-hour          ' + r.fadesPerTrainHour.toFixed(3).padStart(8) + '   target < 0.1        ' + tick(r.fadesPerTrainHour < TARGETS.fadesPerHour) + '   (' + r.fades + ' fades: ' + r.fadeKinds.gap + ' gap, ' + r.fadeKinds.behind + ' behind, ' + r.fadeKinds.reappearance + ' re-appearance)',
     '',
     'teleports (a move bigger than possible): ' + r.teleports + ' (largest ' + r.maxJumpM + ' m)',
     'acceleration / deceleration, max   ' + (r.maxAccel + ' / ' + r.maxDecel).padStart(8) + ' m/s^2   bound 1.2   ' + tick(r.accelOver === 0) + '   (' + r.accelOver + ' frames over)',
@@ -226,4 +294,4 @@ if (require.main === module) {
   console.log(arg('json', false) ? JSON.stringify(r, null, 2) : report(r));
   process.exit(r.pass || arg('no-fail', false) ? 0 : 1);
 }
-module.exports = { run, load, report, TARGETS, DEFAULT };
+module.exports = { run, load, report, aggregate, TARGETS, DEFAULT };
