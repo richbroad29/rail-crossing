@@ -11,6 +11,11 @@
 // node"; its g is the metres from the start snap to that far node. A* by length; the heuristic is the
 // straight-line distance from that node to the goal point, scaled with the SMALLER longitude scale of
 // the two latitudes so it never overestimates.
+//
+// DIRECTED SNAPS (contract section 17.1). A snap may carry `dir`: 0 = the train travels towards increasing edge
+// offset, 1 = towards decreasing. As a SOURCE the route must leave along that direction; as a GOAL it must arrive
+// travelling that way. A snap without `dir` is free, exactly as before. snapAlongRoute() makes a directed snap at a
+// distance along a route, and walkStraight() follows the track straight on from one.
 
 const F = require('./format');
 const { KY, DEG7, kxAt, bearing7, angDiff, RAD } = require('./geom');
@@ -71,6 +76,7 @@ function routeBetween(pack, from, to, opts) {
   const goals = tos.map(t => ({ snap: t, e: t.edge, o: Math.max(0, Math.min(lenOf(t.edge), t.offset)), lat: Math.round(t.lat * 1e7), lon: Math.round(t.lon * 1e7) }));
   const goalsAt = new Map();
   for (const g of goals) { const l = goalsAt.get(g.e); if (l) l.push(g); else goalsAt.set(g.e, [g]); }
+  const dirOf = x => (x.snap.dir === 0 || x.snap.dir === 1 ? x.snap.dir : -1);       // -1: free
   const srcEdges = new Set(srcs.map(s => s.e));
   const maxLen = opts.maxLength === undefined ? Infinity : opts.maxLength;
   const mk = (length, pieces, src, goal) => ({ length, pieces: pieces.filter(p => Math.abs(p.b - p.a) > 1e-6 || pieces.length === 1), from: src.snap, to: goal.snap, _geom: null });
@@ -78,7 +84,8 @@ function routeBetween(pack, from, to, opts) {
   // the same edge: a straight run along it (always the shortest between two points of one edge)
   let best = null, bestCost = maxLen;
   for (const s of srcs) for (const g of goalsAt.get(s.e) || []) {
-    const c = Math.abs(g.o - s.o);
+    const c = Math.abs(g.o - s.o), dd = g.o >= s.o ? 0 : 1;
+    if (c > 1e-9 && ((dirOf(s) >= 0 && dirOf(s) !== dd) || (dirOf(g) >= 0 && dirOf(g) !== dd))) continue;     // directed ends: only a run the train can make
     if (c < bestCost) { bestCost = c; best = { direct: true, s, g }; }
   }
 
@@ -112,6 +119,7 @@ function routeBetween(pack, from, to, opts) {
   };
   for (const s of srcs) {
     for (const dir of [0, 1]) {
+      if (dirOf(s) >= 0 && dirOf(s) !== dir) continue;
       const d = s.e * 2 + dir, cost = dir ? s.o : lenOf(s.e) - s.o;
       if (cost >= bestCost) continue;
       if (st[d] === gen * 2 && gArr[d] <= cost) continue;
@@ -138,6 +146,7 @@ function routeBetween(pack, from, to, opts) {
       if (gl) {
         const len2 = lenOf(e2);
         for (const g of gl) {
+          if (dirOf(g) >= 0 && dirOf(g) !== (d2 & 1)) continue;                 // arrives the wrong way along the goal's edge
           const cost = gd + ((d2 & 1) ? len2 - g.o : g.o);
           if (cost < bestCost) { bestCost = cost; bestPrev = d; bestDir = d2 & 1; bestGoal = g; best = { direct: false }; }
         }
@@ -266,4 +275,62 @@ function alongRoute(pack, route, edge, offset, withDir = false) {
   return null;
 }
 
-module.exports = { routeBetween, sliceRoute, pointOnRoute, alongRoute };
+/**
+ * A DIRECTED snap {edge, offset, dir, lat, lon} at distance d (metres, clamped to the route) along it: the edge the route is on
+ * there, the offset on that edge, and which way the route runs along it (0 = increasing offset). At a boundary between two edges
+ * it is the END of the earlier one. Null for a route with no pieces.
+ */
+function snapAlongRoute(pack, route, d) {
+  const ps = route.pieces;
+  if (!ps || !ps.length) return null;
+  const dd = Math.max(0, Math.min(route.length, d));
+  let base = 0;
+  for (let i = 0; i < ps.length; i++) {
+    const p = ps[i], len = Math.abs(p.b - p.a);
+    if (dd <= base + len + 1e-6 || i === ps.length - 1) {
+      const dir = p.b >= p.a ? 0 : 1;
+      const off = p.a + (dir ? -1 : 1) * Math.min(len, Math.max(0, dd - base));
+      const at = atOffset(pack, p.e, off);
+      return { edge: p.e, offset: off, dir, lat: at[0] * DEG7, lon: at[1] * DEG7 };
+    }
+    base += len;
+  }
+  return null;
+}
+
+/**
+ * Follow the track STRAIGHT ON from a directed snap for `distance` metres: at each node the edge with the smallest turn (never over
+ * `maxDeflection` degrees, default 100; never back along the edge just used; never a siding or yard). Stops early where the track
+ * ends or no edge qualifies. Returns a route ({length, pieces, from: null, to: null}) usable with slice / pointAt / snapAlongRoute,
+ * or null when it cannot move at least a metre.
+ */
+function walkStraight(pack, from, distance, opts = {}) {
+  if (!from || !Number.isFinite(from.edge) || !Number.isFinite(from.offset) || !(from.dir === 0 || from.dir === 1)) throw new TypeError('walk(): the start must be a directed snap ({edge, offset, dir})');
+  const { efrom, eto, ecls, adjo, adj, vcum, evo, bStart, bEnd } = pack;
+  const lenOf = e => vcum[evo[e + 1] - 1];
+  const maxDefl = opts.maxDeflection === undefined ? DEFAULT_MAX_DEFLECTION : opts.maxDeflection;
+  let e = from.edge, dir = from.dir, o = Math.max(0, Math.min(lenOf(e), from.offset)), left = distance, total = 0;
+  const pieces = [];
+  for (let guard = 0; guard < 400 && left > 0.01; guard++) {
+    const len = lenOf(e), avail = dir ? o : len - o, take = Math.min(avail, left);
+    if (take > 0) pieces.push({ e, dir, a: o, b: dir ? o - take : o + take });
+    left -= take; total += take;
+    if (left <= 0.01) break;
+    const node = dir ? efrom[e] : eto[e];
+    const inBearing = dir ? (bStart[e] + 180) % 360 : bEnd[e];
+    let best = -1, bestTurn = Infinity;
+    for (let i = adjo[node]; i < adjo[node + 1]; i++) {
+      const d2 = adj[i];
+      if (d2 === ((e * 2 + dir) ^ 1)) continue;                    // straight back along the same edge
+      const e2 = d2 >> 1;
+      if (ecls[e2] === F.CLS.SIDING || ecls[e2] === F.CLS.YARD) continue;
+      const turn = angDiff(inBearing, (d2 & 1) ? (bEnd[e2] + 180) % 360 : bStart[e2]);
+      if (turn <= maxDefl && turn < bestTurn) { bestTurn = turn; best = d2; }
+    }
+    if (best < 0) break;
+    e = best >> 1; dir = best & 1; o = dir ? lenOf(e) : 0;
+  }
+  return total > 1 ? { length: total, pieces, from: null, to: null, _geom: null } : null;
+}
+
+module.exports = { routeBetween, sliceRoute, pointOnRoute, alongRoute, snapAlongRoute, walkStraight };

@@ -11,7 +11,7 @@ const F = require('./format');
 const { Grid } = require('./spatial');
 const { deriveSections } = require('./derive');
 const { KY, DEG7, kxAt, bearing7, angDiff } = require('./geom');
-const { routeBetween, sliceRoute, pointOnRoute, alongRoute } = require('./route');
+const { routeBetween, sliceRoute, pointOnRoute, alongRoute, snapAlongRoute, walkStraight } = require('./route');
 
 const DEFAULT_MAX_DIST = 300;
 
@@ -218,12 +218,18 @@ class TrackPack {
    *   avoidSidings: never use siding or yard edges (except the ones the endpoints sit on);
    *   maxDeflection: the sharpest turn, in degrees, a train can make between two edges at a node (default 100, which forbids
    *   heel-to-heel moves at a junction); maxLength: give up beyond this many metres.
+   *   A snap may carry `dir` (0 = towards increasing edge offset, 1 = decreasing): a source then only leaves that way, a goal is only
+   *   reached travelling that way (section 17.1). Snaps without `dir` are free.
    * @returns {Route|null} {length, pieces, ...} or null when the snaps are not connected under the options.
    */
   route(from, to, opts = {}) { return routeBetween(this, from, to, opts); }
 
   slice(route, d0, d1) { return sliceRoute(this, route, d0, d1); }
   pointAt(route, d) { return pointOnRoute(this, route, d); }
+  /** A directed snap {edge, offset, dir, lat, lon} at distance d along `route` (usable as an end of route(), with its `dir`). */
+  snapAlong(route, d) { return snapAlongRoute(this, route, d); }
+  /** Follow the track straight on from a directed snap for `distance` metres (smallest turn at each node, no sidings); a route or null. */
+  walk(from, distance, opts = {}) { return walkStraight(this, from, distance, opts); }
   /** Metres along `route` of (edge, offset), or null when the route does not run over that point (see route.js); with withDir, {d, reversed}. */
   alongRoute(route, edge, offset, withDir = false) { return alongRoute(this, route, edge, offset, withDir); }
 

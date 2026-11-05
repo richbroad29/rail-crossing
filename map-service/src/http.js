@@ -74,7 +74,7 @@ function createServer(app) {
     if (rest === 'search') return search(req, res, q);
     if (rest.startsWith('train/')) return train(req, res, rest.slice(6));
     if (rest.startsWith('station/')) return station(req, res, rest.slice(8));
-    if (rest.startsWith('span/')) return span(req, res, rest.slice(5));
+    if (rest.startsWith('span/')) return span(req, res, rest.slice(5), q);
     if (rest === 'network') return network(req, res, q);
     if (rest === 'debug/record') return serveDebugRecord(app, req, res, q, sendJson);
     sendJson(req, res, 404, { error: 'No such endpoint.' });
@@ -150,13 +150,22 @@ function createServer(app) {
     await sendJson(req, res, 200, b);
   }
 
-  async function span(req, res, raw) {
+  const SPAN_ID = /^sp_[0-9a-f]{6,16}$/;
+
+  /** GET /span/:id, and (section 17.1) GET /span/:id?after=:prev, the continuation of :id that starts where :prev ends. */
+  async function span(req, res, raw, q) {
     let id;
     try { id = decodeURIComponent(raw); } catch (_) { sendJson(req, res, 400, { error: 'That span id is not valid.' }); return; }
-    const sp = /^sp_[0-9a-f]{6,16}$/.test(id) && app.spans ? app.spans.get(id) : null;
-    if (!sp) { sendJson(req, res, 404, { error: 'No span with that id.' }); return; }
-    // Immutable per id: a span that changes is issued under a new id.
-    await sendJson(req, res, 200, sp, { cache: 'public, max-age=604800, immutable' });
+    let after = null;
+    if (q && q.has('after')) {
+      after = q.get('after');
+      if (q.getAll('after').length !== 1 || !SPAN_ID.test(after)) { sendJson(req, res, 400, { error: 'after must be one span id.' }); return; }
+    }
+    const r = SPAN_ID.test(id) && app.spans ? app.spans.getAfter(id, after) : null;
+    if (!r) { sendJson(req, res, 404, { error: 'No span with that id.' }); return; }
+    // Immutable per id: a span that changes is issued under a new id. A continuation whose prev was not known is NOT cached: the
+    // same URL gets a real answer once the prev is (e.g. while the spans are still being rebuilt after a restart).
+    await sendJson(req, res, 200, r.body, { cache: r.stable ? 'public, max-age=604800, immutable' : 'no-store' });
   }
 
   return server;

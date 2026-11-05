@@ -11,6 +11,10 @@
 //   track.slice(route, d0, d1)          -> [[lat, lon], ...]
 //   track.alongRoute(route, edge, offset, true) -> {d, reversed} | null    (where a point lies along a route)
 //   track.signals()                     -> [{edge, offset, ref, direction, side, onWay, dist, ...}]
+//   track.snapAlong(route, d)           -> a DIRECTED snap {edge, offset, dir, lat, lon} at d metres along a route   (continuations only)
+//   track.walk(snap, metres)            -> a route straight on from a directed snap                                  (continuations only)
+//   track.nearestOnTrack(lat, lon, o)   -> snaps near a point                                                        (continuations only)
+//   track.route(a, b, {dir on a snap})  a directed route                                                             (continuations only)
 //
 // RULES, in order:
 //   1. Station-anchored berths (SMART) are pinned to the station: an ARRIVAL berth ENDS at the stop (mv.stop =
@@ -19,7 +23,10 @@
 //      SMART names the platform each berth uses at its station; where the pack has a snap for that platform, only its
 //      snaps are offered to route(), so the two directions land on their own tracks (see _route for the fallback).
 //   2. Between two pinned stops route() gives the path; the berths in between are cut from it in
-//      proportion to their learned median PASS time (section 10), equal shares until every berth in the chain has one.
+//      proportion to their learned median PASS time (section 10). A berth with no median yet takes the MEAN of the chain's known
+//      ones, equal shares only while none is known (section 17.2). The chain is cut over ALL its berths, those another chain
+//      already claimed included: they keep the span of the chain that claimed them, but the berths that are left get their true
+//      share of the route instead of a stretched one.
 //   3. A signal whose OSM `ref` matches the berth id pins a boundary of the berth, ONLY where the match is unambiguous
 //      and geometrically consistent: exactly one signal with that id lies on THIS route, it governs the direction of
 //      travel (when the data says), it is not wildly far from where the berths' own lengths put the boundary (config
@@ -30,6 +37,18 @@
 //      when learning moves it by more than `recomputeFraction` (10 %) of its length, and then its id
 //      changes. Superseded ids stay readable (the page may still hold one).
 //
+// CONTINUATIONS (section 17.1). Two spans of consecutive berths do not always meet: chains that end and start at different
+// snaps of one station, parallel tracks, a train that stepped twice in one SSE batch. continuation(prev, of) answers "the span for
+// berth `of`, entered from where span `prev` ended": it STARTS exactly at prev's last point and ends where its own route ends.
+//   a. the shortest directed route from prev's end (the way prev runs) to of's end (the way of runs), no reversing, within
+//      2 x length(of) + 500 m            -> how 'direct'
+//   b. else the same to the nearest reachable non-siding point within 120 m of of's end           -> 'beside'
+//   c. else straight on from prev's end for length(of), the smallest turn at each node             -> 'straight'
+//   d. else of itself                                                                              -> 'fallback'
+// and when prev's end is already within 2 m of of's start the answer IS of ('same'). A continuation has its own stable id (a hash
+// of the two ids), resolves on a plain get(id) and can itself be a `prev`, so trains chain them. Only a small record per join is
+// kept (bounded LRU, `maxJoins`): the geometry is recomputed when asked for, and an evicted join is rebuilt from its two ids.
+//
 // COST. The polyline is NOT stored per span: a span is {id, chain, d0, d1, length, stop} and its path
 // is cut from the (LRU-cached) route when /span/:id is asked for. Building is incremental: step()
 // does chains until its time budget is spent, so a 1 Hz tick is never held up.
@@ -39,6 +58,8 @@ const { haversineKm } = require('./geo');
 
 const hash = text => 'sp_' + crypto.createHash('sha1').update(text).digest('hex').slice(0, 10);
 const round5 = v => Math.round(v * 1e5) / 1e5;
+/** Metres between two {lat, lon} points (flat-earth: only used for a few metres to a few kilometres). */
+const metresBetween = (a, b) => Math.hypot((a.lat - b.lat) * 111195, (a.lon - b.lon) * 111195 * Math.cos(a.lat * Math.PI / 180));
 
 /** Normalise a signal ref or berth id into match keys: the exact text, and (when numeric) the signal NUMBER. */
 const exactKey = s => 'e' + String(s).toUpperCase().replace(/\s+/g, '');
@@ -61,10 +82,14 @@ class SpanBuilder {
     this.queue = [];                  // chains waiting to be cut
     this.chains = new Map();          // chain key -> chain
     this.routes = new Map();          // chain key -> route (LRU)
+    this.joins = new Map();           // join id -> join record (LRU: the oldest is first)
+    this.endsCache = new Map();       // span id -> {start, end} directed snaps (LRU)
+    this.joinStats = { same: 0, direct: 0, beside: 0, straight: 0, fallback: 0, unknownPrev: 0, evicted: 0 };
     this.snaps = new Map();           // station key -> snap array
     this._planned = { graph: -1, transit: -1, at: -Infinity };
     this._sig = null;
     this.hasSignals = typeof track.signals === 'function' && typeof track.alongRoute === 'function';
+    this.hasJoins = typeof track.snapAlong === 'function' && typeof track.walk === 'function' && typeof track.nearestOnTrack === 'function';
     this.signalAt = config.signalAt || 'end';
     this.pinLog = [];
     this.stats = { platform: { tried: 0, used: 0, refused: 0 }, chains: 0, built: 0, noRoute: 0, noSnap: 0, recut: 0, kept: 0, shared: 0, byArea: new Map(), rules: { stop: 0, signal: 0, learned: 0, equal: 0 } };
@@ -98,7 +123,10 @@ class SpanBuilder {
     return hit.length ? hit : null;
   }
 
-  /** Walk the most common path from every departure-anchored berth to the next arrival-anchored one. */
+  /**
+   * Walk the most common path from every departure-anchored berth to the next arrival-anchored one. A chain keeps ALL its berths
+   * (`berths`) so the route is cut over the whole of it; only the ones no earlier chain claimed (`build`) get a span from it.
+   */
   _plan() {
     const g = this.graph, maxB = this.cfg.maxChainBerths || 14;
     const chains = [];
@@ -123,7 +151,7 @@ class SpanBuilder {
       this.stats.shared += berths.length - fresh.length;
       if (!fresh.length) continue;
       for (const b of fresh) claimed.add(b);
-      chains.push({ key, fromSt, toSt, berths: fresh, firstIsDep: kind === 'dep' && fresh[0] === berths[0], fromPlat: g.anchorPlat.get(start) || '', toPlat: g.anchorPlat.get(end) || '' });
+      chains.push({ key, fromSt, toSt, berths, build: new Set(fresh), firstIsDep: kind === 'dep', fromPlat: g.anchorPlat.get(start) || '', toPlat: g.anchorPlat.get(end) || '' });
     }
     this.stats.byArea = new Map();                              // the rule-3 tally describes THIS plan
     for (const c of chains) this.chains.set(c.key, c);          // older chains stay: superseded spans still resolve their paths
@@ -239,8 +267,10 @@ class SpanBuilder {
     const L = this._lengthOf(route);
     if (!(L > 0)) return null;
     const meds = chain.berths.map(b => this.transit.passMedian(b));
-    const learned = meds.every(m => m !== null && m > 0);
-    const w = learned ? meds : meds.map(() => 1);
+    const known = meds.filter(m => m !== null && m > 0);
+    const fill = known.length ? known.reduce((a, b) => a + b, 0) / known.length : 1;       // a berth with no median yet is an average one
+    const w = meds.map(m => (m !== null && m > 0 ? m : fill));
+    const learned = known.length === n;
     const cw = [0];
     for (let i = 0; i < n; i++) cw.push(cw[i] + w[i]);
     const anchor = new Map([[0, 0], [n, L]]);                        // boundary index -> metres along the route (the two stops)
@@ -281,7 +311,7 @@ class SpanBuilder {
       const a = idx[s], b = idx[s + 1];
       for (let j = a; j <= b; j++) bound[j] = anchor.has(j) ? anchor.get(j) : anchor.get(a) + (anchor.get(b) - anchor.get(a)) * ((cw[j] - cw[a]) / (cw[b] - cw[a]));
     }
-    return { L, bound, how, cutBy: learned ? 'learned' : 'equal' };
+    return { L, bound, how, cutBy: learned ? 'learned' : known.length ? 'partial' : 'equal' };
   }
 
   _build(chain) {
@@ -293,6 +323,7 @@ class SpanBuilder {
     const n = chain.berths.length;
     for (let i = 0; i < n; i++) {
       const keyId = chain.berths[i];
+      if (chain.build && !chain.build.has(keyId)) continue;                 // claimed by an earlier chain: that span stands
       const d0 = cut.bound[i], d1 = cut.bound[i + 1], len = d1 - d0;
       if (!(len > 0)) continue;
       const last = i === n - 1, first = i === 0 && chain.firstIsDep;
@@ -330,10 +361,13 @@ class SpanBuilder {
 
   // ---- reading ------------------------------------------------------------------------------------------------------
 
-  /** GET /span/:id -> {id, length, path, stop} or null. Current and superseded ids both resolve. */
+  /** GET /span/:id -> {id, length, path, stop} or null. Current and superseded ids both resolve, and so does the id of a continuation. */
   get(id) {
     const rec = this.byId.get(id) || this.retired.get(id);
-    if (!rec) return null;
+    if (!rec) {
+      const j = this.joins.get(id);
+      return j && j.end ? this._joinBody(j) : null;
+    }
     const chain = this.chains.get(rec.chainKey);
     const route = chain ? this._route(chain) : this.routes.get(rec.chainKey);
     if (!route) return null;
@@ -343,27 +377,146 @@ class SpanBuilder {
     return { id: rec.id, length: Math.round(rec.length), path: pts.map(p => [round5(p[0]), round5(p[1])]), stop: rec.stop === null ? null : Math.round(rec.stop) };
   }
 
+  // ---- continuations (section 17.1) ---------------------------------------------------------------------------------
+
+  _canon(id) { return this.byId.get(id) || this.retired.get(id) || null; }
+
+  /** Both ends of a span as DIRECTED snaps, cut from its chain's route (small LRU: it is cheap to recompute). */
+  _ends(rec) {
+    const hit = this.endsCache.get(rec.id);
+    if (hit) { this.endsCache.delete(rec.id); this.endsCache.set(rec.id, hit); return hit; }
+    const chain = this.chains.get(rec.chainKey);
+    const route = chain ? this._route(chain) : this.routes.get(rec.chainKey);
+    if (!route) return null;
+    let e;
+    try { e = { start: this.track.snapAlong(route, rec.d0), end: this.track.snapAlong(route, rec.d1) }; } catch (_) { return null; }
+    if (!e.start || !e.end) return null;
+    this.endsCache.set(rec.id, e);
+    while (this.endsCache.size > (this.cfg.endsCacheEntries || 4096)) this.endsCache.delete(this.endsCache.keys().next().value);
+    return e;
+  }
+
+  /** Where a span (canonical, or a continuation) ends, as a directed snap; null when the id is unknown or its record is gone. */
+  _endOf(id) {
+    const j = this.joins.get(id);
+    if (j && j.end) { this.joins.delete(id); this.joins.set(id, j); return j.end; }          // it is being used: keep it
+    const rec = this._canon(id);
+    const e = rec ? this._ends(rec) : null;
+    return e ? e.end : null;
+  }
+
+  /** Route from `pe` (a directed snap) to the end of span `of` by rules a-c, or null. {route, how}. */
+  _solve(pe, of, oe) {
+    const T = this.track, cfg = this.cfg;
+    const maxLength = of.length * 2 + (cfg.joinDetourM || 500);
+    const go = to => { try { return T.route(pe, to, { avoidSidings: false, maxLength }) || null; } catch (_) { return null; } };
+    let r = go(oe.end);
+    if (r) return { route: r, how: 'direct' };
+    // Stay on the train's own track: the nearest reachable point beside where the berth ends, on any running line.
+    let near = [];
+    try { near = T.nearestOnTrack(oe.end.lat, oe.end.lon, { k: 8, maxDist: cfg.besideMetres || 120, avoidSidings: true }) || []; } catch (_) { near = []; }
+    if (near.length) { r = go(near); if (r) return { route: r, how: 'beside' }; }
+    try { r = T.walk(pe, of.length) || null; } catch (_) { r = null; }
+    return r ? { route: r, how: 'straight' } : null;
+  }
+
+  _joinId(prevId, ofId) { return hash(`j|${prevId}|${ofId}`); }
+
+  /**
+   * The span for berth `ofId` entered from span `prevId`: {id, length, stop, how, prevKnown}, or null when `ofId` is not a span.
+   * `id` is `ofId` itself for 'same' (prev already ends where of starts), 'fallback' (no continuation could be made) and an unknown
+   * prev (never issued, or evicted: prevKnown false); otherwise the continuation's own id.
+   */
+  continuation(prevId, ofId) {
+    const of = this._canon(ofId);
+    if (!of) return null;
+    const own = how => ({ id: of.id, length: of.length, stop: of.stop, how, prevKnown: true });
+    if (!this.hasJoins || !prevId || prevId === ofId) return own('same');
+    const key = this._joinId(prevId, ofId);
+    const hit = this.joins.get(key);
+    if (hit) {
+      this.joins.delete(key); this.joins.set(key, hit);
+      return hit.end ? { id: hit.id, length: hit.length, stop: hit.stop, how: hit.how, prevKnown: true } : own(hit.how);
+    }
+    let rec = null;
+    try {
+      const pe = this._endOf(prevId);
+      if (!pe) { this.joinStats.unknownPrev++; return { ...own('fallback'), prevKnown: false }; }
+      const oe = this._ends(of);
+      if (!oe) rec = { id: key, how: 'fallback', end: null };
+      else if (metresBetween(pe, oe.start) <= (this.cfg.sameMetres === undefined ? 2 : this.cfg.sameMetres)) rec = { id: key, how: 'same', end: null };
+      else {
+        const sol = this._solve(pe, of, oe);
+        if (!sol) rec = { id: key, how: 'fallback', end: null };
+        else {
+          const len = sol.route.length, end = this.track.snapAlong(sol.route, len);
+          rec = { id: key, how: sol.how, length: len, stop: of.stop === null ? null : of.stop === 0 ? 0 : len, end };
+          const pc = this._canon(prevId);
+          rec.prev = pc ? pc.id : prevId; rec.of = of.id;                 // share the canonical id strings: one copy in memory
+        }
+      }
+    } catch (_) { rec = { id: key, how: 'fallback', end: null }; }
+    this.joinStats[rec.how]++;
+    this.joins.set(key, rec);
+    while (this.joins.size > (this.cfg.maxJoins || 50000)) { this.joins.delete(this.joins.keys().next().value); this.joinStats.evicted++; }
+    return rec.end ? { id: rec.id, length: rec.length, stop: rec.stop, how: rec.how, prevKnown: true } : own(rec.how);
+  }
+
+  /** The polyline of a continuation, recomputed from its two ids (nothing but the small record is kept). Null if an input is gone. */
+  _joinBody(j) {
+    try {
+      const of = this._canon(j.of), pe = of ? this._endOf(j.prev) : null, oe = pe ? this._ends(of) : null;
+      if (!oe) return null;
+      const sol = this._solve(pe, of, oe);
+      if (!sol || sol.how !== j.how || Math.abs(sol.route.length - j.length) > 0.5) return null;      // immutable per id: never a different answer
+      const pts = this.track.slice(sol.route, 0, sol.route.length);
+      if (!Array.isArray(pts) || pts.length < 2) return null;
+      return { id: j.id, length: Math.round(j.length), path: pts.map(p => [round5(p[0]), round5(p[1])]), stop: j.stop === null ? null : Math.round(j.stop) };
+    } catch (_) { return null; }
+  }
+
+  /**
+   * GET /span/:id?after=:prev -> {body, stable} or null (unknown id). `stable` is false when the answer may change later (the prev is
+   * not known yet, or no continuation could be made), so the caller does not cache it as immutable.
+   */
+  getAfter(id, after) {
+    if (!after) { const b = this.get(id); return b ? { body: b, stable: true } : null; }
+    const c = this.continuation(after, id);
+    if (!c) { const b = this.get(id); return b ? { body: b, stable: true } : null; }        // not a canonical id (e.g. a continuation's own): ?after does not apply
+    const body = c.id === id ? this.get(id) : this.get(c.id);
+    if (!body) { const b = this.get(id); return b ? { body: b, stable: false } : null; }
+    return { body, stable: c.prevKnown && c.how !== 'fallback' };
+  }
+
+  /** For the recorder: the continuation's body when prev -> of needs one (a span line to write), else null. */
+  continuationBody(prevId, ofId) {
+    const c = this.continuation(prevId, ofId);
+    return c && c.id !== ofId ? this.get(c.id) : null;
+  }
+
   /** How many berths have a span, and by which rule fixed their boundaries and cut. */
   rules() {
-    const r = { berths: this.byBerth.size, stopPinned: 0, signalPinned: 0, cutLearned: 0, cutEqual: 0, bothEndsFixed: 0 };
+    const r = { berths: this.byBerth.size, stopPinned: 0, signalPinned: 0, cutLearned: 0, cutPartial: 0, cutEqual: 0, bothEndsFixed: 0 };
     for (const rec of this.byBerth.values()) {
       const { start, end, cutBy } = rec.rule;
       if (start === 'stop' || end === 'stop') r.stopPinned++;
       if (start === 'signal' || end === 'signal') r.signalPinned++;
       if (start && end) r.bothEndsFixed++;
-      if (cutBy === 'learned') r.cutLearned++; else r.cutEqual++;
+      if (cutBy === 'learned') r.cutLearned++; else if (cutBy === 'partial') r.cutPartial++; else r.cutEqual++;
     }
     return r;
   }
 
   status() {
-    const s = this.stats;
+    const s = this.stats, j = this.joinStats;
     const areas = {};
     let tried = 0, pinned = 0;
     for (const [a, v] of s.byArea) { tried += v.berths; pinned += v.pinned; areas[a] = { ...v, rate: v.berths ? Math.round(1000 * v.pinned / v.berths) / 1000 : null }; }
     return {
       berthsWithSpans: this.byBerth.size, chains: s.chains, queued: this.queue.length, built: s.built, noRoute: s.noRoute, noSnap: s.noSnap, recut: s.recut, kept: s.kept, sharedBerths: s.shared,
       rules: this.rules(),
+      joins: { same: j.same, direct: j.direct, beside: j.beside, straight: j.straight, fallback: j.fallback },
+      joinStore: { size: this.joins.size, max: this.cfg.maxJoins || 50000, unknownPrev: j.unknownPrev, evicted: j.evicted },
       platforms: s.platform,
       signals: this.hasSignals ? { signalAt: this.signalAt, boundariesTried: tried, pinned, rate: tried ? Math.round(1000 * pinned / tried) / 1000 : null, byArea: areas } : 'not available from the track library'
     };

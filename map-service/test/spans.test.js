@@ -82,7 +82,7 @@ test('EQUAL SHARES until learned: five berths cut a 28 km route into fifths; a d
   assert.equal(w.sb.size, 5);
   assert.deepEqual(Object.keys(sp('0001')).sort(), ['id', 'length', 'stop']);
   assert.match(sp('0001').id, /^sp_[0-9a-f]{10}$/);
-  assert.deepEqual(w.sb.rules(), { berths: 5, stopPinned: 2, signalPinned: 0, cutLearned: 0, cutEqual: 5, bothEndsFixed: 0 });
+  assert.deepEqual(w.sb.rules(), { berths: 5, stopPinned: 2, signalPinned: 0, cutLearned: 0, cutPartial: 0, cutEqual: 5, bothEndsFixed: 0 });
 });
 
 test('the library is used ONLY through arrays of station snaps: by TIPLOC, falling back to the name', () => {
@@ -137,10 +137,12 @@ test('PROPORTIONAL to the learned median PASS time once every berth in the chain
   w.sb.settle();
   [['0001', 10], ['0003', 20], ['0005', 30], ['0007', 20], ['0009', 20]].forEach(([b, m]) => assert.ok(Math.abs(w.sb.forBerth(w.id(b)).length - L * m / 100) < 1, `${b}`));
   assert.equal(w.sb.rules().cutLearned, 5);
-  // One berth unlearned: back to equal shares for the whole chain (never mix seconds with guesses).
+  // One berth unlearned: it takes the MEAN of the known medians (section 17.2), not equal shares for the whole chain.
   const w2 = world({ medians: { '0001': 10, '0003': 20, '0005': 30, '0007': 20 } });
   w2.sb.settle();
-  assert.ok(Math.abs(w2.sb.forBerth(w2.id('0005')).length - L / 5) < 1);
+  [['0001', 10], ['0003', 20], ['0005', 30], ['0007', 20], ['0009', 20]].forEach(([b, m]) => assert.ok(Math.abs(w2.sb.forBerth(w2.id(b)).length - L * m / 100) < 1, `partial ${b}`));
+  assert.deepEqual([w2.sb.rules().cutLearned, w2.sb.rules().cutPartial, w2.sb.rules().cutEqual], [0, 5, 0]);
+  assert.equal(w2.sb.byBerth.get(w2.id('0005')).rule.cutBy, 'partial');
 });
 
 test('GET span: the polyline cut from the route at the berth boundaries, and nothing is stored per span but its offsets', () => {
@@ -311,6 +313,34 @@ test('INCREMENTAL: step() never exceeds its budget by more than one chain, and f
   while (w.sb.queue.length && guard++ < 1000) w.sb.step(1);
   assert.equal(w.sb.queue.length, 0);
   assert.ok(w.sb.size > 0);
+});
+
+// ---- section 17.2: a chain is cut over ALL its berths -----------------------------------------------------------------------
+
+test('WHOLE-CHAIN CUT (17.2): berths another chain already claimed still take their share of the route, so the berths left are not stretched', () => {
+  // Chain 1: 0001 > 0003 > 0005 > 0007 (Alpha to Bravo). Chain 2 starts at 0021, joins chain 1 at 0005: its berths are
+  // 0021, 0023, 0005, 0007, of which 0005 and 0007 are claimed. The route is the same 28 km.
+  const rows = [['LA', '0001', '0003', '111', 'D'], ['LA', '0003', '0005', '', ''], ['LA', '0005', '0007', '222', 'A'], ['LA', '0021', '0023', '111', 'D'], ['LA', '0023', '0005', '', '']];
+  const w = world({ rows });
+  w.sb.settle();
+  const rec = b => w.sb.byBerth.get(w.id(b));
+  assert.equal(w.sb.chains.size, 2);
+  const [c1, c2] = [...w.sb.chains.values()];
+  assert.deepEqual(c2.berths.map(b => w.graph.berth(b)), ['0021', '0023', '0005', '0007'], 'the whole chain is kept, claimed berths included');
+  assert.deepEqual([...c2.build].map(b => w.graph.berth(b)), ['0021', '0023'], 'but only the unclaimed ones are built from it');
+  // Cut over four berths: a quarter each. (Cut over the two unclaimed alone, each would be HALF the route.)
+  for (const b of ['0021', '0023']) assert.ok(Math.abs(rec(b).length - L / 4) < 1, `${b} ${rec(b).length}`);
+  assert.equal(rec('0021').chainKey, c2.key); assert.equal(rec('0005').chainKey, c1.key, 'a claimed berth keeps the span of the chain that claimed it');
+  assert.ok(Math.abs(rec('0005').length - L / 4) < 1);
+  assert.equal(rec('0021').stop, 0, 'chain 2 starts at a departure berth');
+  assert.equal(rec('0023').stop, null);
+  assert.equal(w.sb.size, 6, 'every berth has exactly one span');
+  assert.equal(w.sb.stats.shared, 2);
+  // Learned medians shape the whole cut too: chain 2's unclaimed berths have none, the claimed ones do -> 'partial'.
+  const w2 = world({ rows, medians: { '0005': 10, '0007': 50 } });
+  w2.sb.settle();
+  assert.equal(w2.sb.byBerth.get(w2.id('0021')).rule.cutBy, 'partial');
+  assert.equal(w2.sb.rules().cutPartial, w2.sb.size - 0 - w2.sb.rules().cutEqual - w2.sb.rules().cutLearned);
 });
 
 // ---- the REAL library on a real cut of the Sussex pack -----------------------------------------------------------------
