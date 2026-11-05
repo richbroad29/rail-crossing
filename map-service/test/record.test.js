@@ -123,7 +123,7 @@ test('ROLLING RECORD: Sussex updates only, a snapshot first in every segment, ro
     }
     assert.equal(rig.app.recorder.stats.deleted, 2);
     assert.equal(rig.app.recorder.stats.segments, 4);
-    assert.equal((await getJson(rig.port, '/map/v1/health')).json.diagnostics.record.segments, 4);
+    assert.equal((await getJson(rig.port, '/map/v1/health')).json.diagnostics.record[0].segments, 4);
   } finally { await rig.stop(); }
 });
 
@@ -152,5 +152,21 @@ test('ROLLING RECORD: a disk that cannot be written pauses the recorder, never t
     const t = (await getJson(rig.port, '/map/v1/trains')).json.trains.find(x => x.hc === '1H15');
     assert.equal(t.berth, '0004', 'the map carries on');
     assert.equal(rig.app.recorder.stats.errors, 1, 'paused for a minute: not retried on every batch');
+  } finally { await rig.stop(); }
+});
+
+test('ROLLING RECORD: one record per named region, each with its own files, box and pruning', async () => {
+  const rig = await startRig({ overrides: { record: { segmentSecs: 600, keepSegments: 2, regions: [
+    { name: 'sussex', bbox: [50.7, -0.4, 50.95, -0.1] },
+    { name: 'kent', bbox: [51.0, 0.5, 51.5, 1.5] }
+  ] } } });
+  try {
+    assert.equal(rig.app.recorders.length, 2);
+    assert.deepEqual(rig.app.recorders.map(r => r.name), ['sussex', 'kent']);
+    const health = (await getJson(rig.port, '/map/v1/health')).json;
+    assert.deepEqual(health.diagnostics.record.map(r => r.region), ['sussex', 'kent']);
+    // A bad region name is refused at start, not turned into a strange file name.
+    const { Recorder } = require('../src/record');
+    assert.throws(() => new Recorder({ config: { bbox: [0, 0, 1, 1] }, name: '../x', dataDir: rig.dataDir, sse: rig.app.sse, snapshot: rig.app.snapshot }), /region name/);
   } finally { await rig.stop(); }
 });

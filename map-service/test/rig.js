@@ -42,7 +42,9 @@ async function startRig({ overrides = {}, cif = true, start = true, cifLines = [
     http: { batchMs: 50, coarseIntervalSecs: 1, pingSecs: 1, maxSseClients: 3 },
     td: { backoffMinMs: 10, backoffMaxMs: 50, connectTimeoutMs: 1000 },
     reference: { minRows: { smart: 10, corpus: 10, naptan: 10, cif: 1 } },
-    ...overrides
+    ...overrides,
+    // Tests use one recording box (the original Sussex-only behaviour) unless they ask for regions.
+    record: { regions: [], ...(overrides.record || {}) }
   });
   const clock = { now: NOW };
   const app = new App({ config: cfg, dataDir, fake: { host: '127.0.0.1', port: stompPort, refDir }, now: () => clock.now, tdSleep: ms => H.sleep(5), track });

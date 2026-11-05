@@ -25,7 +25,8 @@ const fs = require('fs');
 const path = require('path');
 const log = require('./log');
 
-const PREFIX = 'sussex-';
+// One recorder per named region (config.record.regions); each writes <name>-<start>.jsonl.
+const NAME_RE = /^[a-z][a-z0-9-]{0,31}$/;
 const PROXY_HEADERS = ['x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'x-forwarded-port', 'x-real-ip', 'forwarded', 'via', 'cf-connecting-ip', 'cf-ray'];
 const LOOPBACK_ADDR = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 const LOOPBACK_HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
@@ -83,9 +84,11 @@ class Recorder {
    * @param {function} [o.now]
    * @param {function(string):object|null} [o.spanFor]  span id -> {id, length, path, stop} (for the `span` lines)
    */
-  constructor({ config, dataDir, sse, snapshot, now = Date.now, spanFor = null }) {
+  constructor({ config, dataDir, sse, snapshot, now = Date.now, spanFor = null, name = 'sussex', bbox = null }) {
+    if (!NAME_RE.test(name)) throw new Error(`record: region name "${name}" must be lower-case letters, digits and hyphens`);
     this.cfg = config; this.dir = path.join(dataDir, 'record'); this.sse = sse; this.snapshot = snapshot; this.now = now;
-    const [s, w, n, e] = config.bbox;
+    this.name = name; this.prefix = `${name}-`;
+    const [s, w, n, e] = bbox || config.bbox;
     this.bbox = { s, w, n, e };
     this.fd = null; this.file = null; this.bytes = 0; this.segStart = 0;
     this.disabledUntil = 0;
@@ -110,7 +113,7 @@ class Recorder {
 
   _open(t) {
     fs.mkdirSync(this.dir, { recursive: true });
-    this.file = path.join(this.dir, `${PREFIX}${stamp(t)}.jsonl`);
+    this.file = path.join(this.dir, `${this.prefix}${stamp(t)}.jsonl`);
     this.fd = fs.openSync(this.file, 'a');
     this.bytes = 0; this.segStart = t; this.stats.segments++;
     this._prune();
@@ -140,16 +143,16 @@ class Recorder {
   /** Delete all but the newest `keepSegments` files (the one just opened included). */
   _prune() {
     let names;
-    try { names = fs.readdirSync(this.dir).filter(n => n.startsWith(PREFIX) && n.endsWith('.jsonl')).sort(); } catch (_) { return; }
+    try { names = fs.readdirSync(this.dir).filter(n => n.startsWith(this.prefix) && n.endsWith('.jsonl')).sort(); } catch (_) { return; }
     const keep = this.cfg.keepSegments || 7;
     for (const n of names.slice(0, Math.max(0, names.length - keep))) {
       try { fs.unlinkSync(path.join(this.dir, n)); this.stats.deleted++; } catch (_) { /* best effort */ }
     }
   }
 
-  files() { try { return fs.readdirSync(this.dir).filter(n => n.startsWith(PREFIX)).sort(); } catch (_) { return []; } }
+  files() { try { return fs.readdirSync(this.dir).filter(n => n.startsWith(this.prefix)).sort(); } catch (_) { return []; } }
 
-  status() { return { enabled: this.enabled, current: this.file ? path.basename(this.file) : null, ...this.stats, lastError: this.lastError }; }
+  status() { return { region: this.name, enabled: this.enabled, current: this.file ? path.basename(this.file) : null, ...this.stats, lastError: this.lastError }; }
 }
 
 /**

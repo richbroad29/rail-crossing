@@ -95,7 +95,7 @@ class App {
     this._firstTick = true;
     this._tickStats = { max: 0, slow: 0, n: 0 };
     this.td = null;
-    this.recorder = null; this.debugTaps = 0;
+    this.recorder = null; this.recorders = null; this.debugTaps = 0;
     this.stationByCrsMap = new Map(); this._stationTiplocs = new Map(); this._boardCache = new Map();
     this._lastTrustPrune = this.mono(); this._lastVstpPrune = this.mono(); this._lastVstpSave = this.mono(); this._lastTransitSave = this.mono();
     this.vstpFile = path.join(dataDir, 'state', 'vstp-overlay.json');
@@ -292,7 +292,13 @@ class App {
       this.trackManager.on('loaded', pack => this._setTrack(pack));
       await this.trackManager.start();
     }
-    if (cfg.record.enabled) { this.recorder = new Recorder({ config: cfg.record, dataDir: this.dataDir, sse: this.sse, snapshot: this.snapshot, now: this.now, spanFor: id => (this.spans ? this.spans.get(id) : null) }); this.recorder.start(); }
+    if (cfg.record.enabled) {
+      // One rolling record per region. `regions` absent = the original single Sussex box.
+      const regions = Array.isArray(cfg.record.regions) && cfg.record.regions.length ? cfg.record.regions : [{ name: 'sussex', bbox: cfg.record.bbox }];
+      this.recorders = regions.map(r => new Recorder({ config: cfg.record, name: r.name, bbox: r.bbox, dataDir: this.dataDir, sse: this.sse, snapshot: this.snapshot, now: this.now, spanFor: id => (this.spans ? this.spans.get(id) : null) }));
+      this.recorders.forEach(r => r.start());
+      this.recorder = this.recorders[0];
+    }
 
     let creds, host, port;
     if (this.fake) {
@@ -377,7 +383,7 @@ class App {
     this.refdata.stop();
     if (this.td) await this.td.stop();
     this.sse.closeAll();
-    if (this.recorder) this.recorder.stop();
+    for (const r of this.recorders || []) r.stop();
     if (this.trackManager) this.trackManager.stop();
     this.saveGraph();
     this.vstp.saveFile(this.vstpFile);
@@ -412,7 +418,7 @@ class App {
       clients: { sse: this.sse.size },
       diagnostics: {
         trust: this.trust.status(), vstp: this.vstp.status(), transit: { series: this.transit.size, ...this.transit.stats },
-        spans: this.spans ? this.spans.status() : 'no track pack loaded', track: this.trackManager ? this.trackManager.status() : { loaded: !!this.track }, record: this.recorder ? this.recorder.status() : null
+        spans: this.spans ? this.spans.status() : 'no track pack loaded', track: this.trackManager ? this.trackManager.status() : { loaded: !!this.track }, record: this.recorders ? this.recorders.map(r => r.status()) : null
       }
     };
   }

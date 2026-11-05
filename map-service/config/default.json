@@ -120,8 +120,17 @@
   "record": {
     "enabled": true,
     "bbox": [50.7, -0.95, 51.2, 0.85],
+    "_comment_regions": "Rolling records for measuring the motion engine on real data, chosen as a mix of region types (lead + Rich, 2026-11-05): suburban/coastal (sussex), dense urban terminals and tunnels (london), urban hub (manchester), Scottish urban (glasgow), rural single line with long sections (cambrian), rural high-speed main line with freight (ecml-rural). Each keeps keepSegments x segmentSecs of history.",
+    "regions": [
+      { "name": "sussex", "bbox": [50.7, -0.95, 51.2, 0.85] },
+      { "name": "london", "bbox": [51.46, -0.23, 51.56, 0.0] },
+      { "name": "manchester", "bbox": [53.42, -2.35, 53.52, -2.15] },
+      { "name": "glasgow", "bbox": [55.8, -4.35, 55.9, -4.15] },
+      { "name": "cambrian", "bbox": [52.35, -4.15, 52.75, -2.7] },
+      { "name": "ecml-rural", "bbox": [52.55, -0.75, 53.55, -0.25] }
+    ],
     "segmentSecs": 600,
-    "keepSegments": 7,
+    "keepSegments": 36,
     "maxSegmentBytes": 12582912,
     "maxDebugClients": 2,
     "maxDebugSecs": 3600
