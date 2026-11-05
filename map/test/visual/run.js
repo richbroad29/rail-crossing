@@ -8,6 +8,7 @@
 //   node map/test/visual/run.js e2e        behaviour checks (keyboard, deep links, share, theme ...)
 //   node map/test/visual/run.js basemap    positron vs liberty vs dark base maps, Sussex z9 and z12
 //   node map/test/visual/run.js perf       frame times
+//   node map/test/visual/run.js phase2 [network|views|stacked|approx|panel|sequence|video]   phase 2: track, board, network, sequence, video
 //   node map/test/visual/run.js shots d-dark   only shots whose name contains "d-dark"
 // Exit code is non-zero if a check failed or the page logged a console error.
 if (process.env.NODE_TEST_CONTEXT) { console.log('Browser checks are not unit tests; run: node map/test/visual/run.js'); process.exit(0); }
@@ -26,6 +27,7 @@ const L = require('./lib.js');
     if (what === 'all' || what === 'e2e') failed += await require('./e2e.js')(browser);
     if (what === 'all' || what === 'basemap') failed += await require('./basemap.js')(browser);
     if (what === 'all' || what === 'perf') failed += await require('./perf.js')(browser);
+    if (what === 'all' || what === 'phase2') failed += await require('./phase2.js')(browser, what === 'phase2' ? only : undefined);
   } finally {
     await browser.close();
     s.stop();

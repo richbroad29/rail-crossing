@@ -15,6 +15,13 @@
   var LABEL_MIN_ZOOM = 11;
   var MAX_LABELS = 300;
   var FOLLOW_ZOOM = 12.5;
+  // Trains follow the real track (motion plans + spans) from this zoom; below it a train moves less than a
+  // pixel in a minute and the phase-1 glide is exact enough. ?trackzoom=N is a test switch.
+  var TRACK_MIN_ZOOM = Number(new URLSearchParams(location.search).get('trackzoom'));
+  if (!isFinite(TRACK_MIN_ZOOM) || new URLSearchParams(location.search).get('trackzoom') == null) TRACK_MIN_ZOOM = 8;
+  var FAN_MIN_ZOOM = 11;
+  // One clock for everything the store sees: epoch milliseconds, with sub-millisecond precision.
+  function pnow() { return performance.timeOrigin + performance.now(); }
 
   function $(id) { return document.getElementById(id); }
   function load(k, d) { try { var v = localStorage.getItem('map.' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } }
@@ -68,6 +75,7 @@
 
   map.on('style.load', function () {
     placeIds = null;
+    L.addNetworkLayers(map, theme, new URLSearchParams(location.search).get('debugtrack') === '1');
     L.addRailLayers(map, theme);
     L.applyStylePlan(map, RM.style.planStyle(map.getStyle(), theme));
   });
@@ -90,25 +98,33 @@
   map.addControl(overlay);
 
   // ---- state ----------------------------------------------------------------------------------------
-  var store = motion.createStore({ reducedMotion: reduced });
   var api = RM.api.createApi({ base: API_BASE });
+  var spans = RM.spans.createSpanCache({ fetchSpan: function (id) { return api.getSpan(id); } });
+  var clock = RM.engine.createClock({ lagMs: Number(new URLSearchParams(location.search).get('lag')) || 12000 });
+  var store = motion.createStore({ reducedMotion: reduced, spans: spans, clock: clock });
+  store.setHalo(L.THEME[theme].halo);
   var stations = [], stationByCrs = {};
   var sel = { type: null, id: null, crs: null, detail: null, path: null, timer: null, follow: false };
-  var lastBuf = null, frameN = 0, rafId = 0, lastFrameTs = 0, loopUntil = 0;
+  var lastPlaced = null, lastBuf = null, frameN = 0, rafId = 0, lastFrameTs = 0, loopUntil = 0;
   var viewBox = geo.GB_BBOX.slice();
   var stCache = { zb: -1, box: null, dots: [], names: [], theme: null };
   var pendingStation = null;
-  var debug = RM.debug = { keepAnimating: false, intervals: [], js: [], maxSamples: 600 };
+  var debug = RM.debug = { keepAnimating: false, intervals: [], js: [], fill: [], maxSamples: 600 };
 
   // ---- panel ----------------------------------------------------------------------------------------
   var panel = RM.panel.createPanel($('panel'), {
     onClose: function () { clearSelection(); },
+    onPickTrain: function (id) { selectTrain(id, { fly: true }); },
     onFollow: function (on) { setFollow(on); },
     onShare: function () { shareLink(); }
   });
 
   // ---- scheduling the draw ----------------------------------------------------------------------
-  function request() { if (!rafId) rafId = requestAnimationFrame(frame); }
+  var waitTimer = 0;
+  function request() {
+    if (waitTimer) { clearTimeout(waitTimer); waitTimer = 0; }
+    if (!rafId) rafId = requestAnimationFrame(frame);
+  }
 
   function stationData(zoom) {
     var zb = Math.floor(zoom * 4);
@@ -157,7 +173,9 @@
     return false;
   }
   function nameSize(s) { return s.tier === 1 ? 14 : s.tier === 2 ? 12.5 : 11.5; }
-  function bearingOf(r) { return r.ch === r.ch ? r.ch : r.lh === r.lh ? r.lh : r.hf === r.hf ? r.hf : 0; }
+  // Where and which way a train is DRAWN (the fan-out may have moved it sideways and squared it up): labels
+  // and the declutter boxes must follow the drawn body, not the real position, or a label lands on a neighbour.
+  function bearingOf(r) { return r.ph === r.ph ? r.ph : r.ch === r.ch ? r.ch : r.lh === r.lh ? r.lh : r.hf === r.hf ? r.hf : 0; }
 
   // A train with no heading at all is turned to run along the railway line underneath it, read back
   // from the map's own rail layer (a few per frame; the answer is kept until the train moves).
@@ -213,8 +231,8 @@
     var inView = [];
     for (i = 0; i < buf.n && inView.length < MAX_LABELS * 2; i++) {
       r = buf.order[i];
-      if (r.cy < vb[0] || r.cy > vb[2] || r.cx < vb[1] || r.cx > vb[3]) continue;
-      p = map.project([r.cx, r.cy]);
+      if (r.py < vb[0] || r.py > vb[2] || r.px < vb[1] || r.px > vb[3]) continue;
+      p = map.project([r.px, r.py]);
       var hd = bearingOf(r) * Math.PI / 180, tx = Math.sin(hd), ty = -Math.cos(hd);
       inView.push({ r: r, x: p.x, y: p.y, tx: tx, ty: ty });
       for (var k = 0; k < steps; k++) {
@@ -268,7 +286,7 @@
     for (i = 0; i < res.length && trainRecs.length < MAX_LABELS; i++) {
       var it = byRef.get(res[i].ref), alt = it.alts[res[i].alt];
       if (it.kind === 'st') { it.ref.lo = alt.lo; it.ref.la = alt.la; it.ref.lb = alt.lb; names.push(it.ref); }
-      else { it.ref.lo = alt.lo; if (!it.ref.pos) it.ref.pos = [0, 0]; it.ref.pos[0] = it.ref.cx; it.ref.pos[1] = it.ref.cy; trainRecs.push(it.ref); }
+      else { it.ref.lo = alt.lo; if (!it.ref.pos) it.ref.pos = [0, 0]; it.ref.pos[0] = it.ref.px; it.ref.pos[1] = it.ref.py; trainRecs.push(it.ref); }
     }
     return { names: names, trains: trainRecs };
   }
@@ -278,7 +296,10 @@
     var t0 = performance.now();
     var zoom = map.getZoom();
     var selTrainId = sel.type === 'train' ? sel.id : null;
-    var buf = store.fill(t0, hidden, selTrainId);
+    store.setView(zoom >= TRACK_MIN_ZOOM, geo.padBbox(viewBox, 0.25));
+    store.setFan(zoom >= FAN_MIN_ZOOM);
+    var buf = store.fill(pnow(), hidden, selTrainId);
+    debug.fill.push(performance.now() - t0); if (debug.fill.length > debug.maxSamples) debug.fill.shift();
     updateRailHeadings(buf, zoom);
     lastBuf = buf;
     frameN++;
@@ -288,19 +309,19 @@
 
     var sd = stations.length ? stationData(zoom) : null;
     var placed = labelled && sd ? placeLabels(buf, zoom, sd, selTrainId) : null;
+    lastPlaced = placed;
     if (sd) layers = layers.concat(L.stationLayers({ dots: sd.dots, names: placed ? placed.names : sd.names, zoom: zoom, theme: theme, frame: frameN }));
 
     var rec = selTrainId ? store.get(selTrainId) : null;
-    if (rec && sel.path) {
-      var last = sel.path[sel.path.length - 1];
-      last[0] = rec.cx; last[1] = rec.cy;
-      layers = layers.concat(L.trailLayers({ path: sel.path, colour: classes.CLASSES[rec.cls].colour, theme: theme, frame: frameN }));
+    if (rec) {
+      var path = trailPath(rec);
+      if (path) layers = layers.concat(L.trailLayers({ path: path, colour: classes.CLASSES[rec.cls].colour, theme: theme, frame: frameN }));
     }
     if (rec) {                                         // highlight under the selected train: same silhouette, same heading
       if (!rec.pos) rec.pos = [0, 0];
-      rec.pos[0] = rec.cx; rec.pos[1] = rec.cy;
-      var known = rec.ch === rec.ch || rec.lh === rec.lh;
-      var shd = rec.ch === rec.ch ? rec.ch : rec.lh === rec.lh ? rec.lh : rec.hf === rec.hf ? rec.hf : 0;
+      rec.pos[0] = rec.px; rec.pos[1] = rec.py;
+      var known = rec.ph === rec.ph || rec.ch === rec.ch || rec.lh === rec.lh;
+      var shd = rec.ph === rec.ph ? rec.ph : rec.ch === rec.ch ? rec.ch : rec.lh === rec.lh ? rec.lh : rec.hf === rec.hf ? rec.hf : 0;
       rec.sa = -shd; rec.si = known ? 'sel' : 'selnodir';
       layers = layers.concat(L.selectedTrain({ rec: rec, zoom: zoom, theme: theme, atlas: atlas, frame: frameN }));
     }
@@ -327,8 +348,45 @@
     if (debug.js.length > debug.maxSamples) debug.js.shift();
     lastFrameTs = t0;
 
-    if (store.isAnimating(t1) || (sel.follow && rec) || debug.keepAnimating) request();
-    else lastFrameTs = 0;
+    if (store.isAnimating(pnow()) || (sel.follow && rec) || debug.keepAnimating) {
+      // A train moves a pixel or two a second when zoomed out: no need to redraw at 60 fps for that.
+      var pxPerSec = 30 / motion.metresPerPixel(zoom, lat), gap = debug.keepAnimating || (sel.follow && rec) ? 0 : pxPerSec < 4 ? 250 : pxPerSec < 15 ? 66 : 0;
+      if (gap) waitTimer = setTimeout(function () { waitTimer = 0; request(); }, gap); else request();
+    } else lastFrameTs = 0;
+  }
+
+  // The selected train's trail: the track it actually travelled, not chords between berth positions.
+  // Older berths (from the details response) first, then the ones this page has watched it cross, then
+  // the current span up to where the train is drawn. Falls back to the service's own trail points only
+  // when no span geometry is available at all.
+  var trailCache = { key: '', pts: [] };
+  function pushPts(out, pts) {
+    for (var i = 0; i < pts.length; i++) {
+      var l = out[out.length - 1];
+      if (!l || Math.abs(l[0] - pts[i][0]) > 1e-7 || Math.abs(l[1] - pts[i][1]) > 1e-7) out.push(pts[i]);
+    }
+  }
+  function trailPath(rec) {
+    var es = rec.es, E = RM.engine;
+    if (rec.mode === 'track' && es && es.init && rec.plans && rec.plans[es.k] && rec.plans[es.k].span) {
+      var older = (sel.older || []).filter(function (o) { return spans.peek(o.sp); });
+      var key = rec.id + '|' + rec.hist.length + '|' + older.length + '|' + rec.plans[0].sp;
+      if (trailCache.key !== key) {
+        var pts = [];
+        older.forEach(function (o) { var sp = spans.peek(o.sp); pushPts(pts, E.sliceSpan(sp, 0, sp.length, [])); });
+        rec.hist.forEach(function (p) { if (p.span) pushPts(pts, E.sliceSpan(p.span, 0, p.span.length, [])); });
+        trailCache = { key: key, pts: pts };
+      }
+      var out = trailCache.pts.slice();
+      for (var i = 0; i < es.k; i++) if (rec.plans[i].span) pushPts(out, E.sliceSpan(rec.plans[i].span, 0, rec.plans[i].span.length, []));
+      pushPts(out, E.sliceSpan(rec.plans[es.k].span, 0, es.s, []));
+      out.push([rec.cx, rec.cy]);
+      if (out.length > 1) return out;
+    }
+    if (!sel.path) return null;
+    var last = sel.path[sel.path.length - 1];
+    last[0] = rec.cx; last[1] = rec.cy;
+    return sel.path;
   }
 
   function followTo(rec) {
@@ -440,9 +498,17 @@
       if (sel.type !== 'train' || sel.id !== id) return;
       if (!d) { trainGone(first); return; }
       sel.detail = d;
+      var rec0 = store.get(id);
+      d.waiting = !!(rec0 && rec0.wait);
+      // berths older than anything this page has watched: their spans make the trail follow the track
+      var have = {};
+      if (rec0 && rec0.plans) { rec0.plans.forEach(function (p) { have[p.sp] = 1; }); rec0.hist.forEach(function (p) { have[p.sp] = 1; }); }
+      var cut = Date.now() + api.state.skewMs - 15 * 60000;
+      sel.older = (d.recentBerths || []).filter(function (b) { return b.sp && !have[b.sp] && b.at >= cut; }).reverse();
+      sel.older.forEach(function (b) { spans.need(b.sp, true); });
       sel.path = (d.trail || []).map(function (p) { return [p[1], p[0]]; });
       sel.path.push([d.train.lon, d.train.lat]);
-      store.add(d.train, performance.now());
+      store.add(d.train, pnow());
       panel.showTrain(d);
       if (needFly) flyToPoint(d.train.lon, d.train.lat, 12.5);
       request();
@@ -459,7 +525,7 @@
     } else {
       panel.showMessage('This train has gone', 'We cannot see it any more. It may have finished its journey or left the area we cover.');
       sel.follow = false; panel.setFollow(false);
-      store.applyUpdate(null, [sel.id], performance.now());
+      store.applyUpdate(null, [sel.id], pnow());
       sel.path = null;
     }
     request();
@@ -473,12 +539,28 @@
     sel = { type: 'station', id: null, crs: crs, detail: null, path: null, timer: null, follow: false };
     panel.setFollow(false);
     setHash({ s: crs });
-    panel.showStation(s, nearbyTrains(s));
+    panel.showStation(s, nearbyTrains(s), null);
     if (o.fly) flyToPoint(s.lon, s.lat, Math.max(map.getZoom(), 13.2));
-    sel.timer = setInterval(function () {
-      if (sel.type === 'station') panel.showStation(s, nearbyTrains(s));
-    }, 5000);
+    loadBoard(s);
+    sel.timer = setInterval(function () { if (sel.type === 'station') loadBoard(s); }, 8000);
     request();
+  }
+  function loadBoard(s) {
+    var crs = s.crs;
+    api.getStation(crs).then(function (b) {
+      if (sel.type !== 'station' || sel.crs !== crs) return;
+      sel.board = b;
+      panel.showStation(s, nearbyTrains(s), b, !b);
+    }, function () {
+      if (sel.type !== 'station' || sel.crs !== crs) return;
+      panel.showStation(s, nearbyTrains(s), sel.board || null, !sel.board);
+    });
+  }
+  // The national line layer. Two detail levels; the first is small and shows the whole country at once.
+  function loadNetwork(level, attempt) {
+    api.getNetwork(level).then(function (g) {
+      if (g && g.type === 'FeatureCollection') { L.setNetworkData(map, level, g); request(); }
+    }, function () { if (attempt < 3) setTimeout(function () { loadNetwork(level, attempt + 1); }, 6000 * (attempt + 1)); });
   }
   function nearbyTrains(s) {
     var n = 0;
@@ -510,13 +592,15 @@
   // ---- data -----------------------------------------------------------------------------------------
   function keepId() { return sel.type === 'train' ? sel.id : null; }
   api.on('snapshot', function (d) {
-    store.applySnapshot(d.trains || [], performance.now(), keepId());
+    if (typeof d.serverTime === 'number') clock.observe(d.serverTime, pnow());
+    store.applySnapshot(d.trains || [], pnow(), keepId());
     onData();
   });
   api.on('update', function (d) {
+    if (typeof d.serverTime === 'number') clock.observe(d.serverTime, pnow());
     var rem = d.remove || [];
     if (sel.type === 'train' && rem.indexOf(sel.id) >= 0) rem = rem.filter(function (x) { return x !== sel.id; });
-    store.applyUpdate(d.upsert, rem, performance.now());
+    store.applyUpdate(d.upsert, rem, pnow());
     onData();
   });
   api.on('status', function () { renderStatus(); });
@@ -616,6 +700,14 @@
     renderStatus();
     if (countsDirty && performance.now() - lastChipRender > 500) { renderChips(); countsDirty = false; lastChipRender = performance.now(); }
     panel.tick(Date.now() + api.state.skewMs);
+    if (sel.type === 'train' && sel.detail) {         // the live pieces of the panel follow the stream between detail refreshes
+      var r = store.get(sel.id);
+      if (r) {
+        if (r.svc && sel.detail.train) sel.detail.train.svc = r.svc;
+        sel.detail.waiting = !!r.wait;
+        panel.showTrain(sel.detail);
+      }
+    }
   }, 1000);
 
   // ---- search ---------------------------------------------------------------------------------------
@@ -651,6 +743,7 @@
     document.documentElement.setAttribute('data-theme', next);
     if (next !== theme) {
       theme = next;
+      store.setHalo(L.THEME[theme].halo);
       map.setStyle(STYLE[theme]);
       stCache.zb = -1;
     }
@@ -699,6 +792,7 @@
   viewBox = geo.clampBbox(geo.boundsToBbox(map.getBounds()));
   api.start(viewBox);
   loadStations(0);
+  loadNetwork('lo', 0); loadNetwork('hi', 0);
   applyHash();
   renderStatus();
   request();
@@ -711,8 +805,10 @@
       frames: debug.intervals.length,
       intervalMs: { p50: pct(debug.intervals, 0.5), p95: pct(debug.intervals, 0.95), max: pct(debug.intervals, 1) },
       jsMs: { p50: pct(debug.js, 0.5), p95: pct(debug.js, 0.95), max: pct(debug.js, 1) },
+      fillMs: { p50: pct(debug.fill, 0.5), p95: pct(debug.fill, 0.95), max: pct(debug.fill, 1) },
       trains: store.size, zoom: map.getZoom()
     };
   };
-  debug.reset = function () { debug.intervals.length = 0; debug.js.length = 0; };
+  debug.labels = function () { return lastPlaced; };
+  debug.reset = function () { debug.intervals.length = 0; debug.js.length = 0; debug.fill.length = 0; };
 })();
