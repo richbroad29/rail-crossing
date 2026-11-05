@@ -448,3 +448,9 @@ directed from the previous berth's span END to the next berth's span START (same
 `2 x crow distance + 500 m`), and cut that route among the run's berths with the 17.2 weights. Spans get ids and rules like
 any other (`rule.start = rule.end = 'gap'`), are subject to 18.2's speed rule, and never replace a station-chain span.
 Report `diagnostics.spans.gapChains` (built, noRoute, tooFast). Measure: re-appearances per region before/after.
+
+Amendment (lead, after measuring 18.5): of 1,403 candidate holes, 833 found no DIRECTED route, 532 of them with the two spans
+under 2 km apart — parallel tracks or opposite running, the case 17.1 (b) "beside" rescues for continuations. A gap chain
+therefore also tries 17.1 (b): routing to the nearest reachable point within 120 m of the next span's start (the step into
+that next berth then gets a 17.1 continuation as usual). Superseded gap chains must not accumulate: `this.chains` stays
+bounded (drop a chain once no current or retained span references it).
