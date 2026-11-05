@@ -110,6 +110,11 @@ The respan keeps recorded t0/eta, so the departure-dwell fix (17.4) is NOT in th
    the CB — keep it drawn through the 120 s recently-cancelled window. (b) Most others had no `mv` (phase-1 placement,
    `pl` i/a) and came back > 2 km away: they stepped into berths the placement cannot place and were removed — hold the last
    position (marked approximate) for a while instead. Decide with Rich whether 18.1's fade count should include these.
+   (c) Phase-1 positions can sit well off the line: Rich's screenshot 2026-11-05 22:43, Kettering — 1Y65 (KG:6075) and 1B99
+   (KG:0044) both at exactly 52.34867, -0.70411 and 1H66 (KG:6084) at -0.7096, ~1 km west of the MML, while their SPANS run
+   along it (~-0.692). The phase 2 page draws spanned trains on their spans, so it fixes these; but trains with NO span
+   (e.g. 6J15, pl a) are still drawn from the phase-1 estimate. Snap pl i/a positions to the nearest non-siding track
+   (pack.nearestOnTrack, within ~300 m along the train's heading) in the service, and find why KG's interpolation goes wide.
 
 ## Open problem (as found 2026-11-05 morning; superseded by fix round 1 above)
 
