@@ -50,7 +50,42 @@ then the repo's `CLAUDE.md`. Product intent is the Claude Doc "UK Live Train Map
 | 3 carriages | Not started. Rich has subscribed to Darwin Push Port + snapshots on RDM. |
 | 4 enthusiast features, launch | Not started. |
 
-## Open problem — do this first (phase 2 fix round)
+## Fix round 1 — DONE locally 2026-11-05 (read this before the older notes below)
+
+Diagnosis, design and measured results are in CONTRACT section 17. Merged on LOCAL `claude/map-service` (`4a56c8f`),
+**not pushed, not deployed**. Service 283 tests, page 221 tests + 28/28 mutations, all on Node 20.
+
+Scored by re-spanning every recording made so far with this build (`map-service/dev/respan.js --state=<saved VPS state>`)
+and replaying through the new page harness. 12 s delay, before -> after:
+
+| Region | train-h | absorbed | fades / train-h |
+| --- | --- | --- | --- |
+| sussex | 167 | 75.7 -> 89.2 % | 5.35 -> 0.23 |
+| london | 115 | 77.2 -> 93.8 % | 8.11 -> 0.65 |
+| glasgow | 26 | 74.1 -> 88.0 % | 7.79 -> 0.19 |
+| manchester | 22 | 57.8 -> 79.6 % | 10.08 -> 1.13 |
+| cambrian | 3 | 64.9 -> 81.6 % | 8.50 -> 2.29 (tiny sample) |
+| ecml-rural | 4 | 84.6 -> 76.0 % | 26.7 -> 1.43 (tiny sample) |
+
+Backward 0, catch-up <= 1.5x, acceleration bound held everywhere after (before: up to 146 m/s^2 frames). The "before" step
+counts are inflated: the old engine emitted a step every frame while a gap fade overlapped a fade-in.
+Delay sweep (after): 10/12/14/16 s -> sussex 88.3/89.2/89.6/90.4, london 93.1/93.8/94.4/94.9, glasgow 87.1/88.0/88.5/89.5,
+manchester 78.2/79.6/80.5/81.6. Feed delay (step -> service emit) is the same everywhere: p50 1.2 s, p95 ~2 s.
+The respan keeps recorded t0/eta, so the departure-dwell fix (17.4) is NOT in these numbers.
+
+**Next, in order:**
+1. **Oversized spans** cause most remaining fades (now "behind > 2 km", not gaps): 86 canonical spans over 4 km, e.g.
+   XA:0633 32.8 km in 115 s (285 m/s), LN:TJ04 18 km in 58 s. A chain walk that jumps across unobserved berths gives one berth
+   the whole station-to-station route. Proposed rule: no span when length / learned median implies > ~60 m/s (train glides,
+   phase-1 style). Also make the harness count a re-init of an already-drawn train as a fade (it currently does not).
+2. Rich to decide: (a) render delay; (b) whether "waited" steps where the step came later than predicted + the delay (a train
+   genuinely held at a signal, drawn correctly standing) count against the 90 % target. Manchester's gap is mostly these.
+3. Deploy the service (push branch or bundle, then the deploy steps above; ask Rich), let it record a day, re-measure all
+   six regions from the LIVE recordings (which then carry continuation lines and the departure dwell), then ask Rich to
+   publish the phase 2 page. Then phase 3.
+4. Rural regions need a full day of recording before their numbers mean anything.
+
+## Open problem (as found 2026-11-05 morning; superseded by fix round 1 above)
 
 Real Sussex recordings (10-min segments) through
 `node map/test/motion-replay.js <file>`: absorbed **73–76 %** (target ≥ 90 %), fades **6–7 per
