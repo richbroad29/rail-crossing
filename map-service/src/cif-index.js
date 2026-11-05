@@ -22,6 +22,7 @@ const { openText } = require('./reference');
 const { london, dayNumOf, dowOfDayNum, dateOfDayNum, hhmm } = require('./time');
 
 const STP_RANK = { P: 0, O: 1, N: 2, C: 3 };
+const EMPTY = Object.freeze([]);
 const CHUNK = 1 << 20;
 const STRIDE = 5;
 const MAX_LINE = 4 * 1024 * 1024;
@@ -54,9 +55,78 @@ class CifIndex {
     this.gen = 0;
     this._areaCache = new Map();
     this._areaSource = null;
+    this.overlay = null;                    // a VstpOverlay: same-day VSTP schedules merged over the CIF (set by the app)
   }
 
   get schedules() { return this.scheds.length; }
+
+  // ---- records: CIF ones live in the shared pool, VSTP ones carry their own (`rec.pool`, `rec.tip`) ----
+
+  /** Number of points, and accessors that hide which kind of record this is. */
+  tiplocAt(rec, i) { const p = rec.pool || this.pool; const v = p[rec.off + i * STRIDE]; return rec.tip ? rec.tip[v] : this.tiplocs.list[v]; }
+  /** {tiploc, arr, dep, pass, platform} for point i (minutes since the schedule day's midnight, -1 absent). */
+  point(rec, i) {
+    const p = rec.pool || this.pool, b = rec.off + i * STRIDE;
+    return { tiploc: this.tiplocAt(rec, i), arr: p[b + 1], dep: p[b + 2], pass: p[b + 3], platform: p[b + 4] > 0 ? (rec.plat || this.platforms.list)[p[b + 4]] : null };
+  }
+
+  _uidMap(day) {
+    if (!day.byUid) {
+      const m = new Map();
+      for (const list of day.byHc.values()) for (const ri of list) m.set(this.scheds[ri].uid, ri);
+      day.byUid = m;
+    }
+    return day.byUid;
+  }
+
+  /** The records that run on `day` for headcode `hc`: the CIF winners, with VSTP applied by the STP rules. */
+  recsFor(day, hc) {
+    const cif = day.byHc.get(hc);
+    const ov = this.overlay;
+    if (!ov || !ov.size) { if (!cif) return EMPTY; return cif.map(ri => this.scheds[ri]); }
+    const out = [];
+    if (cif) for (const ri of cif) { const r = this.scheds[ri]; if (ov.beats(day.dayNum, r.uid, r.stp) === null) out.push(r); }
+    for (const v of ov.byHc(day.dayNum, hc)) {
+      const ri = this._uidMap(day).get(v.uid);
+      if (ri === undefined || STP_RANK[v.stp] >= STP_RANK[this.scheds[ri].stp]) out.push(v);
+    }
+    return out;
+  }
+
+  /** Every record running on `day`, one per uid (CIF winners with VSTP applied). */
+  *eachRec(day) {
+    const ov = this.overlay;
+    for (const list of day.byHc.values()) {
+      for (const ri of list) {
+        const r = this.scheds[ri];
+        if (!ov || !ov.size || ov.beats(day.dayNum, r.uid, r.stp) === null) yield r;
+      }
+    }
+    if (ov && ov.size) {
+      const um = this._uidMap(day);
+      for (const v of ov.eachDay(day.dayNum)) {
+        const ri = um.get(v.uid);
+        if (ri === undefined || STP_RANK[v.stp] >= STP_RANK[this.scheds[ri].stp]) yield v;
+      }
+    }
+  }
+
+  dayOf(dayNum) { return this.days.find(d => d.dayNum === dayNum) || null; }
+
+  /** The record for (uid, London day number) after VSTP, or null. */
+  find(uid, dayNum) {
+    const day = this.dayOf(dayNum);
+    if (!day) return null;
+    const ri = this._uidMap(day).get(uid);
+    const cif = ri === undefined ? null : this.scheds[ri];
+    const ov = this.overlay;
+    if (ov && ov.size) {
+      const v = ov.winner(dayNum, uid);
+      if (v === 'cancelled') return null;
+      if (v && (!cif || STP_RANK[v.stp] >= STP_RANK[cif.stp])) return v;
+    }
+    return cif;
+  }
 
   /** Drop day sets that are no longer reachable (yesterday after `untilHour`), freeing their lists. */
   prune(nowMs, untilHour = 5) {
@@ -94,26 +164,19 @@ class CifIndex {
   match(hc, area, nowMs, ctx) {
     if (!hc || !this.days.length) return null;
     const ids = this._areaIds(area, ctx.areaTiplocs);
-    if (!ids.size) return null;
+    const areaSet = ctx.areaTiplocs && ctx.areaTiplocs.get(area);
+    if (!ids.size && !(areaSet && this.overlay && this.overlay.size)) return null;
     const window = ctx.window || 45;
     const l = london(nowMs);
     let best = null, second = null;
     for (const day of this.days) {
-      const list = day.byHc.get(hc);
-      if (!list) continue;
+      const list = this.recsFor(day, hc);
+      if (!list.length) continue;
       const rel = (l.dayNum - day.dayNum) * 1440 + l.minutes;
-      for (const ri of list) {
-        const rec = this.scheds[ri];
-        let d = Infinity;
-        for (let i = 0; i < rec.n; i++) {
-          if (!ids.has(this.pool[rec.off + i * STRIDE])) continue;
-          const t = this._booked(this.pool, rec.off, i);
-          if (t < 0) continue;
-          const dist = Math.abs(t - rel);
-          if (dist < d) d = dist;
-        }
+      for (const rec of list) {
+        const d = this.distanceInArea(rec, ids, areaSet, rel);
         if (d > window) continue;
-        const cand = { rec, dist: d, dayDate: day.date };
+        const cand = { rec, dist: d, dayDate: day.date, dayNum: day.dayNum };
         if (!best || d < best.dist) { second = best; best = cand; }
         else if (!second || d < second.dist) second = cand;
       }
@@ -124,38 +187,53 @@ class CifIndex {
     return best;
   }
 
-  _name(namer, id) { const t = this.tiplocs.list[id]; return namer(t) || t; }
+  /** Minutes between `rel` and the booked time at the nearest point inside the area (Infinity if none). */
+  distanceInArea(rec, ids, areaSet, rel) {
+    const pool = rec.pool || this.pool;
+    let d = Infinity;
+    for (let i = 0; i < rec.n; i++) {
+      const v = pool[rec.off + i * STRIDE];
+      if (rec.tip ? !(areaSet && areaSet.has(rec.tip[v])) : !ids.has(v)) continue;
+      const t = this._booked(pool, rec.off, i);
+      if (t < 0) continue;
+      const dist = Math.abs(t - rel);
+      if (dist < d) d = dist;
+    }
+    return d;
+  }
+
+  _name(namer, id, rec) { const t = rec && rec.tip ? rec.tip[id] : this.tiplocs.list[id]; return namer(t) || t; }
 
   /** The compact `svc` object for a Train. */
   svc(rec, namer) {
-    const p = this.pool, last = rec.off + (rec.n - 1) * STRIDE;
+    const p = rec.pool || this.pool, last = rec.off + (rec.n - 1) * STRIDE;
     const dep = this._booked(p, rec.off, 0);
     const arrRaw = p[last + 1] >= 0 ? p[last + 1] : this._booked(p, rec.off, rec.n - 1);
     return {
       uid: rec.uid, toc: rec.toc,
-      o: this._name(namer, p[rec.off]), d: this._name(namer, p[last]),
+      o: this._name(namer, p[rec.off], rec), d: this._name(namer, p[last], rec),
       dep: hhmm(dep), arr: hhmm(arrRaw), cat: rec.cat, pwr: rec.pwr, load: rec.load
     };
   }
 
   /** The full `service` object for /train/:id. */
   detail(rec, namer) {
-    const p = this.pool, base = rec.off, last = base + (rec.n - 1) * STRIDE;
+    const p = rec.pool || this.pool, base = rec.off, last = base + (rec.n - 1) * STRIDE;
     const calls = [];
     for (let i = 0; i < rec.n; i++) {
       const b = base + i * STRIDE;
       calls.push({
-        name: this._name(namer, p[b]), tiploc: this.tiplocs.list[p[b]],
+        name: this._name(namer, p[b], rec), tiploc: this.tiplocAt(rec, i),
         arr: hhmm(p[b + 1]), dep: hhmm(p[b + 2]), pass: hhmm(p[b + 3]),
-        platform: p[b + 4] > 0 ? this.platforms.list[p[b + 4]] : null
+        platform: p[b + 4] > 0 ? (rec.plat || this.platforms.list)[p[b + 4]] : null
       });
     }
     const speed = Number(rec.speed);
     return {
       uid: rec.uid, stp: rec.stp, toc: rec.toc, headcode: rec.hc, category: rec.cat, power: rec.pwr,
       timingLoad: rec.load, speedMph: Number.isFinite(speed) && speed > 0 ? speed : null,
-      origin: { name: this._name(namer, p[base]), time: hhmm(this._booked(p, base, 0)) },
-      destination: { name: this._name(namer, p[last]), time: hhmm(p[last + 1] >= 0 ? p[last + 1] : this._booked(p, base, rec.n - 1)) },
+      origin: { name: this._name(namer, p[base], rec), time: hhmm(this._booked(p, base, 0)) },
+      destination: { name: this._name(namer, p[last], rec), time: hhmm(p[last + 1] >= 0 ? p[last + 1] : this._booked(p, base, rec.n - 1)) },
       calls
     };
   }
@@ -329,4 +407,4 @@ function targetDays(nowMs, untilHour = 5) {
   return days;
 }
 
-module.exports = { CifIndex, buildCifIndex, targetDays, STRIDE };
+module.exports = { CifIndex, buildCifIndex, targetDays, STRIDE, STP_RANK, timeMins };

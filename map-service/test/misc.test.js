@@ -173,12 +173,15 @@ test('deploy/rail-map.service has the settings the lead asked for', () => {
 });
 
 test('nothing in src/ imports from backend/ or writes outside MAP_DATA_DIR by construction', () => {
-  const dir = path.join(__dirname, '..', 'src');
-  for (const f of fs.readdirSync(dir)) {
-    const text = fs.readFileSync(path.join(dir, f), 'utf8');
+  const root = path.join(__dirname, '..', 'src');
+  const files = [];
+  (function walk(d, rel) { for (const e of fs.readdirSync(d, { withFileTypes: true })) { if (e.isDirectory()) walk(path.join(d, e.name), rel + e.name + '/'); else files.push(rel + e.name); } })(root, '');
+  for (const f of files) {
+    const text = fs.readFileSync(path.join(root, f), 'utf8');
     assert.ok(!/require\(['"][^'"]*backend[^'"]*['"]\)/.test(text), `${f} imports from backend/`);
   }
-  // The only writers: refdata (under <dataDir>/ref), the graph (the state file), download (its dest + .tmp).
-  const writers = fs.readdirSync(dir).filter(f => /writeFile|createWriteStream|renameSync|mkdirSync/.test(fs.readFileSync(path.join(dir, f), 'utf8')));
-  assert.deepEqual(writers.sort(), ['app.js', 'berth-graph.js', 'download.js', 'refdata.js']);
+  // The only writers: refdata (under <dataDir>/ref), the graph (the state file), download (its dest + .tmp), the recorder, the
+  // learned stores, the track pack manager (<dataDir>/track). The track LIBRARY (src/track/) only reads.
+  const writers = files.filter(f => /writeFile|createWriteStream|renameSync|mkdirSync/.test(fs.readFileSync(path.join(root, f), 'utf8')));
+  assert.deepEqual(writers.sort(), ['app.js', 'berth-graph.js', 'download.js', 'record.js', 'refdata.js', 'track-manager.js', 'transit.js', 'vstp.js']);
 });

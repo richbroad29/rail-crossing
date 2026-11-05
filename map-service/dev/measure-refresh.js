@@ -28,11 +28,11 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   for (const f of ['smart-latest.json.gz', 'corpus-latest.json.gz', 'naptan-rail.csv']) fs.copyFileSync(path.join(opt['ref-dir'], f), path.join(refDir, f));
   fs.copyFileSync(opt.cif, path.join(refDir, 'cif-latest.json.gz'));
   const port = 62000 + Math.floor(Math.random() * 900);
-  const fake = spawn(process.execPath, [path.join(__dirname, 'fake-nrod.js'), '--mode=synthetic', `--smart=${path.join(refDir, 'smart-latest.json.gz')}`, '--rate=200', `--trains=${opt.trains || 3500}`, `--port=${port}`], { stdio: 'ignore' });
+  const fake = spawn(process.execPath, [path.join(__dirname, 'fake-nrod.js'), '--mode=synthetic', `--smart=${path.join(refDir, 'smart-latest.json.gz')}`, '--rate=200', `--trains=${opt.trains || 3500}`, `--port=${port}`, '--trust-rate=25', '--vstp-rate=2', `--trust-prefill=${opt['trust-prefill'] || 0}`], { stdio: 'ignore' });
   await sleep(1000);
   log.setSink(() => {});
   const { config } = loadConfig({ env: {}, argv: [], overrides: { port: 0 } });
-  const app = new App({ config, dataDir: path.join(work, 'data'), fake: { host: '127.0.0.1', port, refDir } });
+  const app = new App({ config, dataDir: path.join(work, 'data'), fake: { host: '127.0.0.1', port, refDir }, trackPack: opt['track-pack'] || null });
   await app.start();
   await sleep(Number(opt.seconds || 20) * 1000);
   const before = process.memoryUsage();
@@ -46,7 +46,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   clearInterval(iv);
   const after = process.memoryUsage();
   console.log(JSON.stringify({
-    trains: app.model.counts().trains, refreshSecs: took / 1000,
+    trains: app.model.counts().trains, trustActivations: app.trust.acts.size, trackLoaded: !!app.track, spans: app.spans ? app.spans.size : 0, vstpSchedules: app.vstp.size, refreshSecs: took / 1000,
     rssMB: { before: mb(before.rss), peakDuringRefresh: mb(peak), afterSettled: mb(after.rss) }, heapUsedMB: { before: mb(before.heapUsed), after: mb(after.heapUsed) }
   }));
   await app.stop(); fake.kill(); fs.rmSync(work, { recursive: true, force: true });

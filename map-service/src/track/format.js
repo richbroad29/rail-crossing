@@ -5,7 +5,8 @@
 // source of truth for the names, element types and enumerations.
 
 const MAGIC = 'RTKP';
-const VERSION = 1;
+const VERSION = 2;            // 2: the derived index (VCUM, EBST, EBEN, GKEY, GOFF, GSEG, GSEGE) is stored, so loading does no work
+const MIN_VERSION = 1;        // format 1 stays readable: the reader derives those arrays itself (slowly)
 const HEADER_BYTES = 32;      // fixed part of the header, before the section table
 const ENTRY_BYTES = 32;       // one section-table entry
 const ALIGN = 8;              // every section starts on an 8-byte boundary
@@ -29,6 +30,8 @@ const SECTIONS = {
   VLAT: T.I32, VLON: T.I32,
   // strings: id i spans STRB[STRO[i] .. STRO[i+1]); id 0 is the empty string
   STRO: T.U32, STRB: T.BYTES,
+  // derived index, precomputed by the builder (format 2; see derive.js). A format-1 pack lacks them and the reader computes them.
+  VCUM: T.F32, EBST: T.F32, EBEN: T.F32, GKEY: T.U32, GOFF: T.U32, GSEG: T.U32, GSEGE: T.U32,
   // OSM signals, snapped to edges
   SGEDGE: T.U32, SGOFF: T.F32, SGDIST: T.F32, SGLAT: T.I32, SGLON: T.I32,
   SGREF: T.U32, SGDIR: T.U8, SGSIDE: T.U8, SGKIND: T.U8,
@@ -61,4 +64,4 @@ const SNAP = { PRIMARY: 1, TRACK_REF: 2, PLATFORM: 4 };
 
 const E7 = 1e-7;
 
-module.exports = { MAGIC, VERSION, HEADER_BYTES, ENTRY_BYTES, ALIGN, T, ARRAYS, SECTIONS, CLS, CLS_NAMES, FLG, ELEC, ELEC_NAMES, SIGDIR, SIGSIDE, SIGKIND, SNAP, E7 };
+module.exports = { MAGIC, VERSION, MIN_VERSION, HEADER_BYTES, ENTRY_BYTES, ALIGN, T, ARRAYS, SECTIONS, CLS, CLS_NAMES, FLG, ELEC, ELEC_NAMES, SIGDIR, SIGSIDE, SIGKIND, SNAP, E7 };

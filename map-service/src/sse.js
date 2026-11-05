@@ -21,6 +21,7 @@ class SseHub {
   constructor({ model, snapshot, config, now = Date.now, mono = () => performance.now() }) {
     this.model = model; this.snapshot = snapshot; this.cfg = config; this.now = now; this.mono = mono;
     this.clients = new Set();
+    this.taps = new Set();                 // JSONL consumers (the rolling record, /debug/record): {bbox, onUpdate({serverTime, upsert, remove})}
     this.slow = new Map();                 // changes accumulated for coarse clients
     this.slowSince = mono();
     this.stats = { connected: 0, dropped: 0, refused: 0, updates: 0, bytes: 0 };
@@ -78,9 +79,24 @@ class SseHub {
     this._send(client, `event: update\ndata: {"serverTime":${serverTime},"upsert":[${upsert.join(',')}],"remove":${JSON.stringify(remove)}}\n\n`);
   }
 
+  addTap(tap) { this.taps.add(tap); return tap; }
+  removeTap(tap) { this.taps.delete(tap); }
+
+  /** The changes inside a tap's box: {serverTime, upsert: [Train JSON strings], remove: [ids]}, or null when there are none. */
+  _tapUpdate(map, bbox, serverTime) {
+    const { upsert, remove } = this._update(map, bbox);
+    if (!upsert.length && !remove.length) return null;
+    return { serverTime, upsert, remove };
+  }
+
   /** Called once per batch with the changes since the last call. */
   flush(changes) {
     const m = this.mono(), wall = this.now();
+    if (this.taps.size && changes.size) {
+      for (const tap of [...this.taps]) {
+        try { const u = this._tapUpdate(changes, tap.bbox, wall); if (u) tap.onUpdate(u); } catch (_) { /* a tap must never stop the stream */ }
+      }
+    }
     for (const [id, o] of changes) if (!this.slow.has(id)) this.slow.set(id, o);
     if (!this.clients.size) { if (m - this.slowSince >= this.cfg.coarseIntervalSecs * 1000) { this.slow.clear(); this.slowSince = m; } return; }
     if (changes.size) for (const c of [...this.clients]) if (!c.coarse) this._emit(c, changes, wall);

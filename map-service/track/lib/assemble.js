@@ -6,6 +6,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const F = require('../../src/track/format');
 const { classify, electrification, maxspeedMph, flags } = require('./graph');
+const { deriveSections } = require('../../src/track/derive');
 
 class StringTable {
   constructor() { this.list = ['']; this.map = new Map([['', 0]]); }
@@ -60,8 +61,11 @@ function graphSections(g, strings) {
 }
 
 /** Write a pack. `sections` are typed arrays by id; META and NETW are given as Buffers. Returns {bytes, sha256, sections}. */
-function writePack(file, sections, { metaJson, networkLo, networkHi, built = Date.now() }) {
+function writePack(file, sections, { metaJson, networkLo, networkHi, built = Date.now(), version = F.VERSION }) {
   const entries = [];
+  // Format 2 stores the derived index (computed here, once, from the vertex arrays) so the runtime reader does no work.
+  if (version >= 2 && !sections.GKEY) sections = Object.assign({}, sections, deriveSections(sections.VLAT, sections.VLON, sections.EVO));
+  if (version < 2) { sections = Object.assign({}, sections); for (const id of ['VCUM', 'EBST', 'EBEN', 'GKEY', 'GOFF', 'GSEG', 'GSEGE']) delete sections[id]; }
   const order = Object.keys(F.SECTIONS);
   const put = (id, data) => entries.push({ id, type: F.SECTIONS[id], count: data.length, buf: Buffer.from(data.buffer, data.byteOffset, data.byteLength) });
   put('META', Buffer.from(metaJson, 'utf8'));
@@ -74,7 +78,7 @@ function writePack(file, sections, { metaJson, networkLo, networkHi, built = Dat
   const total = align(pos);
   const out = Buffer.alloc(total);
   out.write(F.MAGIC, 0, 'latin1');
-  out.writeUInt32LE(F.VERSION, 4); out.writeUInt32LE(entries.length, 8); out.writeUInt32LE(0, 12);
+  out.writeUInt32LE(version, 4); out.writeUInt32LE(entries.length, 8); out.writeUInt32LE(0, 12);
   out.writeDoubleLE(total, 16); out.writeDoubleLE(built, 24);
   entries.forEach((e, i) => {
     const o = F.HEADER_BYTES + i * F.ENTRY_BYTES;

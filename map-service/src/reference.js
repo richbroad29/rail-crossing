@@ -121,7 +121,7 @@ function loadStationsFile(file) {
 async function loadSmart(file) {
   const pool = new Map();
   const intern = s => { const e = pool.get(s); if (e !== undefined) return e; pool.set(s, s); return s; };
-  const d = { rows: 0, area: [], from: [], to: [], stanox: [], event: [], skipped: 0 };
+  const d = { rows: 0, area: [], from: [], to: [], stanox: [], event: [], platform: [], skipped: 0 };
   await streamRows(file, {
     onRow(row) {
       if (!row || typeof row !== 'object') return;
@@ -129,7 +129,7 @@ async function loadSmart(file) {
       const from = str(row.FROMBERTH), to = str(row.TOBERTH);
       if (!area || area.length > 4 || from.length > 6 || to.length > 6 || (!from && !to)) { d.skipped++; return; }
       d.area.push(intern(area)); d.from.push(intern(from)); d.to.push(intern(to));
-      d.stanox.push(intern(stanoxKey(row.STANOX))); d.event.push(intern(str(row.EVENT).toUpperCase()));
+      d.stanox.push(intern(stanoxKey(row.STANOX))); d.event.push(intern(str(row.EVENT).toUpperCase())); d.platform.push(intern(str(row.PLATFORM).slice(0, 4)));
       d.rows++;
     }
   });

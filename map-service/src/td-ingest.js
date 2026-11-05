@@ -45,8 +45,16 @@ class TdIngest extends EventEmitter {
    * @param {function} [o.now]
    * @param {function} [o.sleep]    (ms)=>Promise stand-in for backoff (tests)
    */
-  constructor({ config, creds, host, port, onEvent, open = stomp.openSession, now = Date.now, sleep = null }) {
+  constructor({ config, creds, host, port, onEvent, open = stomp.openSession, now = Date.now, sleep = null, extras = [] }) {
     super();
+    // Extra subscriptions on the same connection (TRUST, VSTP). Each is isolated: its handler's
+    // failures are counted against it alone and never reach the TD path, and a topic the login may
+    // not read is switched off for a while (the broker closes the connection on that error, so the
+    // reconnect simply leaves it out) instead of taking the TD feed down with it.
+    this.extras = extras.map(x => ({
+      name: x.name, topic: x.topic, onBody: x.onBody, enabled: x.enabled !== false, disabledUntil: 0, cooldownMs: (x.cooldownSecs || 3600) * 1000,
+      frames: 0, errors: 0, lastMessageAt: null, firstError: null, rate: new RateWindow(5000, 12, now), subscribed: false, refused: 0
+    }));
     this.cfg = config;
     this.creds = creds; this.host = host; this.port = port;
     this.onEvent = onEvent;
@@ -123,6 +131,13 @@ class TdIngest extends EventEmitter {
       } catch (e) {
         this.counts.connectFailures++;
         this.lastError = log.errText(e);
+        if (e && e.kind === 'missing-dependency') {        // retrying cannot fix a missing package: stop, loudly
+          this.fatal = this.lastError;
+          this.running = false;
+          log.error(`td: ${this.lastError}; the live feed is OFF`);
+          this.emit('fatal', e);
+          break;
+        }
         if (!this._failLogged) { log.warn(`td: connect failed (${this.lastError}); retrying with backoff`); this._failLogged = true; }
       }
       if (!this.running) break;
@@ -151,13 +166,47 @@ class TdIngest extends EventEmitter {
     });
     try { session.subscribe(this.cfg.topic, (body, headers, t) => this._onBody(body, t)); }
     catch (e) { session.kill(); throw e; }
+    for (const x of this.extras) {
+      x.subscribed = false;
+      if (!x.enabled || this.now() < x.disabledUntil) continue;
+      try {
+        session.subscribe(x.topic, (body, headers, t) => this._onExtra(x, body, t));
+        x.subscribed = true;
+      } catch (_) { /* the session closed under us: the loop below reconnects */ }
+    }
     const info = await closed;
+    for (const x of this.extras) x.subscribed = false;
+    const err = info && info.error;
+    if (err && err.kind === 'not-authorised' && err.info && err.info.topic) {
+      const x = this.extras.find(e => e.topic === err.info.topic);
+      if (x) {
+        x.refused++; x.disabledUntil = this.now() + x.cooldownMs;
+        log.warn(`${x.name}: this login may not read ${x.topic}; running without it for ${Math.round(x.cooldownMs / 60000)} min (TD is unaffected)`);
+      }
+    }
     this.session = null;
     this.connected = false;
     const why = info && info.error ? `${info.error.kind || 'error'}: ${log.errText(info.error)}` : 'closed';
     if (this.running) log.warn(`td: connection lost (${why}); reconnecting`);
     this.emit('disconnected');
     return this.counts.frames > before;
+  }
+
+  _onExtra(x, body, receivedAt) {
+    x.frames++; x.rate.add(1); x.lastMessageAt = receivedAt;
+    try { x.onBody(body, receivedAt); }
+    catch (e) { x.errors++; if (x.firstError === null) x.firstError = log.errText(e); }
+  }
+
+  /** Per extra subscription: {connected, lastMessageAt, staleSecs, messagesPerMin, ...}. */
+  extraStatus(name) {
+    const x = this.extras.find(e => e.name === name);
+    if (!x) return null;
+    return {
+      connected: this.connected && x.subscribed, lastMessageAt: x.lastMessageAt,
+      staleSecs: x.lastMessageAt === null ? null : Math.max(0, Math.round((this.now() - x.lastMessageAt) / 1000)),
+      messagesPerMin: x.rate.perMin(), handlerErrors: x.errors, refused: x.refused, disabled: this.now() < x.disabledUntil
+    };
   }
 
   _watchdog() {

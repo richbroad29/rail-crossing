@@ -103,7 +103,7 @@ test('THE EXECUTABLE: bin/rail-map.js in fake mode serves, learns, and on SIGTER
     assert.ok(out.includes('SIGTERM: shutting down'));
     assert.ok(!/at .*\.js:\d+/.test(out), 'no stack trace in the output');
     // Nothing was written outside the data folder.
-    assert.deepEqual(fs.readdirSync(dataDir).sort(), ['state']);
+    assert.deepEqual(fs.readdirSync(dataDir).sort(), ['record', 'state']);       // state, and the rolling Sussex record
     // A restart restores it.
     const g = new BerthGraph();
     assert.equal(g.loadLearnedFile(path.join(dataDir, 'state', 'learned-graph.json')), saved.edges.length);

@@ -65,12 +65,16 @@ test('GET /health: exact shape, plain numbers, and it is truthful', async () => 
     assert.equal(r.status, 200);
     assert.match(r.headers['content-type'], /^application\/json/);
     const h = r.json;
-    assert.deepEqual(keys(h), ['clients', 'feeds', 'heapMB', 'model', 'reference', 'rssMB', 'status', 'uptimeSecs']);
+    assert.deepEqual(keys(h), ['clients', 'diagnostics', 'feeds', 'heapMB', 'model', 'reference', 'rssMB', 'status', 'uptimeSecs']);
     assert.ok(['ok', 'degraded', 'starting'].includes(h.status));
     assert.equal(h.status, 'ok');
     assert.ok(isNum(h.uptimeSecs) && isNum(h.rssMB) && isNum(h.heapMB) && h.rssMB > 10);
-    assert.deepEqual(keys(h.feeds), ['td']);
+    assert.deepEqual(keys(h.feeds), ['td', 'trust', 'vstp']);
     assert.deepEqual(keys(h.feeds.td), ['connected', 'lastMessageAt', 'messagesPerMin', 'staleSecs']);
+    assert.deepEqual(keys(h.feeds.trust), ['activations', 'connected', 'lastMessageAt', 'messagesPerMin', 'staleSecs']);
+    assert.deepEqual(keys(h.feeds.vstp), ['connected', 'lastMessageAt', 'messagesPerMin', 'schedules', 'staleSecs']);
+    assert.equal(h.feeds.trust.connected, true); assert.equal(h.feeds.vstp.connected, true);
+    assert.deepEqual(keys(h.diagnostics), ['record', 'spans', 'track', 'transit', 'trust', 'vstp']);
     assert.equal(h.feeds.td.connected, true);
     assert.deepEqual(keys(h.reference), ['cif', 'corpus', 'naptan', 'smart']);
     for (const k of ['smart', 'corpus', 'naptan']) { assert.deepEqual(keys(h.reference[k]), ['loadedAt', 'rows']); assert.ok(h.reference[k].rows > 10); assert.ok(isNum(h.reference[k].loadedAt)); }
@@ -193,17 +197,18 @@ test('GET /train/:id: exact shape, service detail, place, recent berths, trail',
     assert.deepEqual(d.previousHeadcodes, []);
     assert.equal(d.firstSeenAt, byHc['1H15'].at);
     assert.deepEqual(d.recentBerths.map(b => b.berth), ['0002', '0004', '0006']);
-    d.recentBerths.forEach(b => { assert.deepEqual(keys(b), ['area', 'at', 'berth']); assert.ok(Number.isInteger(b.at)); });
+    d.recentBerths.forEach(b => { assert.deepEqual(keys(b), ['area', 'at', 'berth', 'sp']); assert.ok(Number.isInteger(b.at)); assert.equal(b.sp, null, 'no track pack: no span'); });
     assert.equal(d.trail.length, 3);
     d.trail.forEach(p => { assert.equal(p.length, 3); assert.ok(isNum(p[0]) && isNum(p[1]) && Number.isInteger(p[2])); });
     assert.deepEqual(d.place, { kind: 'station', station: 'Southwick' });
     assert.ok(d.speedMphEstimate === null || isNum(d.speedMphEstimate));
     // The timetable section.
-    assert.deepEqual(keys(d.service), ['calls', 'category', 'destination', 'headcode', 'origin', 'power', 'speedMph', 'stp', 'timingLoad', 'toc', 'uid']);
+    assert.deepEqual(keys(d.service), ['calls', 'category', 'destination', 'headcode', 'lastReport', 'origin', 'power', 'speedMph', 'stp', 'timingLoad', 'toc', 'uid']);
+    assert.equal(d.service.lastReport, null, 'no TRUST report: null');
     assert.deepEqual([d.service.uid, d.service.stp, d.service.toc, d.service.headcode, d.service.category, d.service.power, d.service.timingLoad, d.service.speedMph], ['C00001', 'P', 'SN', '1H15', 'OO', 'EMU', '377', 75]);
     assert.deepEqual(d.service.origin, { name: 'Littlehampton', time: '09:30' });
     assert.deepEqual(d.service.destination, { name: 'London Victoria', time: '11:15' });
-    d.service.calls.forEach(c => assert.deepEqual(keys(c), ['arr', 'dep', 'name', 'pass', 'platform', 'tiploc']));
+    d.service.calls.forEach(c => { assert.deepEqual(keys(c), ['actualArr', 'actualDep', 'actualPass', 'arr', 'cancelled', 'dep', 'expArr', 'expDep', 'name', 'pass', 'platform', 'platformActual', 'tiploc', 'variation']); assert.equal(c.cancelled, false); assert.equal(c.actualArr, null); });
     assert.deepEqual(d.service.calls.map(c => c.tiploc), ['LTLHMPT', 'STHWICK', 'PSLDAWH', 'VICTRIC']);
     // Interpolated and unmatched trains.
     const d2 = (await getJson(rig.port, `/map/v1/train/${byHc['2K22'].id}`)).json;

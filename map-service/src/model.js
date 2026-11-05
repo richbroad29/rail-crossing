@@ -50,8 +50,13 @@ class TrainModel {
    * @param {function} [o.now]
    * @param {function(Train, number):object|null} [o.matcher]  returns {svc, rec, index} or null
    */
-  constructor({ graph, config, now = Date.now, matcher = null }) {
+  constructor({ graph, config, now = Date.now, matcher = null, decorate = null, motion = null, onTransit = null }) {
     this.graph = graph;
+    this.decorate = decorate;         // (Train) -> svc object for the wire (adds late / next from TRUST); default: the match's own
+    this.spanOf = null;               // (keyId) -> the id of the span of that berth, or null: set by the app
+    this.motion = motion;             // MotionPlanner (section 11) or null
+    this.onTransit = onTransit;       // (Train, keyId, secs) when a train leaves a berth it entered by a step (section 10)
+    this.timeDep = new Set();         // trains whose JSON changes with the clock (held flag, clamped expected times)
     this.cfg = config;
     this.now = now;
     this.matcher = matcher;
@@ -128,19 +133,49 @@ class TrainModel {
     const nowMs = this.now();
     let r = null;
     try { r = this.matcher(t, nowMs); } catch (_) { r = null; }
-    const oldUid = t.svc ? t.svc.svc.uid : null;
+    const oldUid = t.svc ? t.svc.svc.uid : null, oldAct = t.svc ? t.svc.act || null : null;
     t.svc = r;
     t.svcArea = this.graph.areaOf[t.keyId];
     t.svcHc = t.hc;
     t.svcGen = this.svcGen;
     t.svcCheckAt = nowMs + (r ? 600000 : (this.cfg.svcRecheckSecs || 120) * 1000);
-    if (oldUid !== (r ? r.svc.uid : null)) { this._touch(t); }
+    if (oldUid !== (r ? r.svc.uid : null) || oldAct !== (r ? r.act || null : null)) { this._touch(t); }
+  }
+
+  /** TRUST says something changed for this headcode (an activation, a renumbering): re-run the match for its trains now. */
+  rematchHeadcode(hc) {
+    const set = this.byHc.get(hc);
+    if (!set) return 0;
+    let n = 0;
+    for (const t of [...set]) { this._rematch(t); n++; }
+    return n;
+  }
+
+  /** A TRUST movement or cancellation for `act`: re-issue the trains bound to it. */
+  touchAct(act) {
+    const set = this.byHc.get(act.hc);
+    if (!set) return 0;
+    let n = 0;
+    for (const t of set) if (t.svc && t.svc.act === act) { this._touch(t); n++; }
+    return n;
+  }
+
+  /** Once a tick: re-issue trains whose JSON depends on the clock and whose moment has come. */
+  tickTime(nowMs = this.now()) {
+    if (!this.timeDep.size) return 0;
+    let n = 0;
+    for (const t of [...this.timeDep]) {
+      if (this.byId.get(t.id) !== t) { this.timeDep.delete(t); continue; }
+      if (nowMs >= t.timeDepAt) { this.timeDep.delete(t); this._touch(t); n++; }
+    }
+    return n;
   }
 
   _create(keyId, hc, ts) {
     const t = {
       id: this._newId(), hc, prevHc: null, keyId, at: ts, lastEventAt: ts, firstSeenAt: ts,
       lat: 0, lon: 0, pl: null, place: null, hdg: null, placed: false,
+      enteredStep: false, timeDepAt: 0, svcDueAt: 0,
       recentKeys: [], recentAts: [], trail: [], svc: null, svcArea: null, svcHc: null, svcGen: 0, svcCheckAt: 0, json: null
     };
     this.stats.newTrains++;
@@ -152,7 +187,7 @@ class TrainModel {
     this._touch(t);
     const old = this.occ.get(keyId);
     if (old && old !== t) { this._evict(old); this.stats.overwritten++; }
-    t.keyId = keyId; t.at = ts; t.lastEventAt = ts;
+    t.keyId = keyId; t.at = ts; t.lastEventAt = ts; t.enteredStep = !!step;
     this.occ.set(keyId, t);
     if (!this.byId.has(t.id)) this.byId.set(t.id, t);
     this._hcAdd(t);
@@ -215,6 +250,9 @@ class TrainModel {
     }
     if (!t) { t = this._create(toId, descr, ts); }
     else {
+      if (this.onTransit && t.keyId === fromId && t.enteredStep && ts > t.at) {
+        try { this.onTransit(t, fromId, (ts - t.at) / 1000); } catch (_) { /* a learner must never stop the model */ }
+      }
       if (this.occ.get(t.keyId) === t) this.occ.delete(t.keyId);
       this.graph.observeEdge(fromId, toId);
     }
@@ -365,8 +403,17 @@ class TrainModel {
       id: t.id, hc: t.hc, lat: round5(t.lat), lon: round5(t.lon), hdg: t.hdg, area: this.graph.areaOf[t.keyId],
       berth: this.graph.berth(t.keyId), at: t.at, pl: t.pl
     };
-    if (t.svc) o.svc = t.svc.svc;
+    t.svcDueAt = 0;
+    if (t.svc) o.svc = this.decorate ? this.decorate(t) : t.svc.svc;     // decorate may set t.svcDueAt: when the clock next changes it
+    let due = Infinity;
+    if (this.motion) {
+      let p = null;
+      try { p = this.motion.plan(t, this.now()); } catch (_) { p = null; }
+      if (p) { o.mv = p.mv; if (!p.mv.held) due = p.heldAt; }
+    }
+    if (t.svcDueAt && t.svcDueAt < due) due = t.svcDueAt;
     t.json = JSON.stringify(o);
+    if (due !== Infinity) { t.timeDepAt = due; this.timeDep.add(t); }
     return t.json;
   }
 
@@ -384,7 +431,7 @@ class TrainModel {
     const t = this.byId.get(id);
     if (!t || !t.placed) return null;
     const g = this.graph;
-    const recentBerths = t.recentKeys.map((k, i) => ({ area: g.areaOf[k], berth: g.berth(k), at: t.recentAts[i] }));
+    const recentBerths = t.recentKeys.map((k, i) => ({ area: g.areaOf[k], berth: g.berth(k), at: t.recentAts[i], sp: this.spanOf ? this.spanOf(k) : null }));
     const cut = this.now() - (this.cfg.trailWindowSecs || 900) * 1000;
     const trail = [];
     for (let i = 0; i < t.trail.length; i += 3) if (t.trail[i + 2] >= cut) trail.push([t.trail[i], t.trail[i + 1], t.trail[i + 2]]);

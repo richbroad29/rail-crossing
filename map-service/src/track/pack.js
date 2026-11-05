@@ -9,8 +9,9 @@
 const fs = require('fs');
 const F = require('./format');
 const { Grid } = require('./spatial');
+const { deriveSections } = require('./derive');
 const { KY, DEG7, kxAt, bearing7, angDiff } = require('./geom');
-const { routeBetween, sliceRoute, pointOnRoute } = require('./route');
+const { routeBetween, sliceRoute, pointOnRoute, alongRoute } = require('./route');
 
 const DEFAULT_MAX_DIST = 300;
 
@@ -20,7 +21,7 @@ function readDirectory(fd, size) {
   if (size < F.HEADER_BYTES || fs.readSync(fd, head, 0, F.HEADER_BYTES, 0) < F.HEADER_BYTES) throw new Error('track pack: file too short to be a pack');
   if (head.toString('latin1', 0, 4) !== F.MAGIC) throw new Error('track pack: wrong magic (not a track pack)');
   const version = head.readUInt32LE(4);
-  if (version !== F.VERSION) throw new Error(`track pack: format version ${version}, this reader understands ${F.VERSION}`);
+  if (version < F.MIN_VERSION || version > F.VERSION) throw new Error(`track pack: format version ${version}, this reader understands ${F.MIN_VERSION} to ${F.VERSION}`);
   const count = head.readUInt32LE(8);
   const total = head.readDoubleLE(16);
   if (total !== size) throw new Error(`track pack: header says ${total} bytes but the file is ${size} (truncated or corrupt)`);
@@ -74,31 +75,20 @@ class TrackPack {
   }
 
   _initDerived() {
-    const { vlat, vlon, evo } = this;
-    const E = this.nEdges, V = this.nVertices;
-    // cumulative metres from the start of the edge to each vertex (Float32: 2 mm at 30 km)
-    const vcum = new Float32Array(V);
-    const bStart = new Float32Array(E), bEnd = new Float32Array(E);
-    for (let e = 0; e < E; e++) {
-      const a = evo[e], b = evo[e + 1];
-      let acc = 0;
-      vcum[a] = 0;
-      for (let v = a + 1; v < b; v++) {
-        const kx = kxAt((vlat[v - 1] + vlat[v]) / 2);
-        const dy = (vlat[v] - vlat[v - 1]) * DEG7 * KY, dx = (vlon[v] - vlon[v - 1]) * DEG7 * kx;
-        acc += Math.sqrt(dx * dx + dy * dy);
-        vcum[v] = acc;
-      }
-      // tangent bearings at each end, measured to the first vertex >= 15 m in (stable against OSM wiggle at a switch)
-      let j = a + 1;
-      while (j < b - 1 && vcum[j] < 15) j++;
-      bStart[e] = b - a >= 2 ? bearing7(vlat[a], vlon[a], vlat[j], vlon[j]) : 0;
-      j = b - 2;
-      while (j > a && acc - vcum[j] < 15) j--;
-      bEnd[e] = b - a >= 2 ? bearing7(vlat[j], vlon[j], vlat[b - 1], vlon[b - 1]) : 0;
+    const s = this.s;
+    // Format 2 carries the derived index in the pack: nothing to compute. A format-1 pack (or an in-memory pack built without it)
+    // computes it here, which is the slow path this format exists to avoid.
+    const pre = s.VCUM && s.EBST && s.EBEN && s.GKEY && s.GOFF && s.GSEG && s.GSEGE;
+    if (pre) {
+      this.vcum = s.VCUM; this.bStart = s.EBST; this.bEnd = s.EBEN;
+      this.grid = new Grid({ segEdge: s.GSEGE, keys: s.GKEY, offs: s.GOFF, segs: s.GSEG });
+      this.derivedFromPack = true;
+    } else {
+      const d = deriveSections(this.vlat, this.vlon, this.evo);
+      this.vcum = d.VCUM; this.bStart = d.EBST; this.bEnd = d.EBEN;
+      this.grid = new Grid({ segEdge: d.GSEGE, keys: d.GKEY, offs: d.GOFF, segs: d.GSEG });
+      this.derivedFromPack = false;
     }
-    this.vcum = vcum; this.bStart = bStart; this.bEnd = bEnd;
-    this.grid = new Grid(vlat, vlon, evo);
     this._route = null;
   }
 
@@ -234,6 +224,8 @@ class TrackPack {
 
   slice(route, d0, d1) { return sliceRoute(this, route, d0, d1); }
   pointAt(route, d) { return pointOnRoute(this, route, d); }
+  /** Metres along `route` of (edge, offset), or null when the route does not run over that point (see route.js); with withDir, {d, reversed}. */
+  alongRoute(route, edge, offset, withDir = false) { return alongRoute(this, route, edge, offset, withDir); }
 
   // ---- stations and signals ---------------------------------------------------------------------
   _stations() {
@@ -329,8 +321,10 @@ class TrackPack {
   bytesHeld() {
     let n = 0;
     for (const a of Object.values(this.s)) n += a.byteLength;
-    n += this.vcum.byteLength + this.bStart.byteLength + this.bEnd.byteLength;
-    n += this.grid.segEdge.byteLength + this.grid.keys.byteLength + this.grid.offs.byteLength + this.grid.segs.byteLength;
+    if (!this.derivedFromPack) {
+      n += this.vcum.byteLength + this.bStart.byteLength + this.bEnd.byteLength;
+      n += this.grid.segEdge.byteLength + this.grid.keys.byteLength + this.grid.offs.byteLength + this.grid.segs.byteLength;
+    }
     if (this._route) n += this._route.bytes();
     return n;
   }
