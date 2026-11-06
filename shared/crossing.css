@@ -2,17 +2,16 @@
 body{background:#0F172A;color:#E2E8F0;font-family:-apple-system,BlinkMacSystemFont,'SF Pro',system-ui,sans-serif;min-height:100vh;min-height:100dvh;-webkit-font-smoothing:antialiased}
 .wrap{max-width:480px;margin:0 auto;padding:16px 12px;padding-top:calc(16px + env(safe-area-inset-top,0px))}
 /* Header bar: crossing name + road left-aligned, "Add as app" on the right. The button is
-   centred on the title's FIRST line (title line-height = button height = 28px), so if a long
+   centred on the title's FIRST line (26px line, 32px button, so -3px), so if a long
    name wraps the button stays level with its first line rather than floating between lines. */
 .hdr{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:16px;padding:4px 2px 14px;border-bottom:1px solid #1E293B}
 .hdr-text{min-width:0}
-.hdr-title{font-size:20px;font-weight:700;line-height:28px}
+.hdr-title{font-size:20px;font-weight:700;line-height:26px}
 .hdr-road{font-size:12px;color:#94A3B8;margin-top:1px}
-/* Deliberately quiet: the card surface colour, no border, muted text. It should be findable,
-   not compete with the status card below it. */
-.add-app-btn{flex-shrink:0;white-space:nowrap;height:28px;padding:0 12px 0 10px;border-radius:14px;border:none;background:#1E293B;color:#CBD5E1;font-family:inherit;font-size:12px;font-weight:500;line-height:1;display:inline-flex;align-items:center;gap:6px;cursor:pointer;-webkit-tap-highlight-color:transparent}
-.add-app-btn svg{color:#94A3B8}
-.add-app-btn:active{background:#334155}
+/* The one call to action on the page, so it gets the solid accent fill. Blue so it can't be
+   confused with the red/amber/green barrier states. */
+.add-app-btn{flex-shrink:0;white-space:nowrap;height:32px;padding:0 14px 0 11px;border-radius:16px;border:none;margin-top:-3px;background:#3B82F6;color:#FFF;font-family:inherit;font-size:12px;font-weight:600;line-height:1;display:inline-flex;align-items:center;gap:6px;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.add-app-btn:active{background:#2563EB}
 .add-app-btn.hidden{display:none}
 .status-card{border-radius:16px;padding:14px 16px;text-align:center;margin-bottom:16px;transition:all .5s}
 .status-title{font-size:22px;font-weight:700;margin-bottom:2px}
@@ -94,7 +93,7 @@ body{background:#0F172A;color:#E2E8F0;font-family:-apple-system,BlinkMacSystemFo
 .modal h3{font-size:16px;font-weight:700;margin-bottom:12px}
 .modal p{font-size:13px;color:#94A3B8;line-height:1.6;margin-bottom:8px}
 .modal ol{font-size:13px;color:#CBD5E1;line-height:1.8;padding-left:20px;margin-bottom:12px}
-.modal-close{width:100%;padding:10px;border-radius:8px;border:none;background:#3B82F6;color:#FFF;font-weight:600;font-size:13px;cursor:pointer;margin-top:8px}
+.modal-close{width:100%;padding:10px;border-radius:8px;border:none;margin-top:-3px;background:#3B82F6;color:#FFF;font-weight:600;font-size:13px;cursor:pointer;margin-top:8px}
 .modal-close:active{background:#2563EB}
 .show-more-btn{width:100%;padding:8px;margin-top:8px;background:none;border:1px solid #334155;border-radius:6px;color:#94A3B8;font-size:11px;cursor:pointer}
 .show-more-btn:active{background:#334155}
