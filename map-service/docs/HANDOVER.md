@@ -46,11 +46,11 @@ then the repo's `CLAUDE.md`. Product intent is the Claude Doc "UK Live Train Map
 | --- | --- |
 | 0 prove the data | Done. SMART reading 92% vs 1%; 2nd NROD connection fine; TRUST + VSTP enabled and working. |
 | 1 national map | Live. |
-| 2 real track, motion, TRUST | Built, merged, service deployed. **Page blocked: fails the jump targets on real data.** |
+| 2 real track, motion, TRUST | LIVE 2026-11-06 (page `28e2b7d`, service `7090736`). Fades still above target: fix round 3. |
 | 3 carriages | Not started. Rich has subscribed to Darwin Push Port + snapshots on RDM. |
 | 4 enthusiast features, launch | Not started. |
 
-## Publishing phase 2 (2026-11-06, lead) — READY, waiting for Rich to say push
+## Publishing phase 2 (2026-11-06, lead) — PUBLISHED: `main` at `28e2b7d`, live 2026-11-06 ~17:50 UTC (rollback: revert it; previous `d9c8c6e`)
 
 - **CONTRACT 19.1 DEPLOYED** 2026-11-06 ~15:25 UTC (VPS `~/rail-map` at `7090736`; rollback point `e81f499`). The bbox
   filters test a train's reach box (point + current and previous span), not its signalled point. Found by the browser
@@ -59,7 +59,7 @@ then the repo's `CLAUDE.md`. Product intent is the Claude Doc "UK Live Train Map
 - **Page fix `8efd21e`:** a stack of standing trains whose lowest id had no heading was not squared, so it drew as a cross
   (live Victoria: 15 trains, crossed in 480/480 samples -> 0).
 - **Publish branch `claude/map-phase2-publish`** (worktree `/Users/richandanna/rail-crossing-publish`, commit `28e2b7d`):
-  `origin/main` + `map/` from `claude/map-service` at `8efd21e`, re-stamped. Nothing outside `map/` changes. NOT pushed.
+  `origin/main` + `map/` from `claude/map-service` at `8efd21e`, re-stamped (token 202611061746). Nothing outside `map/` changes. Pushed on Rich's word; the RUNNING production page was checked in Chrome (engine.js + motion.js at that token, trains on the track, no console errors).
   To publish: `git -C /Users/richandanna/rail-crossing-publish push origin claude/map-phase2-publish:main`.
 - Checked: page 219 tests + 28/28 mutations + fixture replay; browser `shots` all good; `phase2` all good except the
   Brighton "stacked" scenario (the mock's `stack=BTN` no longer puts the trains on one point: fix the scenario, not the page)
