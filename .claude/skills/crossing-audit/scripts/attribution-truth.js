@@ -37,6 +37,9 @@ const REPO = path.resolve(__dirname, '../../../..');
 global.window = global;
 require(path.join(REPO, 'shared/predict.js'));
 const P = global.PREDICT;
+// The berth chain lives in the crossing's config since 2026-11-06 (shared/predict.js setChain);
+// guarded so the harness still runs against a checkout from before that, where it was built in.
+if (P.setChain) P.setChain(JSON.parse(require('fs').readFileSync(path.join(REPO, 'shared/crossings.json'), 'utf8')).portslade.chain);
 const TRIG = TRIGFILE ? JSON.parse(fs.readFileSync(TRIGFILE, 'utf8')) : null;
 
 const steps = fs.readFileSync(STEPS, 'utf8').trim().split('\n').map(l => JSON.parse(l))

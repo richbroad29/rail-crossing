@@ -38,6 +38,9 @@ const src = core + ';\n' + fs.readFileSync(path.join(REPO, 'shared/crossing.js')
 const app = new Function(src + `;return {buildClosuresFromVps, updateStatus, parseVpsResponse,
   setCFG:c=>{CFG=c}, setPeriods:p=>{closurePeriods=p}, setTrains:t=>{trains=t}};`)();
 app.setCFG(JSON.parse(fs.readFileSync(path.join(REPO, 'shared/crossings.json'), 'utf8')).portslade);
+// The berth chain lives in the crossing's config since 2026-11-06 (shared/predict.js setChain);
+// guarded so the harness still runs against a checkout from before that, where it was built in.
+if (globalThis.PREDICT.setChain) globalThis.PREDICT.setChain(JSON.parse(fs.readFileSync(path.join(REPO, 'shared/crossings.json'), 'utf8')).portslade.chain);
 
 const RealDate = Date;
 const setNow = ms => { global.Date = class extends RealDate {

@@ -353,51 +353,31 @@
       : status === 'OPEN' ? 'CROSSING CLEAR' : '';
   }
 
-  // ---- Portslade berth chain ------------------------------------------------------
-  // Derived berth chain toward/through the crossing. gap = median seconds a train
-  // dwells in that berth (≈ time to the next berth). role marks the confirmed
-  // Portslade berths; {x:true} is the crossing itself (after protecting).
-  // ttc = {q1,med,q3} seconds from ENTERING this approach berth to passing the
-  // crossing; tac = {q1,med,q3} seconds from passing the crossing to entering this
-  // cleared berth (both over 28 days of TD logs — backend derive-ttc.js). The crossing
-  // reference for both is the train stepping out of the protecting berth — i.e. the
-  // TRAIN on the crossing, not the barrier.
-  var CHAIN = {
-    east: [
-      { b: '0016', gap: 132, ttc: { q1: 613, med: 671, q3: 743 } },
-      { b: '0014', gap: 74, ttc: { q1: 479, med: 537, q3: 608 } },
-      { b: '0012', gap: 37, ttc: { q1: 402, med: 462, q3: 531 } },
-      { b: '0010', gap: 143, ttc: { q1: 362, med: 422, q3: 488 } },
-      { b: '0008', gap: 75, ttc: { q1: 201, med: 278, q3: 346 } },
-      { b: '0006', gap: 142, role: 'approach', ttc: { q1: 122, med: 206, q3: 270 } },
-      { b: '0004', gap: 79, role: 'protecting', ttc: { q1: 55, med: 64, q3: 122 } },
-      { x: true },
-      { b: '0002', gap: 115, role: 'clear' },
-      { b: 'T686', gap: 53, tac: { q1: 107, med: 116, q3: 128 } },
-      { b: 'T684', tac: { q1: 159, med: 170, q3: 186 } }
-    ],
-    west: [
-      { b: 'T682', gap: 90 },
-      { b: 'T677', gap: 126, ttc: { q1: 311, med: 336, q3: 385 } },
-      { b: '0001', gap: 45, ttc: { q1: 185, med: 201, q3: 258 } },
-      { b: '0003', gap: 36, role: 'approach', ttc: { q1: 142, med: 152, q3: 164 } },
-      { b: '0005', gap: 115, role: 'protecting', ttc: { q1: 107, med: 115, q3: 125 } },
-      { x: true },
-      { b: '0007', gap: 43, role: 'clear' },
-      { b: '0009', gap: 70, tac: { q1: 41, med: 42, q3: 45 } },
-      { b: '0011', gap: 140, tac: { q1: 103, med: 111, q3: 181 } },
-      { b: '0013', gap: 144, tac: { q1: 198, med: 258, q3: 317 } },
-      { b: '0015', gap: 84, tac: { q1: 349, med: 412, q3: 467 } },
-      { b: '0017', gap: 47, tac: { q1: 437, med: 496, q3: 554 } }
-    ]
-  };
-  // Precompute, per direction: berth → node index, and the crossing index.
+  // ---- Berth chain (per crossing, from config) -------------------------------------
+  // The berth chain toward/through the crossing comes from the crossing's entry in
+  // shared/crossings.json (`chain`) — see the _comment_chain there for what gap / role / ttc /
+  // tac mean and how they were measured. It used to be a Portslade constant here, which gave
+  // every other crossing Portslade's berths (multi-crossing item 6, 2026-11-06).
+  //
+  // Each app calls PREDICT.setChain(CFG.chain) once its config has loaded. CHAIN and CHAININ are
+  // filled IN PLACE, never replaced, so anything that took a reference to PREDICT.CHAIN before
+  // that (observe.js does, at load) sees the chain once it arrives. Until then — or for a
+  // crossing with no chain — every train is "elsewhere in the area".
+  var CHAIN = {};
+  // Precomputed per direction: berth → node index, and the crossing index.
   var CHAININ = {};
-  Object.keys(CHAIN).forEach(function (d) {
-    var idx = {}, xi = -1;
-    CHAIN[d].forEach(function (n, i) { if (n.x) xi = i; else idx[n.b] = i; });
-    CHAININ[d] = { idx: idx, xi: xi };
-  });
+  function setChain(chain) {
+    Object.keys(CHAIN).forEach(function (d) { delete CHAIN[d]; });
+    Object.keys(CHAININ).forEach(function (d) { delete CHAININ[d]; });
+    if (!chain) return;
+    Object.keys(chain).forEach(function (d) {
+      if (d.charAt(0) === '_' || !Array.isArray(chain[d])) return;
+      CHAIN[d] = chain[d];
+      var idx = {}, xi = -1;
+      chain[d].forEach(function (n, i) { if (n.x) xi = i; else idx[n.b] = i; });
+      CHAININ[d] = { idx: idx, xi: xi };
+    });
+  }
 
   // Sum of gaps from node index i up to (and including) the protecting berth — the
   // estimated seconds from entering berth i to reaching the crossing. Fallback for the
@@ -407,7 +387,7 @@
     var s = 0; for (var j = i; j < c.xi; j++) { s += (CHAIN[d][j].gap || 60); } return s;
   }
 
-  // Where a train is on its chain. Returns null when the berth isn't on the Portslade
+  // Where a train is on its chain. Returns null when the berth isn't on the crossing's
   // chain (or the direction is unknown) → "elsewhere in the area".
   //   { stage:'approach'|'passed', role, index, etaSecs, sinceSecs, rank }
   // etaSecs/sinceSecs are the STATIC per-berth medians. Callers wanting a countdown that
@@ -682,7 +662,7 @@
 
   root.PREDICT = {
     CLOSING_SOON_MS: CLOSING_SOON_MS,
-    CHAIN: CHAIN, CHAININ: CHAININ,
+    CHAIN: CHAIN, CHAININ: CHAININ, setChain: setChain,
     fmtTime: fmtTime, fmtShort: fmtShort, fmtCountdown: fmtCountdown, fmtUncertainty: fmtUncertainty,
     fmtCountdownRough: fmtCountdownRough, fmtWhen: fmtWhen, fmtSoon: fmtSoon,
     fmtHeld: fmtHeld, fmtEta: fmtEta, heldRef: heldRef,

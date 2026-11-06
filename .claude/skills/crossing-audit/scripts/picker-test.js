@@ -17,6 +17,9 @@ const REPO = process.argv[2] || path.resolve(__dirname, '../../../..');
 global.window = global;
 require(path.join(REPO, 'shared/predict.js'));
 const P = global.PREDICT;
+// The berth chain lives in the crossing's config since 2026-11-06 (shared/predict.js setChain);
+// guarded so the harness still runs against a checkout from before that, where it was built in.
+if (P.setChain) P.setChain(JSON.parse(require('fs').readFileSync(path.join(REPO, 'shared/crossings.json'), 'utf8')).portslade.chain);
 
 let pass = 0, fail = 0;
 const check = (name, got, want) => {

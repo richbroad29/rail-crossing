@@ -39,7 +39,8 @@
   var POLL_MS = 2500;
   var PRED_POLL_MS = 10000;   // matches the public app's refresh cadence — keep the two equal
 
-  // Berth chain + index, from the shared core. See shared/predict.js for the derivation.
+  // Berth chain + index, from the shared core, which fills them in place from this crossing's
+  // config (PREDICT.setChain, called in init once shared/crossings.json has loaded).
   var CHAIN = PREDICT.CHAIN, CHAININ = PREDICT.CHAININ;
 
   // TEST MODE (?test=1) — for proving the sheet link works without writing a test row into
@@ -51,14 +52,10 @@
   var TEST_MODE = /(?:^|[?&])test=1(?:&|$)/.test(location.search);
 
   // Off-chain berths that nonetheless lead to the crossing, with the median
-  // observed seconds-to-crossing (derived from TD timestamps). Used only to order
-  // "Other trains in the area" by proximity — trains far out on the Portslade line
-  // (beyond the drawn chain) sort by this; trains on unrelated LA lines have no
-  // entry and fall back to recency. Seeded from one day; refine via derive-chain.
-  var BERTH_ETA = {
-    east: { '0020': 751, '0024': 860, '0203': 870, '0202': 903, '0026': 905, '0028': 995, '0040': 999, '0032': 1054, '0030': 1055, '0042': 1065, '0034': 1093, '0022': 1129, '0036': 1140, 'A030': 1146, '0038': 1157 },
-    west: {}
-  };
+  // observed seconds-to-crossing. Used only to order "Other trains in the area" by
+  // proximity; berths with no entry fall back to recency. From this crossing's config
+  // (`offChainEta` in shared/crossings.json), set in init.
+  var BERTH_ETA = {};
   function offChainEta(d, berth) { var m = BERTH_ETA[d]; var v = m && m[berth]; return typeof v === 'number' ? v : null; }
 
   // ---- pure helpers ----
@@ -676,7 +673,7 @@
     $('pollAge').textContent = age != null ? ('feed ' + age + 's') : 'feed --';
   }
   function gapPx(g) { return Math.max(12, Math.min(60, Math.round((g || 60) * 0.4))); }
-  function splitChain(d) { var pre = [], post = [], x = false; CHAIN[d].forEach(function (n) { if (n.x) { x = true; return; } (x ? post : pre).push(n); }); return { pre: pre, post: post }; }
+  function splitChain(d) { var pre = [], post = [], x = false; (CHAIN[d] || []).forEach(function (n) { if (n.x) { x = true; return; } (x ? post : pre).push(n); }); return { pre: pre, post: post }; }
   function trainsAt(d, b) { return liveTrains.filter(function (t) { return t.direction === d && t.berth === b; }); }
   function nodeEl(d, n) {
     var pills = trainsAt(d, n.b).map(function (t) { return '<span class="tpill">' + dirArrow(d) + ' ' + shortName(t) + '</span>'; }).join('');
@@ -716,7 +713,7 @@
   // the lag, and interpolate between the two either side.
   function placeOpen(direction, lagSecs) {
     var post = [], seen = false;
-    CHAIN[direction].forEach(function (n) {
+    (CHAIN[direction] || []).forEach(function (n) {
       if (n.x) { seen = true; return; }
       if (seen) post.push({ b: n.b, tac: (n.tac && n.tac.med != null) ? n.tac.med : 0 });
     });
@@ -820,6 +817,10 @@
   // DOWN (approach above the bar, cleared below); westbound runs UP (approach
   // below, cleared above) — so the two flows are mirror images meeting at the bar.
   function renderStrip() {
+    // The chain arrives with the config (init). Called before that — the trigger fetch can
+    // land first — there is nothing to draw yet, and drawing would throw: inside the trigger
+    // fetch's promise that throw discarded the triggers for the whole session.
+    if (!CHAIN.east || !CHAIN.west) return;
     var box = $('approachView'); box.innerHTML = '';
     var e = splitChain('east'), w = splitChain('west');
     var mk = buildMarkers();
@@ -877,14 +878,22 @@
     // Config first: the confidence-window tiers come from the same shared/crossings.json the
     // public app reads. The prediction poll starts either way — the tiers only affect the ±
     // band, which this panel doesn't show, so a config failure must not cost us a prediction.
+    // The berth chain comes from the same file, so the live poll waits for it too: a strip or
+    // a position label drawn before the chain arrived would show every train as elsewhere.
     fetch('../../shared/crossings.json', { cache: 'no-store' })
       .then(function (r) { return r.json(); })
-      .then(function (all) { CFG = all[CROSSING_ID] || null; })
+      .then(function (all) {
+        CFG = all[CROSSING_ID] || null;
+        PREDICT.setChain(CFG && CFG.chain);
+        BERTH_ETA = (CFG && CFG.offChainEta) || {};
+      })
       .catch(function () { })
-      .then(function () { pollPrediction(); setInterval(pollPrediction, PRED_POLL_MS); });
+      .then(function () {
+        pollPrediction(); setInterval(pollPrediction, PRED_POLL_MS);
+        poll(); setInterval(poll, POLL_MS);
+      });
     fetchTriggers();
     renderPrediction(); setInterval(renderPrediction, 1000);
-    poll(); setInterval(poll, POLL_MS);
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function () { });
   }
   document.addEventListener('DOMContentLoaded', init);

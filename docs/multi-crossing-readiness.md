@@ -8,7 +8,14 @@ This is an assessment, not a change.
 **Status (2026-11-06): Phase A is done.** Step 1 = backend-v2 `3dbfef0` (each crossing takes TD events only
 from its own `td.area`); step 2 = `f2e9e10` (C-Class areas from config, `src/td-paths.js`: LA keeps
 `data/logs/td/`, other areas write `data/logs/td/<AREA>/`); step 3 = `berths` deleted from
-`shared/crossings.json`. Each was proven to make no change at Portslade. Phases B–D not started.
+`shared/crossings.json`. Each was proven to make no change at Portslade.
+
+**Phase B, 2026-11-06:** item 6 done on `main` — the berth chain (and the observer's off-chain ETAs) moved verbatim
+from `predict.js`/`observe.js` into `shared/crossings.json` (`chain`, `offChainEta`), loaded via `PREDICT.setChain`.
+The values were moved, not recomputed from `transits.json`, so Portslade is unchanged; serving them from the backend
+is still open. Item 4 done on `backend-v2` `77cfe8c` (direction from timetable, then per-crossing place lists, Up/Down
+recorded per direction). Item 5 deprioritised: berth strikes drive close/open once a train is on the chain, so the
+arrival/departure anchor only affects far-out predictions.
 
 ---
 

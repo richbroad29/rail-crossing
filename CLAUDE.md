@@ -34,9 +34,14 @@ portslade/observe/               Barrier-observation PWA — field data-collecti
 
 Anything the two apps must **agree** on lives here: the closure mapping and confidence
 tiers, the `OPEN`/`CLOSING_SOON`/`CLOSED` derivation (`PREDICT.derive`), the formatters, the
-Portslade berth chain and position maths (`PREDICT.proximity` / `PREDICT.eta`), live-train
-enrichment, and the feedback payload shape. Both apps load it as a plain `<script>`; there
-is no build step.
+position maths (`PREDICT.proximity` / `PREDICT.eta`), live-train enrichment, and the feedback
+payload shape. Both apps load it as a plain `<script>`; there is no build step.
+
+It carries **no crossing data**. The berth chain (berths, gaps, ttc/tac medians) is the
+crossing's `chain` in `shared/crossings.json`; each app calls `PREDICT.setChain(CFG.chain)` once
+its config has loaded (2026-11-06, multi-crossing item 6). Anything that draws from the chain
+must cope with it not having arrived yet — the observer's trigger markers were silently lost for
+a whole session when an early draw threw inside the trigger fetch.
 
 Anything about how one app **looks** does not live here. Each app keeps its own thin label
 formatter over the shared position maths — "Approaching (~3 min)" for a passer-by,

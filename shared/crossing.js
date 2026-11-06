@@ -750,6 +750,7 @@ async function initCrossing(id) {
     var allConfig = await resp.json();
     CFG = allConfig[id];
     if (!CFG) { $('statusMsg').textContent = 'Unknown crossing: ' + id; return; }
+    PREDICT.setChain(CFG.chain);   // this crossing's berth chain (shared/predict.js setChain)
   } catch(e) {
     $('statusMsg').textContent = 'Failed to load config: ' + e.message;
     return;
