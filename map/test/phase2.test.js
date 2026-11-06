@@ -152,6 +152,19 @@ test('stacked trains at one point are laid side by side, squared to the same hea
   assert.equal(s.get('ta').cx, -0.1); assert.equal(s.get('tc').cx, -0.1);
 });
 
+test('a stack whose lowest id has NO heading is still squared, to the lowest id that has one (live: Victoria, two trains crossed at 78 deg)', () => {
+  const s = M.createStore();
+  s.applySnapshot([wire('ta', { hdg: null, pl: 'a' }), wire('tb', { hdg: 110, pl: 's' }), wire('tc', { hdg: 200, pl: 's' })], 0);
+  let b = null;
+  for (let t = 0; t < 3000; t += 16) b = s.fill(t, null);
+  const by = {}; for (let i = 0; i < b.n; i++) by[b.order[i].id] = i;
+  const ang = (id) => -b.ang[by[id]];
+  assert.equal(ang('tb'), 110, 'tb is the lowest id with a heading');
+  assert.equal(ang('tc'), 110); assert.equal(ang('ta'), 110, 'the headingless train is squared with them');
+  const pos = (id) => ({ x: b.pos[2 * by[id]], y: b.pos[2 * by[id] + 1] });
+  assert.ok(metres(pos('tb'), pos('tc')) >= 8.9 && metres(pos('ta'), pos('tb')) >= 8.9, 'laid side by side');
+});
+
 test('the fan-out is stable, eases in and out, and never moves a train that is under way', () => {
   const s = M.createStore();
   s.applySnapshot([wire('ta', { hdg: 90, pl: 's' }), wire('tb', { hdg: 90, pl: 's' })], 0);

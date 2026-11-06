@@ -265,7 +265,7 @@
     // ---- the fan-out of stopped trains ---------------------------------------------------------------
     // Trains standing at one point (a platform, one berth) would draw on top of one another, and with
     // different headings as a CROSS. They are laid side by side instead, all squared to the same way
-    // (the lowest id's), a little apart. Their real positions are not changed.
+    // (that of the lowest id with a heading), a little apart. Their real positions are not changed.
     // Clustering uses typed arrays and an open-addressed table stamped per frame, so a frame with
     // thousands of stopped trains allocates nothing.
     var tabSize = 0, tabKey, tabVal, tabStamp, stamp = 0, cx0, cy0, cnext, ccount, chead, mnext, tmpMem = [], sortB = null;
@@ -315,7 +315,9 @@
         tmpMem.length = 0;
         for (var mi = chead[g]; mi >= 0; mi = mnext[mi]) tmpMem.push(mi);
         tmpMem.sort(byId);
-        var lead = b.order[tmpMem[0]], gh = lead.ch === lead.ch ? lead.ch : lead.lh;
+        // the lowest id that HAS a heading leads: one with none (an approximate position) must not leave the rest crossed
+        var gh = NaN;
+        for (var li = 0; li < tmpMem.length && gh !== gh; li++) { var lead = b.order[tmpMem[li]]; gh = lead.ch === lead.ch ? lead.ch : lead.lh; }
         if (gh !== gh) continue;
         var s = Math.sin(gh * Math.PI / 180), co = Math.cos(gh * Math.PI / 180);   // the normal to the right of travel, in (east, north)
         for (var k = 0; k < tmpMem.length; k++) {
