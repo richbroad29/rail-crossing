@@ -239,8 +239,7 @@ function seedSightingsFromLog(states) {
     entries.push({ area: r.area, headcode: r.desc, ts: r.ts });
   }
   for (const state of Object.values(states)) {
-    const area = state.config && state.config.td && state.config.td.area;
-    const mine = area ? entries.filter(e => e.area === area) : entries;
+    const mine = entries.filter(e => state.ownsTdArea(e.area));
     const n = state.seedSightings(mine);
     console.log(`TD sighting seed: ${state.id} — ${n} headcodes from ${mine.length} events`);
   }
@@ -287,13 +286,10 @@ async function main() {
   // resurrect trains that ran hours ago (see CrossingState.seedSightings).
   seedSightingsFromLog(crossingStates);
 
+  // Each crossing takes only its own area's events (CrossingState.ownsTdArea) — berth codes
+  // repeat across areas, so an unfiltered fan-out lets a distant train anchor a local closure.
   tdListener.on('sighting', (s) => {
-    for (const state of Object.values(crossingStates)) {
-      state.recordTdSighting(s.headcode, s.ts);
-      state.recordTdBerth(s); // B1: feed the live-position map (berth in payload)
-      state.recordTdClearStep(s); // TD-triggered open: anchor closure end to the crossing clear step
-      state.recordTdCloseStrike(s); // TD-triggered close: anchor closure start to the approach strike-in
-    }
+    for (const state of Object.values(crossingStates)) state.recordTdEvent(s);
   });
   tdListener.start();
   tdRotation.start();

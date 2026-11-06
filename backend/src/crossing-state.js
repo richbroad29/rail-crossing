@@ -254,6 +254,34 @@ class CrossingState {
     });
   }
 
+  // Does a TD event from describer area `area` belong to this crossing?
+  //
+  // Berth codes and headcodes are only unique WITHIN an area: 0006 exists in LA and in most
+  // other areas, and a headcode is reused across the country. Every recorder below matches a
+  // bare berth or a bare headcode, so an event from someone else's area would be read as one
+  // of ours — a train stepping into ITS 0006 thirty miles away would anchor a real Portslade
+  // close (multi-crossing-readiness.md, blocker 2). Filtering by area at the door is what makes
+  // those bare keys safe, so the recorders themselves stay area-blind.
+  //
+  // No configured area means NOTHING is accepted, not everything: a crossing without TD config
+  // must not be fed another area's trains as if they were its own.
+  ownsTdArea(area) {
+    const mine = this.config && this.config.td && this.config.td.area;
+    return !!mine && area === mine;
+  }
+
+  // The single entry point for a live TD berth event (td-listener 'sighting'). Drops any
+  // event from another area, then runs the four recorders in the order they always ran.
+  // Returns whether the event was taken, for the caller's tests.
+  recordTdEvent(evt) {
+    if (!evt || !this.ownsTdArea(evt.area)) return false;
+    this.recordTdSighting(evt.headcode, evt.ts);
+    this.recordTdBerth(evt);       // B1: feed the live-position map (berth in payload)
+    this.recordTdClearStep(evt);   // TD-triggered open: anchor closure end to the crossing clear step
+    this.recordTdCloseStrike(evt); // TD-triggered close: anchor closure start to the approach strike-in
+    return true;
+  }
+
   // Record a TD sighting (called from td-listener for each CA/CB event we
   // care about). We only need the headcode and the time — the berth itself
   // doesn't matter for "is the train running today".
