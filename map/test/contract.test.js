@@ -55,10 +55,14 @@ test('GET /trains: shape of the response and of a Train', async () => {
 });
 
 test('GET /trains?bbox filters; a bad bbox is a plain-sentence 400', async () => {
-  const all = json(await get('/map/v1/trains')).trains.length;
-  const some = json(await get('/map/v1/trains?bbox=50.5,-1.5,51.5,0.5')).trains;
-  assert.ok(some.length < all);
-  some.forEach((t) => assert.ok(t.lat >= 50.5 && t.lat <= 51.5 && t.lon >= -1.5 && t.lon <= 0.5));
+  const every = json(await get('/map/v1/trains')).trains;
+  const some = json(await get('/map/v1/trains?bbox=50.8,-0.3,50.95,0.0')).trains;
+  assert.ok(some.length < every.length);
+  // CONTRACT 19.1: every train whose point is in the box is sent; others only when their span reaches it (not within ~0.5 deg)
+  const inside = every.filter((t) => t.lat >= 50.8 && t.lat <= 50.95 && t.lon >= -0.3 && t.lon <= 0.0).map((t) => t.id).sort();
+  const sent = new Set(some.map((t) => t.id));
+  inside.forEach((id) => assert.ok(sent.has(id), id + ' is in the box but was not sent'));
+  some.forEach((t) => assert.ok(t.lat >= 50.3 && t.lat <= 51.45 && t.lon >= -0.8 && t.lon <= 0.5));
   const bad = await get('/map/v1/trains?bbox=1,2,3');
   assert.equal(bad.status, 400);
   assert.equal(typeof json(bad).error, 'string');
@@ -130,6 +134,60 @@ test('GET /stream: snapshot first, then 503 when the cap is reached, and fault f
   assert.equal((await get('/map/v1/trains')).status, 503);
   await get('/__mock/set?down=0');
   assert.equal((await get('/map/v1/trains')).status, 200);
+});
+
+// ---- phase 2 (CONTRACT sections 8, 9, 11, 14) --------------------------------------------------------------------
+test('phase 2: trains carry a motion plan whose span can be fetched, is immutable, and chains end to start', async () => {
+  const trains = json(await get('/map/v1/trains')).trains;
+  const withMv = trains.filter((t) => t.mv);
+  assert.ok(withMv.length > trains.length * 0.8, 'most trains have a plan');
+  trains.filter((t) => !t.mv).forEach((t) => assert.equal(t.pl, 'a', 'only rough-position trains lack a span'));
+  const t = withMv[0];
+  ['sp', 't0', 'eta', 'stop', 'dwell', 'held'].forEach((k) => assert.ok(k in t.mv, k));
+  assert.match(t.mv.sp, /^sp_[0-9a-f]{8}$/);
+  assert.ok(t.mv.eta > t.mv.t0 && t.mv.t0 <= t.at + 1);
+  const r = await get('/map/v1/span/' + t.mv.sp);
+  assert.equal(r.status, 200);
+  assert.equal(r.headers['cache-control'], 'public, max-age=604800, immutable');
+  const sp = json(r);
+  assert.equal(sp.id, t.mv.sp); assert.ok(sp.length > 20 && sp.path.length >= 2);
+  sp.path.forEach((p) => assert.ok(Array.isArray(p) && p.length === 2 && Math.abs(p[0]) < 90));
+  assert.ok('stop' in sp);
+  assert.equal((await get('/map/v1/span/sp_00000000')).status, 404);
+});
+
+test('phase 2: svc.late and svc.next on passenger trains; calls carry actual, expected, platform changes and cancelled calls', async () => {
+  const trains = json(await get('/map/v1/trains')).trains;
+  const p = trains.find((t) => t.svc && t.svc.next);
+  assert.ok(p, 'a passenger train with a next call');
+  assert.equal(typeof p.svc.late, 'number');
+  ['name', 'time', 'exp'].forEach((k) => assert.match(String(p.svc.next[k]), k === 'name' ? /./ : /^\d\d:\d\d$/));
+  const d = json(await get('/map/v1/train/' + p.id));
+  const keys = new Set(); d.service.calls.forEach((c) => Object.keys(c).forEach((k) => keys.add(k)));
+  ['actualArr', 'actualDep', 'expArr', 'platformActual'].forEach((k) => assert.ok(keys.has(k), k));
+  d.recentBerths.forEach((b) => assert.match(b.sp, /^sp_/));
+});
+
+test('phase 2: /station/:crs board; /network at two levels', async () => {
+  const b = json(await get('/map/v1/station/BTN'));
+  assert.equal(b.station.crs, 'BTN'); assert.ok(Array.isArray(b.board) && Array.isArray(b.recent));
+  b.board.forEach((r) => {
+    ['trainId', 'hc', 'uid', 'toc', 'o', 'd', 'kind', 'booked', 'expected', 'actual', 'platform', 'late', 'cancelled'].forEach((k) => assert.ok(k in r, k));
+    assert.ok(['arr', 'dep', 'pass'].includes(r.kind));
+  });
+  assert.ok(b.board.some((r) => r.kind === 'dep'));
+  assert.equal((await get('/map/v1/station/ZZZ')).status, 404);
+  const lo = json(await get('/map/v1/network?level=lo')), hi = json(await get('/map/v1/network?level=hi'));
+  assert.equal(lo.type, 'FeatureCollection'); assert.equal(lo.features.length, hi.features.length);
+  const pts = (g) => g.features.reduce((n, f) => n + f.geometry.coordinates.length, 0);
+  assert.ok(pts(lo) < pts(hi) * 0.7, 'the lo level is coarser: ' + pts(lo) + ' vs ' + pts(hi));
+  assert.equal((await get('/map/v1/network?level=hi')).headers['cache-control'], 'public, max-age=86400');
+  // the branch lines the tile layer lost at zoom 8-9 are in BOTH levels, running right up to their termini
+  const st = json(await get('/map/v1/stations?bbox=50.5,-1.5,51.6,0.7')).stations, by = {}; st.forEach((s) => { by[s.crs] = s; });
+  [lo, hi].forEach((g, i) => ['EGR', 'UCK', 'CAT', 'SEF', 'HRH'].forEach((c) => {
+    const near = g.features.some((f) => f.geometry.coordinates.some(([lon, lat]) => Math.hypot((lon - by[c].lon) * 70000, (lat - by[c].lat) * 111000) < 60));
+    assert.ok(near, c + ' has a line to it in the ' + (i ? 'hi' : 'lo') + ' level');
+  }));
 });
 
 // ---- security rules for the page's own files --------------------------------------------------------

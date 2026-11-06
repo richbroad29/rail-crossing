@@ -120,6 +120,14 @@
         hcHelp.btn));
       head.appendChild(h('p', { class: 'p-sub' }, cls.label + (opName ? ' · ' + opName : '')));
       head.appendChild(hcHelp.tip);
+      // The two things a passenger wants first: is it on time, and where does it stop next.
+      var live = (t.svc || {}), pill = D.latePill(live.late), nextTxt = D.nextLine(live.next);
+      if (pill || nextTxt || d.waiting) {
+        head.appendChild(h('div', { class: 'p-live' },
+          pill && h('span', { class: 'pill ' + pill.kind, 'data-testid': 'late-pill' }, pill.text),
+          nextTxt && h('span', { class: 'p-next', 'data-testid': 'next-line' }, nextTxt),
+          d.waiting && h('span', { class: 'pill wait', 'data-testid': 'waiting-pill' }, 'Waiting at a signal')));
+      }
 
       clear(body);
       body.appendChild(h('p', { class: 'p-lead' }, explain.text));
@@ -170,17 +178,21 @@
         var cur = D.currentCall(svc.calls, d.place);
         var list = h('ol', { class: 'calls' });
         svc.calls.forEach(function (c, i) {
-          var tm = D.callTime(c);
+          var st = D.callStatus(c);
           var marker = cur && cur.index === i ? (cur.here ? 'Train is here' : 'Next') : null;
-          list.appendChild(h('li', { class: (tm.passing ? 'passing ' : '') + (marker ? 'current' : '') },
-            h('span', { class: 'ct', title: tm.label }, tm.text),
-            h('span', { class: 'cn' }, classes.titleCase(c.name),
-              marker && h('span', { class: 'tag' }, marker)),
-            h('span', { class: 'cp' }, c.platform ? 'Platform ' + c.platform : (tm.passing ? 'Passes' : ''))));
+          var sub = [];
+          if (st.cancelled) sub.push(h('span', { class: 'cs bad' }, 'Cancelled'));
+          else if (st.done) sub.push(h('span', { class: 'cs done' }, st.done));
+          else if (st.expected) sub.push(h('span', { class: 'cs ' + (st.expected === 'On time' ? 'ok' : 'late') }, st.expected));
+          list.appendChild(h('li', { class: (st.passing ? 'passing ' : '') + (st.cancelled ? 'cancelled ' : '') + (marker ? 'current' : '') },
+            h('span', { class: 'ct', title: st.bookedLabel }, st.booked),
+            h('span', { class: 'cn' }, h('span', { class: 'cname' }, classes.titleCase(c.name), marker && h('span', { class: 'tag' }, marker)), sub),
+            h('span', { class: 'cp' + (st.platformChanged ? ' changed' : '') }, st.platform,
+              st.platformChanged && h('span', { class: 'was' }, ' (was ' + st.platformWas + ')'))));
         });
         body.appendChild(h('section', { class: 'card' },
           h('h3', null, 'Calling points'),
-          h('p', { class: 'muted' }, 'Where the train is booked to stop. Greyed rows are places it passes without stopping.'),
+          h('p', { class: 'muted' }, 'Booked times on the left. Ticks and expected times show how it is running. Greyed rows are places it passes without stopping.'),
           list));
       }
       if (svc) {
@@ -193,17 +205,67 @@
     }
 
     // ---- a station ----------------------------------------------------------------------------
-    function renderStation(s, nearby) {
+    // Header, then a live board with Departures / Arrivals / Passing / Recent tabs. A row that has a
+    // train on the map is a button: tapping it selects that train.
+    function renderStation(s, nearby, board) {
       clear(head); clear(body);
       state.ageEl = null; state.atMs = null;
       head.appendChild(h('div', { class: 'p-title' },
         h('span', { class: 'swatch station', 'aria-hidden': 'true' }),
         h('h2', { id: 'panelTitle', tabindex: '-1' }, classes.titleCase(s.name))));
-      head.appendChild(h('p', { class: 'p-sub' }, 'Railway station · code ' + s.crs));
-      body.appendChild(h('section', { class: 'card' },
-        h('h3', null, 'Trains nearby'),
-        h('p', null, nearby === 0 ? 'No trains within 5 km right now.'
-          : nearby === 1 ? '1 train within 5 km right now.' : nearby + ' trains within 5 km right now.')));
+      head.appendChild(h('p', { class: 'p-sub' }, 'Railway station · code ' + s.crs + ' · ' +
+        (nearby === 0 ? 'no trains within 5 km' : nearby === 1 ? '1 train within 5 km' : nearby + ' trains within 5 km')));
+      var tab = state.stTab || 'dep';
+      var tabs = [['dep', 'Departures'], ['arr', 'Arrivals'], ['pass', 'Passing'], ['recent', 'Recent']];
+      var bar = h('div', { class: 'seg', role: 'tablist', 'aria-label': 'Station board' });
+      tabs.forEach(function (tb) {
+        var on = tb[0] === tab;
+        bar.appendChild(h('button', {
+          class: 'seg-btn', type: 'button', role: 'tab', id: 'tab-' + tb[0], 'aria-selected': String(on), 'aria-controls': 'board-panel',
+          tabindex: on ? '0' : '-1', 'data-key': 'tab-' + tb[0],
+          onclick: function () { state.stTab = tb[0]; state.sig = null; if (state.lastStation) renderStation.apply(null, state.lastStation); },
+          onkeydown: function (e) {
+            var i = tabs.findIndex(function (x) { return x[0] === tab; }), j = e.key === 'ArrowRight' ? i + 1 : e.key === 'ArrowLeft' ? i - 1 : -1;
+            if (j < 0 || j >= tabs.length) return;
+            e.preventDefault(); state.stTab = tabs[j][0]; state.sig = null;
+            if (state.lastStation) { renderStation.apply(null, state.lastStation); var nb = el.querySelector('#tab-' + tabs[j][0]); if (nb) nb.focus(); }
+          }
+        }, tb[1]));
+      });
+      var list = h('div', { class: 'board', role: 'tabpanel', id: 'board-panel', 'aria-labelledby': 'tab-' + tab });
+      if (!board) {
+        list.appendChild(h('p', { class: 'muted pad' }, state.boardFailed ? 'The live board is not available right now.' : 'Loading the live board'));
+      } else if (tab === 'recent') {
+        var rec = (board.recent || []).map(D.recentRow);
+        if (!rec.length) list.appendChild(h('p', { class: 'muted pad' }, 'Nothing has been through in the last half hour.'));
+        else {
+          var ul = h('ul', { class: 'recent' });
+          rec.forEach(function (r) { ul.appendChild(h('li', null, h('strong', null, r.hc), h('span', null, r.text), r.late && h('span', { class: 'muted' }, r.late))); });
+          list.appendChild(ul);
+        }
+      } else {
+        var rows = D.boardRows(board.board, tab);
+        if (!rows.length) list.appendChild(h('p', { class: 'muted pad' }, 'No ' + D.KIND_LABEL[tab].toLowerCase() + ' in the next two hours.'));
+        rows.forEach(function (r) {
+          var inner = [
+            h('span', { class: 'bt' }, r.time || ''),
+            h('span', { class: 'bm' },
+              h('span', { class: 'bplace' }, r.place, r.plain && h('span', { class: 'btag ' + r.cls.key }, r.plain)),
+              h('span', { class: 'bsub' }, r.hc + (r.toc ? ' · ' + classes.operatorLabel(r.toc) : '') + ' · ' + r.status)),
+            h('span', { class: 'bp' }, r.platform ? 'Pl ' + r.platform : '')
+          ];
+          var cls = 'brow tone-' + r.tone;
+          if (r.trainId) {
+            list.appendChild(h('button', { class: cls, type: 'button', 'data-train': r.trainId,
+              'aria-label': r.time + ' ' + r.place + ', ' + r.status + '. Show this train on the map.',
+              onclick: function () { if (handlers.onPickTrain) handlers.onPickTrain(r.trainId); } }, inner));
+          } else {
+            list.appendChild(h('div', { class: cls + ' static', title: 'Not on the map yet' }, inner));
+          }
+        });
+      }
+      body.appendChild(bar); body.appendChild(list);
+      if (board) body.appendChild(h('p', { class: 'muted small' }, 'Times are booked unless marked. Freight and empty trains are included.'));
     }
 
     function afterRender(wasHidden) {
@@ -227,20 +289,25 @@
       },
       showTrain: function (d) {
         var t = d.train;
-        var sig = [t.id, t.hc, t.at, t.pl, d.speedMphEstimate, d.place && d.place.kind, (d.service && d.service.calls || []).length,
-          (d.previousHeadcodes || []).join(',')].join('|');
+        var sv = t.svc || {}, calls = d.service && d.service.calls || [];
+        var sig = [t.id, t.hc, t.at, t.pl, d.speedMphEstimate, d.place && d.place.kind, calls.length,
+          (d.previousHeadcodes || []).join(','), sv.late, sv.next && (sv.next.name + sv.next.time + sv.next.exp), !!d.waiting,
+          calls.map(function (c) { return [c.actualArr, c.actualDep, c.actualPass, c.expArr, c.expDep, c.platformActual, c.cancelled].join(','); }).join(';')].join('|');
         var wasHidden = open('train');
         if (sig === state.sig) return;
         state.sig = sig;
         fillWithFocus(function () { renderTrain(d); });
         afterRender(wasHidden);
       },
-      showStation: function (s, nearby) {
+      showStation: function (s, nearby, board, failed) {
         var wasHidden = open('station');
-        var sig = s.crs + '|' + nearby;
+        var sig = [s.crs, nearby, state.stTab, failed ? 'f' : '', board ? JSON.stringify(board.board).length + ':' + (board.board[0] && board.board[0].booked) + ':' + (board.recent || []).length +
+          ':' + board.board.map(function (r) { return r.actual || r.expected || ''; }).join('') : ''].join('|');
         if (sig === state.sig) return;
-        state.sig = sig;
-        fillWithFocus(function () { renderStation(s, nearby); });
+        if (state.lastStation && state.lastStation[0].crs !== s.crs) state.stTab = 'dep';
+        state.sig = sig; state.boardFailed = !!failed;
+        state.lastStation = [s, nearby, board];
+        fillWithFocus(function () { renderStation(s, nearby, board); });
         afterRender(wasHidden);
       },
       showMessage: function (title, text) {
@@ -255,7 +322,7 @@
         if (el.hidden) return;
         el.hidden = true;
         document.body.classList.remove('panel-open');
-        state.kind = null; state.sig = null; state.ageEl = null;
+        state.kind = null; state.sig = null; state.ageEl = null; state.lastStation = null;
         var f = state.lastFocus; state.lastFocus = null;
         if (f && f.focus && document.contains(f)) f.focus({ preventScroll: true });
       },
