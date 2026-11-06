@@ -100,7 +100,11 @@
 
   <div id="debugPanel" class="debug-panel hidden"></div>
 
-  <div class="section">
+  <!-- HIDDEN 2026-11-06 at Rich's request; kept so it can come back. To restore, remove
+       "hidden" from this div. All the code behind it (openFeedbackPicker etc. in
+       shared/crossing.js) is untouched. The observer app has its own capture flow and is
+       unaffected. -->
+  <div class="section hidden" id="accuracySection">
     <div style="font-size:12px;font-weight:600;margin-bottom:6px">Help improve accuracy</div>
     <div style="font-size:11px;color:#94A3B8;margin-bottom:8px">Tap when you see the barriers move:</div>
     <div class="feedback-btns">
