@@ -324,7 +324,7 @@ Verified from SMART data. Berths are stored in TD events **without** the area pr
 - Eastbound: approach `0006` → protecting `0004` → clear `0002`
 - Westbound: approach `0003` → protecting `0005` → clear `0007`
 
-These are also the values in `crossings.json` → `berths.east/west.approach/protecting/clear`.
+The authoritative copy is `backend/config/crossings.json` → `td.eastbound/westbound` (`approach`, `clear`) on `backend-v2`. The frontend `shared/crossings.json` used to carry a `berths` duplicate that nothing read; it was deleted 2026-11-06 (multi-crossing Phase A step 3) so it can't drift.
 
 ## External services and credentials
 

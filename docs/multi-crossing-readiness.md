@@ -3,7 +3,12 @@
 **Date:** 2026-09-19 · **Scope:** `main` (frontend) + `backend-v2` (backend) · **Question:** what has to
 change before a second crossing can be added, and how much of the code can be shared rather than copied?
 
-This is an assessment, not a change. Nothing here has been implemented.
+This is an assessment, not a change.
+
+**Status (2026-11-06): Phase A is done.** Step 1 = backend-v2 `3dbfef0` (each crossing takes TD events only
+from its own `td.area`); step 2 = `f2e9e10` (C-Class areas from config, `src/td-paths.js`: LA keeps
+`data/logs/td/`, other areas write `data/logs/td/<AREA>/`); step 3 = `berths` deleted from
+`shared/crossings.json`. Each was proven to make no change at Portslade. Phases B–D not started.
 
 ---
 
