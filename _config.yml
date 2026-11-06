@@ -1,0 +1,10 @@
+# GitHub Pages builds this repo with Jekyll. Without this list it publishes every tracked
+# file, so the project's internal notes were public (railcrossing.uk/CLAUDE.md and a rendered
+# /CLAUDE.html). Anything here stays in the repo but is left out of the website.
+# Dotfiles and dot-folders (.claude/, .gitignore) are already excluded by Jekyll.
+exclude:
+  - CLAUDE.md
+  - README.md
+  - GLOSSARY.md
+  - docs/
+  - scripts/
