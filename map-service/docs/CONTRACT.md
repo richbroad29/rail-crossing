@@ -492,3 +492,10 @@ the box's highest latitude. (3) The reach box is built when the train's JSON is 
 ChangeSet records that box (`obox`, null for a train not yet placed) in place of `olat, olon`. (4) A span record's box is cut from the route
 when the span is built (`SpanBuilder._boxOf`, `bboxOf(id)`), kept on the record, so a superseded id keeps answering while it is retained; a span
 the library cannot cut has no box and contributes nothing (the point and the other span still count). (5) `spans.reachPadM` (default 200).
+
+Measured by the lead on the live recordings (2026-11-06 04:19-10:42, 12 segments each of London, Sussex, Manchester, Glasgow;
+a zoom-16 view centred on the DRAWN train, padded 30 % as the page pads it): share of tracked train-frames NOT sent, old rule ->
+19.1: desktop 1440x900 5.8-22.4 % -> 0.2-1.0 %; phone 390x844 20.5-39.8 % -> 0.6-1.4 %. Almost every remaining miss is a train
+drawn on a CONTINUATION (17.1) that runs more than `reachPadM` outside both canonical spans' boxes; a handful are trains drawn
+two berths behind their latest. Round 3: give each join record its box (four numbers, bounded by `spans.maxJoins`) and add to a
+train's reach the boxes of the joins INTO its current span (index joins by `of`).
