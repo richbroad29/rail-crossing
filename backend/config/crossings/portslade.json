@@ -32,7 +32,9 @@
       "approachChain": ["0016", "0014", "0012", "0010", "0008", "0006", "0004"],
       "queueMaxAhead": 2,
       "queueExemptClasses": ["stoppingLocal"],
-      "queuedEstimate": true
+      "queuedEstimate": true,
+      "_comment_queueHold": "true = a train queued behind another (within queueMaxAhead, not an exempt class) shows Train held: its countdown is a lower bound until the train ahead clears (crossing-state queuedBound). Absent or false = only the queued countdown estimate applies (queuedEstimate). Was hard-coded east-only until 2026-11-06, when the two directions' close code was merged; this records that behaviour. West has never held (see westbound: its holds were judged a safety trade, register #20/C20).",
+      "queueHold": true
     },
     "westbound": {
       "approach": { "from": "0003", "to": "0005" },

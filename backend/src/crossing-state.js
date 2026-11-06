@@ -1248,18 +1248,10 @@ class CrossingState {
   }
 
   // PREDICTED close time (display / countdown target) for a single train. Strike-based
-  // once the approach berth has struck; otherwise the live-bestTime prediction. Gated on
-  // timing.closeTrigger — absent ⇒ the legacy bestTime − closeBefore, which preserves
-  // other crossings and gives a clean rollback.
-  //
-  //  - EAST: per-class anchor berth + offset (closeTrigger.east.classes — see _eastClass
-  //    and the config comment for why 0006 cannot serve every class). Before that berth
-  //    strikes, the prediction LEADS the crossing by predictedLeadSecs (~180s, measured),
-  //    NOT closeBefore.east (90s). Legacy flat east config (freightSecs/stoppingSecs/
-  //    otherSecs on a single approach berth) is still honoured for other crossings.
-  //  - WEST stopping passenger → max(strike + minAfterStrikeSecs, departure − 45s);
-  //    before the strike, departure − 45s. bestTime IS the LDB departure for westbound.
-  //  - WEST freight / non-stopping → strike+otherSecs; before the strike, bestTime − closeBefore.west.
+  // once the class's anchor berth has struck (or is projected from the train's position);
+  // otherwise a lead off bestTime. Gated on timing.closeTrigger — absent ⇒ the legacy
+  // bestTime − closeBefore. One rule for every direction, configured per direction: see the
+  // note at the end of _closeTimeInfo.
   //
   // Thin wrapper over _closeTimeInfo, which carries the `held` flag alongside the time.
   // Kept because several callers only want the Date, and re-deriving `held` at each of
@@ -1397,91 +1389,78 @@ class CrossingState {
                heldReason: heldReasons(info, 'queued') };
     };
 
-    if (t.direction === 'east') {
-      const c = ct.east || {};
-      const anchor = this._closeAnchor(t);
-      if (anchor) {
-        // Real strike if it has happened, else project it from wherever TD has the train
-        // now. Either way the SAME rule runs on it, so recalibrating offsetSecs moves the
-        // projection with it — the engine is the close logic, fed an estimated input.
-        const struck = this._strikeOrProjection(t, anchor.berth, now);
-        if (struck) return queuedBound(anchored(struck, anchor.offsetSecs));
-      } else {
-        // Legacy flat config: one approach berth, class picked by type only. Projected
-        // too, so a crossing on the older config shape gets the same sharpening.
-        const struck = this._strikeOrProjection(t, this._approachBerth('east'), now);
-        const secs = t.trainType === 'freight' ? c.freightSecs
-                   : (t.trainType === 'passenger' && stopping) ? c.stoppingSecs
-                   : c.otherSecs;                        // non-stopping / ECS / unknown
-        if (struck && typeof secs === 'number') return queuedBound(anchored(struck, secs));
-      }
-      // Pre-strike east prediction leads the crossing by predictedLeadSecs (measured
-      // ~2–3.5 min), not closeBefore — so the countdown doesn't lurch when the strike lands.
-      const lead = typeof c.predictedLeadSecs === 'number' ? c.predictedLeadSecs
-                 : this._getCloseBefore('east') * 60;
-      return queuedBound(boundIfUpstream({ at: new Date(t.bestTime.getTime() - lead * 1000), held: false }));
-    }
+    // ---- one rule for every direction, driven by its settings (2026-11-06) ---------------
+    //
+    // East and west used to be two different code paths. They differed in four places, none of
+    // them geography — calibration history — so each is now a per-direction setting carrying
+    // Portslade's old behaviour as its value, and a new crossing chooses rather than inheriting
+    // whichever direction it happens to be called:
+    //   1. td.<dir>.queueHold          a train queued behind another is HELD (queuedBound) after
+    //                                  the strike and before it; otherwise only the queued
+    //                                  countdown estimate applies (withQueuedEstimate).
+    //                                  Portslade: east true, west absent (false).
+    //   2. closeTrigger.<dir>.minAfterStrikeSecs   floor after the anchoring strike.
+    //                                  Portslade: west 10, east absent (no floor).
+    //   3. the legacy single-berth settings (freightSecs / stoppingSecs / otherSecs) are honoured
+    //      in any direction that has no per-class anchor. Portslade has an anchor for every class.
+    //   4. pre-strike lead (below): one predictedLeadSecs for every source, or else a board lead
+    //      (predictedDepartureLeadSecs) and a timetable lead (crossingLeadSecs).
+    // Proven identical at Portslade by replaying recorded days through the old and new engines.
+    const c = ct[t.direction] || {};
+    const queueHold = !!(dirCfg && dirCfg.queueHold === true);
+    const queued = (info) => queueHold ? queuedBound(info) : (withQueuedEstimate(info, null) || info);
 
-    // ---- west: berth-anchored per class, same shape as east (register #12) --------------
+    // Anchored on a strike: a real one if it has happened, else projected from wherever TD has
+    // the train now. Either way the SAME rule runs on it, so recalibrating offsetSecs moves the
+    // projection with it — the engine is the close logic, fed an estimated input.
     //
-    // This used to be `departure − 45s`. bestTime IS the LDB departure for westbound
-    // (extractTrain: et=etd||eta), which made it meaningful — but Darwin publishes it to the
-    // MINUTE, so the close moved in 60s jumps while the period end moved smoothly off the
-    // second-precision berth projection. Once they disagreed by more than their gap the order
-    // inverted and a closure was predicted to OPEN before it CLOSED (#12), with "Down For"
-    // blank. The jumps were also plainly janky on screen for a single train.
+    // minAfterStrikeSecs: an offset is positive by construction (transit[berth>XING] − lead,
+    // and a berth whose offset went negative is moved to an earlier anchor in config), but it
+    // can be very small — Portslade west `fast` derives +2s — and a projection carries error,
+    // so the floor stops a close landing on top of, or before, the strike that anchored it.
     //
-    // Measured over n=771 westbound crossings (berth strikes and ldb estimates against the
-    // true crossing, the TD 0005→0007 step), as a predictor of the crossing:
-    //     0005 strike   sd 19.6s        liveDep   sd 48.8s
-    //     0003 strike   sd 21.7s        schedDep  sd 253s
-    // Berths beat the departure estimate 2.5x. 0003 over 0005 despite the marginally worse sd
-    // because it fires early enough to be useful and stays feasible for every class.
-    //
-    // Deliberately NO dwell term, though the west platform sits inside the protecting berth and
-    // it looks like there should be one. Three measurements say otherwise: CIF booked dwell has
-    // only two values (30/60s) against realised 0-180s; refitting on booked gave sd 61s, WORSE
-    // than the old rule; and subtracting LIVE dwell doubled sd (13.5→25.8s) because it is the
-    // difference of two minute-rounded times. A raw 0005→XING sd of 19.6s cannot contain
-    // minutes of dwell variance — there is nothing left to remove.
-    //
-    // Pre-strike (TD cannot place the train at all) keeps a bestTime-based lead, mirroring
-    // east's predictedLeadSecs — see the note at the fall-through below. Dropping straight to
-    // cbFallback() there was a silent regression: it moved an unplaceable west train's close
-    // 105s earlier and re-merged the periods the clear-step merge key exists to separate.
-    const c = ct.west || {};
-    const anchor = this._closeAnchor(t);            // resolves via _classOf, so west.classes works
+    // West at Portslade was moved onto per-class berth anchors from `departure − 45s` (register
+    // #12): Darwin publishes departures to the MINUTE, so the close moved in 60s jumps and could
+    // invert against the berth-projected open. Over n=771 westbound crossings the 0005 strike
+    // predicts the crossing with sd 19.6s against 48.8s for the live departure. Deliberately no
+    // dwell term although the west platform is inside the protecting berth: booked dwell refit
+    // gave sd 61s (worse) and live dwell doubled sd — there is nothing left to remove.
+    const anchor = this._closeAnchor(t);
     if (anchor) {
       const struck = this._strikeOrProjection(t, anchor.berth, now);
-      if (struck) {
-        // Floor a short way after the strike. An offset is positive by construction (it is
-        // transit[berth>XING] − lead, and a berth whose offset went negative was moved to an
-        // earlier anchor in config), but it can be very small — `fast` derives +2s — and a
-        // projection carries error, so this stops a close landing on top of, or before, the
-        // strike that anchored it. It BINDS for fast (2s -> 10s), which is deliberate: at that
-        // margin our own pipeline latency is the larger term anyway.
-        // Step 2, westbound — the same rule, when td.westbound.queuedEstimate is on (it is OFF at
-        // Portslade: see the config). There is no queued HOLD here (queuedBound is east-only), so
-        // a queued westbound train runs past its clear-run projection and goes 'unstruck'.
-        const info = anchored(struck, anchor.offsetSecs, c.minAfterStrikeSecs);
-        return withQueuedEstimate(info, null) || info;
+      if (struck) return queued(anchored(struck, anchor.offsetSecs, c.minAfterStrikeSecs));
+    } else {
+      // Legacy single-berth settings: one approach berth, class picked by type only. Projected
+      // too, so a crossing on the older config shape gets the same sharpening.
+      const secs = t.trainType === 'freight' ? c.freightSecs
+                 : (t.trainType === 'passenger' && stopping) ? c.stoppingSecs
+                 : c.otherSecs;                          // non-stopping / ECS / unknown
+      if (typeof secs === 'number') {
+        const struck = this._strikeOrProjection(t, this._approachBerth(t.direction), now);
+        if (struck) return queued(anchored(struck, secs, c.minAfterStrikeSecs));
       }
     }
 
-    // No berth anchor and no position: lead bestTime, exactly as east does pre-strike. WHICH
-    // lead depends on what bestTime MEANS, and it differs by source — this is why the old code
-    // had a _hasLiveDeparture guard, and removing it was wrong:
-    //   LDB westbound  bestTime = etd||eta, i.e. the DEPARTURE estimate -> lead by ~46s
-    //                  (crossing is dep+46s measured, and the close is crossing-92s)
-    //   CIF westbound  bestTime = an interpolated CROSSING time          -> lead by the full 92s
-    // Subtracting a departure lead from an interpolated crossing time would anchor to the wrong
-    // event, which is the trap the original guard was protecting against.
-    const isDeparture = typeof t.source === 'string' && t.source.startsWith('ldb');
-    const lead = isDeparture
-      ? (typeof c.predictedDepartureLeadSecs === 'number' ? c.predictedDepartureLeadSecs : null)
-      : (typeof c.crossingLeadSecs === 'number' ? c.crossingLeadSecs : null);
-    if (lead !== null) return boundIfUpstream({ at: new Date(t.bestTime.getTime() - lead * 1000), held: false });
-    return boundIfUpstream(cbFallback());
+    // Pre-strike: TD cannot place the train on its anchor at all, so lead bestTime. WHICH lead
+    // depends on what bestTime MEANS for this direction and source:
+    //   predictedLeadSecs              one lead for every source (Portslade east: 180, measured
+    //                                  ~2–3.5 min, so the countdown doesn't lurch when the
+    //                                  strike lands);
+    //   otherwise, departure board     predictedDepartureLeadSecs — at Portslade west bestTime is
+    //                                  the DEPARTURE estimate, the crossing is dep+46s measured
+    //                                  and the close crossing−92s, so lead 46;
+    //   otherwise, timetable           crossingLeadSecs — bestTime is an interpolated CROSSING
+    //                                  time, so lead by the full 92. Subtracting a departure lead
+    //                                  from a crossing time would anchor to the wrong event.
+    //   none of these                  the legacy closeBefore minutes (cbFallback).
+    // Dropping an unplaceable west train straight to closeBefore was a silent regression once
+    // (its close 105s earlier, re-merging periods the clear-step merge key exists to separate).
+    const isBoard = typeof t.source === 'string' && t.source.startsWith('ldb');
+    const lead = typeof c.predictedLeadSecs === 'number' ? c.predictedLeadSecs
+               : isBoard ? (typeof c.predictedDepartureLeadSecs === 'number' ? c.predictedDepartureLeadSecs : null)
+               : (typeof c.crossingLeadSecs === 'number' ? c.crossingLeadSecs : null);
+    const pre = lead !== null ? { at: new Date(t.bestTime.getTime() - lead * 1000), held: false } : cbFallback();
+    return queued(boundIfUpstream(pre));
   }
 
   // Where a train currently is on its direction's approach chain: the index in
