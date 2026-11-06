@@ -27,7 +27,7 @@ const path = require('path');
 const zlib = require('zlib');
 
 const ROOT = path.join(__dirname, '..');
-const LOG_DIR = path.join(ROOT, 'data', 'logs', 'td');
+const { tdLogDir } = require('../src/td-paths');
 const OUT_DIR = path.join(ROOT, 'data', 'derived');
 const CONFIG = JSON.parse(fs.readFileSync(path.join(ROOT, 'config', 'crossings.json'), 'utf-8'));
 
@@ -40,6 +40,8 @@ const MAX_DWELL_S = 600; // ignore gaps > 10 min (a stabled/held train, not a st
 
 const td = CONFIG[CROSSING] && CONFIG[CROSSING].td;
 if (!td) { console.error(`No td config for crossing "${CROSSING}"`); process.exit(1); }
+// The crossing's own area's logs (td-paths): data/logs/td/ for LA, data/logs/td/<AREA>/ otherwise.
+const LOG_DIR = tdLogDir(td.area);
 
 // Confirmed anchors from config: approach.from → protecting (approach.to) → clear.to.
 function anchorsFor(dirKey) {

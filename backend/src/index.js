@@ -11,6 +11,7 @@ const sclassRotation = require('./sclass-rotation');
 const cifFetcher = require('./cif-fetcher');
 const corpusFetcher = require('./corpus-fetcher');
 const { computeRunRates } = require('./run-rate');
+const { tdLogFile, crossingTdAreas } = require('./td-paths');
 const { parseLondonWallClock, londonDateStamp } = require('./time-utils');
 
 // Load config
@@ -88,19 +89,24 @@ async function loadCorpus() {
 // Annotate Q-flagged freight trains with their recent run rate by scanning
 // past TD logs. Mutates the trains in place with `recentRunRate` and the
 // underlying `recentRunDays` count for transparency.
+//
+// Per crossing, against that crossing's own TD area: "did this headcode run" means "was it
+// seen in the area this crossing watches". A crossing with no td.area has no TD history, so
+// its trains are left unannotated rather than scored against someone else's area.
 function annotateRunRates(scheduleByCrossing) {
-  const headcodeToDaysPattern = new Map();
-  for (const trains of Object.values(scheduleByCrossing)) {
+  const many = Object.keys(scheduleByCrossing).length > 1;
+  for (const [id, trains] of Object.entries(scheduleByCrossing)) {
+    const area = crossingsConfig[id] && crossingsConfig[id].td && crossingsConfig[id].td.area;
+    if (!area) continue;
+    const headcodeToDaysPattern = new Map();
     for (const t of trains) {
       if (t.runsAsRequired && t.headcode) {
         headcodeToDaysPattern.set(t.headcode, t.daysPattern || '');
       }
     }
-  }
-  if (headcodeToDaysPattern.size === 0) return;
+    if (headcodeToDaysPattern.size === 0) continue;
 
-  const rates = computeRunRates(headcodeToDaysPattern);
-  for (const trains of Object.values(scheduleByCrossing)) {
+    const rates = computeRunRates(headcodeToDaysPattern, { area });
     for (const t of trains) {
       if (!t.runsAsRequired || !t.headcode) continue;
       const r = rates[t.headcode];
@@ -109,11 +115,11 @@ function annotateRunRates(scheduleByCrossing) {
       t.recentRunSeen = r.seen;
       t.recentRunApplicable = r.applicable;
     }
+    const summary = Object.entries(rates).map(([h, r]) =>
+      `${h}=${r.applicable > 0 ? Math.round(100 * r.rate) + '%' : 'n/a'}(${r.seen}/${r.applicable})`
+    ).join(' ');
+    console.log(`Run-rate scan${many ? ` [${id}]` : ''} (${headcodeToDaysPattern.size} Q-freight headcodes): ${summary}`);
   }
-  const summary = Object.entries(rates).map(([h, r]) =>
-    `${h}=${r.applicable > 0 ? Math.round(100 * r.rate) + '%' : 'n/a'}(${r.seen}/${r.applicable})`
-  ).join(' ');
-  console.log(`Run-rate scan (${headcodeToDaysPattern.size} Q-freight headcodes): ${summary}`);
 }
 
 // Load schedule data — prefers env SCHEDULE_FILE (for testing); else auto-managed CIF
@@ -221,15 +227,15 @@ function nextFireAt(hour, minute) {
 
 // Startup
 // Replay today's TD log into each crossing's first-sighting map. Cheap: one pass over a
-// file the listener is already appending to (~1MB/day), read once at startup.
-function seedSightingsFromLog(states) {
-  const file = path.join(__dirname, '..', 'data', 'logs', 'td', `td-${londonDateStamp()}.jsonl`);
+// file the listener is already appending to (~1MB/day), read once at startup. Each crossing
+// reads its own area's log (td-paths), and still keeps only lines from its own area.
+function readTodaysTdEntries(area) {
+  const file = tdLogFile(area, londonDateStamp());
   let lines;
   try {
     lines = fs.readFileSync(file, 'utf8').split('\n');
   } catch (e) {
-    console.log(`TD sighting seed: no log for today (${e.code}) — starting cold`);
-    return;
+    return { error: e.code };
   }
   const entries = [];
   for (const line of lines) {
@@ -238,8 +244,18 @@ function seedSightingsFromLog(states) {
     if (!r.area || !r.desc || !r.ts) continue;
     entries.push({ area: r.area, headcode: r.desc, ts: r.ts });
   }
+  return { entries };
+}
+
+function seedSightingsFromLog(states) {
+  const byArea = new Map();
   for (const state of Object.values(states)) {
-    const mine = entries.filter(e => state.ownsTdArea(e.area));
+    const area = state.config && state.config.td && state.config.td.area;
+    if (!area) { console.log(`TD sighting seed: ${state.id} — no td.area, nothing to seed`); continue; }
+    if (!byArea.has(area)) byArea.set(area, readTodaysTdEntries(area));
+    const got = byArea.get(area);
+    if (got.error) { console.log(`TD sighting seed: no log for today (${got.error}) — starting cold`); continue; }
+    const mine = got.entries.filter(e => state.ownsTdArea(e.area));
     const n = state.seedSightings(mine);
     console.log(`TD sighting seed: ${state.id} — ${n} headcodes from ${mine.length} events`);
   }
@@ -291,7 +307,7 @@ async function main() {
   tdListener.on('sighting', (s) => {
     for (const state of Object.values(crossingStates)) state.recordTdEvent(s);
   });
-  tdListener.start();
+  tdListener.start({ areas: crossingTdAreas(crossingsConfig) });
   tdRotation.start();
   sclassRotation.start(); // bound + rotate the new S-Class logs alongside the TD logs
 

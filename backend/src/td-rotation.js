@@ -3,7 +3,7 @@ const path = require('path');
 const zlib = require('zlib');
 const { pipeline } = require('stream');
 
-const LOG_DIR = path.join(__dirname, '..', 'data', 'logs', 'td');
+const { TD_LOG_ROOT: LOG_DIR, isValidArea } = require('./td-paths');
 const GZIP_AFTER_DAYS = 7;
 const PRUNE_AFTER_DAYS = 180;
 
@@ -26,28 +26,45 @@ function gzipFile(src) {
   });
 }
 
-async function runOnce() {
-  if (!fs.existsSync(LOG_DIR)) return { gzipped: 0, pruned: 0 };
+// The top-level folder (area LA) plus each per-area subfolder (td-paths: data/logs/td/<AREA>/),
+// all with the same age rules. Subfolders are only those named like an area id, so nothing
+// else that may sit in the folder is walked.
+function logDirs(root) {
+  const dirs = [root];
+  for (const name of fs.readdirSync(root)) {
+    if (!isValidArea(name)) continue;
+    const full = path.join(root, name);
+    try { if (fs.statSync(full).isDirectory()) dirs.push(full); } catch (_) { /* vanished */ }
+  }
+  return dirs;
+}
+
+async function runOnce(root = LOG_DIR) {
+  if (!fs.existsSync(root)) return { gzipped: 0, pruned: 0 };
   const todayStr = new Date().toISOString().slice(0, 10);
   const today = new Date(todayStr + 'T00:00:00Z');
-  const files = fs.readdirSync(LOG_DIR);
   let gzipped = 0;
   let pruned = 0;
-  for (const f of files) {
-    const d = parseDateFromName(f);
-    if (!d) continue;
-    const ageDays = (today - d) / 86400000;
-    const full = path.join(LOG_DIR, f);
-    if (ageDays > PRUNE_AFTER_DAYS) {
-      console.log(`TD rotation: pruning ${f} (age ${Math.floor(ageDays)}d)`);
-      try { fs.unlinkSync(full); pruned++; }
-      catch (e) { console.error('TD rotation prune failed:', e.message); }
-      continue;
-    }
-    if (ageDays > GZIP_AFTER_DAYS && f.endsWith('.jsonl')) {
-      console.log(`TD rotation: gzipping ${f} (age ${Math.floor(ageDays)}d)`);
-      try { await gzipFile(full); gzipped++; }
-      catch (e) { console.error('TD rotation gzip failed:', e.message); }
+  for (const dir of logDirs(root)) {
+    const sub = path.relative(root, dir);
+    const files = fs.readdirSync(dir);
+    for (const f of files) {
+      const d = parseDateFromName(f);
+      if (!d) continue;
+      const ageDays = (today - d) / 86400000;
+      const full = path.join(dir, f);
+      const shown = sub ? path.join(sub, f) : f;
+      if (ageDays > PRUNE_AFTER_DAYS) {
+        console.log(`TD rotation: pruning ${shown} (age ${Math.floor(ageDays)}d)`);
+        try { fs.unlinkSync(full); pruned++; }
+        catch (e) { console.error('TD rotation prune failed:', e.message); }
+        continue;
+      }
+      if (ageDays > GZIP_AFTER_DAYS && f.endsWith('.jsonl')) {
+        console.log(`TD rotation: gzipping ${shown} (age ${Math.floor(ageDays)}d)`);
+        try { await gzipFile(full); gzipped++; }
+        catch (e) { console.error('TD rotation gzip failed:', e.message); }
+      }
     }
   }
   if (gzipped || pruned) {

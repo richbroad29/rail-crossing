@@ -84,6 +84,6 @@ Daily JSONL log files are written to `data/logs/` (gitignored). Each line record
 - LDB poll results (trains seen, times, delays)
 - State transitions (OPEN → CLOSING_SOON → CLOSED → OPEN)
 - Schedule loads
-- TD berth-step sightings with timestamps (raw feed in `data/logs/td/`)
+- TD berth-step sightings with timestamps (raw feed in `data/logs/td/` for area LA; any other crossing area in `data/logs/td/<AREA>/` — see `src/td-paths.js`)
 
 These logs are the ground truth for calibrating timing parameters.

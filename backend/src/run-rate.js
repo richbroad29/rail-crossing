@@ -20,13 +20,13 @@ const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
 
-const LOG_DIR = path.join(__dirname, '..', 'data', 'logs', 'td');
+const { tdLogFile, ROOT_AREA } = require('./td-paths');
 const LOOKBACK_DAYS = 14;
 
-// Look up a TD log path for an ISO date (YYYY-MM-DD). Tries plain then .gz.
-function logPathsForDate(dateStr) {
-  const plain = path.join(LOG_DIR, `td-${dateStr}.jsonl`);
-  const gz = path.join(LOG_DIR, `td-${dateStr}.jsonl.gz`);
+// Look up a TD log path for an area and ISO date (YYYY-MM-DD). Tries plain then .gz.
+function logPathsForDate(dateStr, area) {
+  const plain = tdLogFile(area, dateStr);
+  const gz = plain + '.gz';
   if (fs.existsSync(plain)) return { path: plain, gz: false };
   if (fs.existsSync(gz)) return { path: gz, gz: true };
   return null;
@@ -72,8 +72,11 @@ function isApplicable(daysPattern, dateStr) {
 
 // Build the last-N-days "headcode → daysSeen / daysApplicable" map for a set
 // of headcodes of interest. Skips today (still in progress).
+// opts.area: the TD area to scan (the crossing's td.area). Defaults to ROOT_AREA, the only
+// area there was before multi-area ingest.
 function computeRunRates(headcodeToDaysPattern, opts = {}) {
   const lookback = opts.lookbackDays || LOOKBACK_DAYS;
+  const area = opts.area || ROOT_AREA;
   const today = new Date();
   const result = {};
   // Initialise so every requested headcode appears in the output, even with 0/0.
@@ -85,7 +88,7 @@ function computeRunRates(headcodeToDaysPattern, opts = {}) {
     const d = new Date(today);
     d.setUTCDate(d.getUTCDate() - offset);
     const ds = d.toISOString().slice(0, 10);
-    const fileInfo = logPathsForDate(ds);
+    const fileInfo = logPathsForDate(ds, area);
     if (!fileInfo) continue; // No log for that day → skip silently
     const headcodes = readHeadcodesFromLog(fileInfo.path, fileInfo.gz);
     if (!headcodes) continue;
