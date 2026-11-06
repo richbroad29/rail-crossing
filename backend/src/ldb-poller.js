@@ -1,6 +1,7 @@
 const https = require('https');
 const logger = require('./logger');
 const { parseLondonWallClock, londonDateStamp } = require('./time-utils');
+const { makeDirectionResolver } = require('./direction');
 
 /**
  * LDB Poller — queries departure board data for crossing predictions.
@@ -63,19 +64,9 @@ function httpPost(url, body, headers = {}) {
   });
 }
 
-// ---- Direction detection ----
-
-function isEastOrigin(name) {
-  if (!name) return false;
-  const l = name.toLowerCase();
-  return l.includes('brighton') || l.includes('hove') ||
-    l.includes('london') || l.includes('gatwick') ||
-    l.includes('croydon') || l.includes('haywards') ||
-    l.includes('preston park') || l.includes('burgess') ||
-    l.includes('lewes') || l.includes('eastbourne') ||
-    l.includes('lovers walk') || l.includes('three bridges') ||
-    l.includes('horsham');
-}
+// ---- Direction ----
+// Resolved by src/direction.js (timetable, then the crossing's place lists, else 'unknown').
+// This used to be isEastOrigin(), a hard-coded Sussex place list that defaulted to east.
 
 // ---- Time parsing ----
 
@@ -139,17 +130,24 @@ function liveOf(sched, est, act) {
 // cannot otherwise tell "genuinely on time" from "we have nothing". That distinction is
 // the whole bug — a timetable fallback and a punctual train produced byte-identical
 // output, so nothing downstream could decline to trust the one or the other.
-function extractTrain(svc) {
+// `resolveDirection` (src/direction.js makeDirectionResolver) answers which way the train is
+// going; without one the direction is 'unknown'.
+function extractTrain(svc, resolveDirection) {
   const { sta, eta, ata, std, etd, atd, origin, dest, operator, trainid } = svc;
   const source = svc.source || 'ldbsv';
   const uid = svc.uid === undefined ? null : svc.uid;
-  const direction = isEastOrigin(origin) ? 'west' : 'east';
+  const resolved = resolveDirection
+    ? resolveDirection({ uid, headcode: trainid || null, at: parseTime(sta || std), origin, dest })
+    : { direction: 'unknown', source: 'unknown' };
+  const direction = resolved.direction;
 
   // Each direction reads its own three values, and the choice is physical: the crossing
   // sits immediately west of the platform, so a westbound train pulls out of the platform
   // straight onto it (departure) while an eastbound one crosses on its way in (arrival).
+  // An 'unknown' train reads the arrival first, as east does; it only reaches a prediction
+  // once its berth has placed it, and from then on the berth strike times it, not this.
   let sch, est, act;
-  if (direction === 'east') {
+  if (direction !== 'west') {
     sch = sta || std; est = eta || etd; act = ata || atd;
   } else {
     sch = std || sta; est = etd || eta; act = atd || ata;
@@ -188,7 +186,7 @@ function extractTrain(svc) {
     else if (fc === '3') trainType = 'test';
   }
 
-  return {
+  const train = {
     origin, destination: dest, operator,
     scheduledTime: scheduledTime?.toISOString(),
     bestTime: bestTime.toISOString(),
@@ -215,6 +213,10 @@ function extractTrain(svc) {
     liveDep: liveOf(std, etd, atd),
     dedupKey: `${sch || ''}|${dest}`
   };
+  // Where the direction came from ('timetable' | 'places' | 'unknown'), for the LDB log only.
+  // Non-enumerable so it can never ride a `{...t}` copy into an API response.
+  Object.defineProperty(train, 'directionSource', { value: resolved.source, enumerable: false });
+  return train;
 }
 
 // --- A live estimate is not un-given by silence -------------------------------------
@@ -287,7 +289,7 @@ function applyEstimateMemory(trains, memory, nowMs = Date.now()) {
 
 // ---- RDM REST JSON parsing ----
 
-function parseRdmJson(body) {
+function parseRdmJson(body, resolveDirection) {
   const results = [];
   let data;
   try {
@@ -324,7 +326,7 @@ function parseRdmJson(body) {
       trainid: svc.trainid || svc.rid || svc.serviceID || null,
       source: 'ldbsv',
       uid: svc.uid || null
-    });
+    }, resolveDirection);
     if (train) results.push(train);
   }
 
@@ -346,7 +348,7 @@ function getVal(xml, tag) {
   return null;
 }
 
-function parseSoapXml(xml, source = 'ldbsv') {
+function parseSoapXml(xml, source = 'ldbsv', resolveDirection) {
   const results = [];
   const services = xml.split(/service>/i);
 
@@ -370,7 +372,7 @@ function parseSoapXml(xml, source = 'ldbsv') {
       trainid: getVal(sv, 'trainid') || getVal(sv, 'rid') || null,
       source,
       uid: getVal(sv, 'uid') || null
-    });
+    }, resolveDirection);
     if (train) results.push(train);
   }
 
@@ -429,7 +431,7 @@ function deduplicateTrains(trains) {
 
 // ---- Station polling ----
 
-async function pollStationRdm(station, apiKey) {
+async function pollStationRdm(station, apiKey, resolveDirection) {
   const now = new Date();
   const p = Object.fromEntries(
     new Intl.DateTimeFormat('en-GB', {
@@ -447,10 +449,10 @@ async function pollStationRdm(station, apiKey) {
     throw new Error(`RDM HTTP ${resp.status}: ${resp.body.slice(0, 300)}`);
   }
 
-  return parseRdmJson(resp.body);
+  return parseRdmJson(resp.body, resolveDirection);
 }
 
-async function pollStationSoap(station, token, staffVersion = false) {
+async function pollStationSoap(station, token, staffVersion = false, resolveDirection) {
   const url = staffVersion ? SOAP_LDBSV_URL : SOAP_LDB_URL;
   const body = buildSoapRequest(station, token, staffVersion);
   const resp = await httpPost(url, body, { 'Content-Type': 'application/soap+xml; charset=utf-8' });
@@ -459,7 +461,7 @@ async function pollStationSoap(station, token, staffVersion = false) {
     throw new Error(`SOAP HTTP ${resp.status}: ${resp.body.slice(0, 300)}`);
   }
 
-  return parseSoapXml(resp.body, staffVersion ? 'ldbsv' : 'ldb');
+  return parseSoapXml(resp.body, staffVersion ? 'ldbsv' : 'ldb', resolveDirection);
 }
 
 // ---- Main polling function ----
@@ -473,24 +475,27 @@ const estimateMemory = new Map();
  *
  * auth = { mode: 'rdm', apiKey: '...' }     — RDM REST API
  *    or { mode: 'soap', token: '...' }       — Direct SOAP endpoint
+ * opts.timetableDirection = ({uid, headcode, at}) => 'east'|'west'|null — this crossing's
+ *    timetable lookup (CrossingState.timetableDirection), step 1 of direction resolution.
  */
-async function pollCrossing(crossingId, config, auth) {
+async function pollCrossing(crossingId, config, auth, opts = {}) {
   const station = config.ldb.station;
   const allTrains = [];
+  const resolveDirection = makeDirectionResolver(config.directions, opts.timetableDirection);
 
   try {
     let trains;
     if (auth.mode === 'rdm') {
-      trains = await pollStationRdm(station, auth.apiKey);
+      trains = await pollStationRdm(station, auth.apiKey, resolveDirection);
       console.log(`  ${station}: ${trains.length} trains (RDM Staff Version)`);
     } else {
       // SOAP mode
       try {
-        trains = await pollStationSoap(station, auth.token, true);
+        trains = await pollStationSoap(station, auth.token, true, resolveDirection);
         console.log(`  ${station}: ${trains.length} trains (SOAP Staff Version)`);
       } catch (svErr) {
         console.warn(`  SOAP Staff Version failed: ${svErr.message}`);
-        trains = await pollStationSoap(station, auth.token, false);
+        trains = await pollStationSoap(station, auth.token, false, resolveDirection);
         console.log(`  ${station}: ${trains.length} trains (SOAP public LDB)`);
       }
     }

@@ -12,6 +12,7 @@ const cifFetcher = require('./cif-fetcher');
 const corpusFetcher = require('./corpus-fetcher');
 const { computeRunRates } = require('./run-rate');
 const { tdLogFile, crossingTdAreas } = require('./td-paths');
+const { validateDirections } = require('./direction');
 const { parseLondonWallClock, londonDateStamp } = require('./time-utils');
 
 // Load config
@@ -49,13 +50,17 @@ const crossingStates = {};
 for (const [id, config] of Object.entries(crossingsConfig)) {
   crossingStates[id] = new CrossingState(id, config);
   console.log(`Crossing registered: ${id} (${config.name})`);
+  // A name on both place lists would match neither (src/direction.js) — say so at startup.
+  for (const p of validateDirections(config.directions)) console.error(`Crossing ${id}: directions config: ${p}`);
 }
 
 // LDB polling loop
 async function pollAll() {
   for (const [id, config] of Object.entries(crossingsConfig)) {
     try {
-      const trains = await pollCrossing(id, config, auth);
+      const trains = await pollCrossing(id, config, auth, {
+        timetableDirection: q => crossingStates[id].timetableDirection(q)
+      });
       crossingStates[id].updateLdbTrains(trains);
       console.log(`LDB ${id}: ${trains.length} trains, state=${crossingStates[id].state}`);
     } catch (err) {

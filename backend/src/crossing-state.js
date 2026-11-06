@@ -37,6 +37,11 @@ const SCHEDULE_PAST_GRACE_MS = 10 * 60 * 1000;
 // Within this lead of the *scheduled* crossing, an un-sighted train is treated
 // as a no-show; a sighted train switches to sighting-based projection.
 const TD_LOCK_LEAD_MS = 60 * 1000;
+// How far a timetable entry's crossing time may be from the board's station time and still be
+// the same train when matched by HEADCODE (timetableDirection). Headcodes repeat through the
+// day, typically hourly. 20 min is the window the 2026-11-06 measurement used (34,031 matches
+// over 179 days). UID matches are not windowed — a UID is unique to the train.
+const TIMETABLE_DIRECTION_WINDOW_MS = 20 * 60 * 1000;
 // Fallback "first TD sighting → crossing" lead if config omits areaEntryLeadSecs.
 // Biased low so projections fire early rather than late (catch-every-closure).
 // These are deliberately ROUGH and intentionally too short: the 'sighting' fires
@@ -196,6 +201,7 @@ class CrossingState {
     // were being lost for precisely the events that need them. _matchKnownTrain falls back
     // here so they survive the departure.
     this.knownTrains = new Map();
+    this._unplacedWarned = new Set(); // board trains already reported as unplaceable (one line each)
 
     // "prevHeadcode|nextHeadcode" → ts(ms) of a boundary the overlap pass has already
     // coalesced. Hysteresis for _coalesceOverlapping: a pair we have merged stays merged
@@ -668,6 +674,57 @@ class CrossingState {
     return out;
   }
 
+  // Step 1 of departure-board direction (src/direction.js): this crossing's own timetable
+  // entry for the train. q = { uid, headcode, at } where `at` is the board's scheduled time
+  // at the station (a Date). Returns 'east' | 'west' | null.
+  //
+  // UID first — it is the canonical identity and the same key _mergeTrains dedupes on. A UID
+  // can carry more than one traversal (an out-and-back working, schedule-parser legIndex), and
+  // then the legs go opposite ways, so the leg nearest `at` is the one meant. Headcode is the
+  // fallback, only within TIMETABLE_DIRECTION_WINDOW_MS, because headcodes are reused in a day.
+  timetableDirection(q) {
+    if (!q) return null;
+    const atMs = q.at instanceof Date ? q.at.getTime() : NaN;
+    const nearest = (cands, windowMs) => {
+      let best = null, bestD = Infinity;
+      for (const s of cands) {
+        if (s.direction !== 'east' && s.direction !== 'west') continue;
+        const est = this._scheduleTimeToDate(s.estimatedCrossingMins);
+        const d = est && Number.isFinite(atMs) ? Math.abs(est.getTime() - atMs) : (cands.length === 1 ? 0 : Infinity);
+        if (d < bestD) { bestD = d; best = s; }
+      }
+      return best && bestD <= windowMs ? best.direction : null;
+    };
+    if (q.uid) {
+      const byUid = this.scheduleTrains.filter(s => s.uid && s.uid === q.uid);
+      if (byUid.length) {
+        const dirs = new Set(byUid.map(s => s.direction));
+        if (dirs.size === 1) { const [d] = dirs; if (d === 'east' || d === 'west') return d; }
+        const d = nearest(byUid, Infinity);
+        if (d) return d;
+      }
+    }
+    if (q.headcode) {
+      const byHc = this.scheduleTrains.filter(s => s.headcode === q.headcode);
+      if (byHc.length) return nearest(byHc, TIMETABLE_DIRECTION_WINDOW_MS);
+    }
+    return null;
+  }
+
+  // Which direction's berths `berth` belongs to — the approach chain or the clear step —
+  // or null. Used to place a train whose direction the board could not resolve.
+  _directionFromBerth(berth) {
+    const td = this.config && this.config.td;
+    if (!td || !berth) return null;
+    const hits = [];
+    for (const [dir, key] of [['east', 'eastbound'], ['west', 'westbound']]) {
+      const c = td[key] || {};
+      const set = new Set([...(c.approachChain || []), c.clear && c.clear.from, c.clear && c.clear.to].filter(Boolean));
+      if (set.has(berth)) hits.push(dir);
+    }
+    return hits.length === 1 ? hits[0] : null;
+  }
+
   // Update LDB trains (called every 30s from poller)
   updateLdbTrains(trains) {
     this.ldbTrains = trains;
@@ -696,8 +753,27 @@ class CrossingState {
     const ldbByHeadcode = new Map(); // headcode -> [trains]
 
     for (const t of this.ldbTrains) {
+      // A board train whose direction neither the timetable nor the place lists could give
+      // (src/direction.js) is placed by the berth it is in, once it reaches this crossing's
+      // berths — certain, because each direction's chain is its own. Until then it is left out
+      // rather than given a guessed direction: a wrong one points the close/open logic at the
+      // other direction's berths, so its real strikes are never matched. None of 34,399
+      // Portslade board trains over 179 days reached this branch (2026-11-06).
+      let direction = t.direction;
+      if (direction !== 'east' && direction !== 'west') {
+        const live = t.headcode ? this.liveTrains.get(t.headcode) : null;
+        direction = live ? this._directionFromBerth(live.berth) : null;
+        if (!direction) {
+          if (!this._unplacedWarned.has(t.headcode || t.dedupKey)) {
+            this._unplacedWarned.add(t.headcode || t.dedupKey);
+            console.warn(`[${this.id}] board train ${t.headcode || '?'} ${t.origin} -> ${t.destination}: direction unknown, not yet on our berths — left out until it is`);
+          }
+          continue;
+        }
+      }
       const train = {
         ...t,
+        direction,
         bestTime: new Date(t.bestTime),
         scheduledTime: t.scheduledTime ? new Date(t.scheduledTime) : null,
         confidence: 'high'

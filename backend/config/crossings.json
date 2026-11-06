@@ -9,6 +9,17 @@
       "station": "PLD",
       "adjacentStations": ["FSG", "HOV"]
     },
+    "_comment_directions": "Which way a departure-board train is going (src/direction.js). The board gives no direction, so: (1) the crossing's own timetable entry for the train, by UID else headcode at the nearest time; (2) else these lists, DESTINATION first then origin; (3) else 'unknown', resolved from the berth chain once the train reaches it - never a default. placesBeyond = the places that lie beyond the crossing when travelling that way; an entry matches a board name exactly or as its leading words ('london' covers London Victoria and London Bridge; 'ford' does not match Watford). line = the official Up/Down designation of each slot: on the West Coastway Up is towards Brighton, so east = up. Places reachable both ways round (Horsham, via Brighton or the Arun Valley) are deliberately on neither list. SET FROM 179 days of logs, 2026-11-06: these lists name every origin and destination the PLD board showed (28 names), and on the 34,031 trains with a timetable match the lists alone agreed with the timetable on 34,028 - the 3 misses are diverted Brighton -> London Victoria trains, which step 1 gets right. For another crossing, list the board's origins/destinations by which side of the crossing they lie, and check against the timetable the same way.",
+    "directions": {
+      "east": {
+        "line": "up",
+        "placesBeyond": ["Brighton", "Hove", "Preston Park", "London", "Clapham Junction", "Battersea Park", "East Croydon", "Redhill", "Gatwick Airport", "Three Bridges", "Haywards Heath", "Burgess Hill", "Lewes", "Eastbourne"]
+      },
+      "west": {
+        "line": "down",
+        "placesBeyond": ["Fishersgate", "Southwick", "Shoreham-by-Sea", "Lancing", "East Worthing", "Worthing", "West Worthing", "Durrington-on-Sea", "Goring-by-Sea", "Angmering", "Littlehampton", "Ford", "Arundel", "Barnham", "Bognor Regis", "Chichester", "Fishbourne", "Bosham", "Nutbourne", "Southbourne", "Emsworth", "Warblington", "Havant", "Bedhampton", "Hilsea", "Fratton", "Portsmouth", "Cosham", "Portchester", "Fareham", "Swanwick", "Bursledon", "Hamble", "Netley", "Sholing", "Woolston", "Bitterne", "St Denys", "Southampton", "Eastleigh"]
+      }
+    },
 
     "td": {
       "area": "LA",

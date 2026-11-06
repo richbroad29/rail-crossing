@@ -53,7 +53,12 @@ function svc(over) {
     isCancelled: false
   }, over);
 }
-const board = (...services) => parseRdmJson({ trainServices: services });
+// Direction from Portslade's real config (src/direction.js), as pollCrossing builds it. No
+// timetable here, so it resolves from the place lists: London Victoria -> Littlehampton is
+// westbound by its destination.
+const { makeDirectionResolver } = require('../src/direction');
+const PLD_DIRECTIONS = require('../config/crossings.json').portslade.directions;
+const board = (...services) => parseRdmJson({ trainServices: services }, makeDirectionResolver(PLD_DIRECTIONS));
 
 console.log('\nLDB time resolution — actual / forecast / timetable\n');
 

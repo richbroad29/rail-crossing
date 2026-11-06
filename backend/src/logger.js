@@ -31,6 +31,7 @@ function logLdb(crossingId, trains) {
     trainCount: trains.length,
     trains: trains.map(t => ({
       dir: t.direction,
+      dirSrc: t.directionSource || undefined,   // 'timetable' | 'places' | 'unknown' (src/direction.js)
       sch: t.scheduledTime,
       best: t.bestTime,
       origin: t.origin,
