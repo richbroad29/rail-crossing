@@ -111,7 +111,7 @@ All JSON responses: `Content-Type: application/json`, gzip when the client accep
 `{status: "ok"|"degraded"|"starting", uptimeSecs, rssMB, heapMB, feeds: {td: {connected, lastMessageAt, staleSecs, messagesPerMin}}, reference: {smart: {rows, loadedAt}, corpus: {...}, naptan: {...}, cif: {schedules, loadedAt}}, model: {trains, placed, unplaced, anchoredBerths, learnedEdges}, clients: {sse}}`
 
 ### `GET /map/v1/trains?bbox=S,W,N,E`
-Every placed train inside the box (whole GB if omitted). Response:
+Every placed train inside the box (whole GB if omitted). "Inside" is section 19.1's rule, not the signalled `lat, lon` alone: a train is in the box when it could be DRAWN there (its reach box touches it). Response:
 `{serverTime, feedStale: bool, trains: [Train]}`. Cache-Control `no-store`.
 
 `Train` (compact; the page derives everything else):
@@ -485,3 +485,10 @@ recording is what a page in that box would have got).
 - Measure the effect with the live recordings: for the London and Sussex regions, the share of tracked train-frames whose
   drawn position lies inside a zoom-16 box (desktop 1440x900, and phone 390x844) around it but whose train the OLD rule would
   not have sent with the page's 30 % pad; it must be 0 under the new rule except trains that have no `mv`.
+
+**As built (2026-11-06).** `Train` is unchanged; the box lives on the server. Resolved where 19.1 was silent: (1) a train with no `mv` has its
+point box UNPADDED (exactly the old test, so nothing changes for it); the pad applies when there is an `mv`. (2) The pad is metres converted at
+the box's highest latitude. (3) The reach box is built when the train's JSON is built, so it is exactly what clients were last sent; the
+ChangeSet records that box (`obox`, null for a train not yet placed) in place of `olat, olon`. (4) A span record's box is cut from the route
+when the span is built (`SpanBuilder._boxOf`, `bboxOf(id)`), kept on the record, so a superseded id keeps answering while it is retained; a span
+the library cannot cut has no box and contributes nothing (the point and the other span still count). (5) `spans.reachPadM` (default 200).

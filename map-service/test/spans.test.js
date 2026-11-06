@@ -166,7 +166,8 @@ test('GET span: the polyline cut from the route at the berth boundaries, and not
   sp.path.forEach(p => p.forEach(v => assert.equal(v, Math.round(v * 1e5) / 1e5, 'rounded to 5 dp')));
   assert.equal(sp.stop, null);
   assert.equal(w.sb.get('sp_nope'), null);
-  assert.equal(Object.keys(w.sb.byBerth.get(w.id('0003'))).sort().join(), ['chainKey', 'd0', 'd1', 'id', 'keyId', 'length', 'rule', 'stop'].join());
+  assert.equal(Object.keys(w.sb.byBerth.get(w.id('0003'))).sort().join(), ['box', 'chainKey', 'd0', 'd1', 'id', 'keyId', 'length', 'rule', 'stop'].join());
+  assert.equal(w.sb.byBerth.get(w.id('0003')).box.length, 4, 'a span carries its bounding box (19.1): four numbers, never the polyline');
 });
 
 test('IDS are stable while nothing changes, and change when learning moves a berth by more than 10 % of its length', () => {
@@ -800,4 +801,42 @@ test('SECTION 16: /debug/record streams the same {t, event, data} lines, with sp
     checkRecording(lines.filter(l => l.event !== 'end'), rig);
     assert.ok(lines.filter(l => l.event === 'span').length >= 2, 'the next span was announced when the train entered it');
   } finally { await rig.stop(); }
+});
+
+// ---- contract section 19.1: a span record carries its bounding box --------------------------------------------------------------
+
+test('19.1 a span record carries its bounding box: the box of the polyline /span/:id serves, computed once at build, four numbers, and it survives retirement', () => {
+  const all = { '0001': 100, '0003': 100, '0005': 100, '0007': 100, '0009': 100 };
+  const w = world({ medians: all });
+  w.sb.settle();
+  const r = w.sb.byBerth.get(w.id('0003'));
+  const pts = w.sb.get(r.id).path;
+  const want = [Math.min(...pts.map(p => p[0])), Math.min(...pts.map(p => p[1])), Math.max(...pts.map(p => p[0])), Math.max(...pts.map(p => p[1]))];
+  const got = w.sb.bboxOf(r.id);
+  assert.equal(got.length, 4);
+  got.forEach((v, i) => assert.ok(Math.abs(v - want[i]) < 1e-5, `box[${i}] ${v} vs ${want[i]}`));
+  assert.ok(got[1] < got[3], 'it spans the berth along the line (west < east)');
+  assert.equal(w.sb.bboxOf('sp_nope'), null);
+  // Learning moves 0003 by far more than 10 %: its span is superseded, and the superseded id still answers with ITS box (a train may still be drawn on it).
+  const oldId = r.id, oldBox = got.slice();
+  for (let i = 0; i < 200; i++) w.transit.add(w.id('0003'), 'express', 'passes', 400);
+  w.sb._planned.at = -Infinity; w.sb.settle();
+  const now = w.sb.forBerth(w.id('0003')).id;
+  assert.notEqual(now, oldId);
+  assert.equal(w.sb.byId.has(oldId), false);
+  assert.deepEqual(w.sb.bboxOf(oldId), oldBox, 'a retired span keeps its box');
+  assert.notDeepEqual(w.sb.bboxOf(now), oldBox, 'and the new span has its own');
+});
+
+test('19.1 gap-chain spans carry a box too (they are built by the same step), and a library that cannot cut gives null, never a throw', () => {
+  const w = gapWorld(['0031']);
+  w.sb.settle();
+  const rec = w.sb.byBerth.get(w.id('0031'));
+  assert.ok(rec.gap);
+  assert.equal(w.sb.bboxOf(rec.id).length, 4);
+  const t = fakeTrack();
+  t.slice = () => { throw new Error('boom'); };
+  const c = world({ track: t });
+  assert.doesNotThrow(() => c.sb.settle());
+  assert.equal(c.sb.bboxOf(c.sb.forBerth(c.id('0003')).id), null);
 });

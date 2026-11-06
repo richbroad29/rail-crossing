@@ -27,7 +27,7 @@
 //
 // Everything bounded: trains, recently cancelled, per-train rings (berths, trail, previous headcodes).
 //
-// Changes are reported to ChangeSets as (id, position before the first change): exactly what the
+// Changes are reported to ChangeSets as (id, REACH box before the first change): exactly what the
 // SSE hub needs to say "upsert" or "remove" per client box without remembering what each client knows.
 
 const { haversineKm, bearingDeg, round5 } = require('./geo');
@@ -37,7 +37,8 @@ const AREA_RE = /^[A-Z0-9]{1,4}$/;
 
 class ChangeSet {
   constructor() { this.map = new Map(); }
-  note(id, olat, olon) { if (!this.map.has(id)) this.map.set(id, { olat, olon }); }
+  /** `obox` is the train's REACH box [s, w, n, e] before the first change (contract 19.1), or null when it was not placed. */
+  note(id, obox) { if (!this.map.has(id)) this.map.set(id, { obox }); }
   take() { const m = this.map; this.map = new Map(); return m; }
   get size() { return this.map.size; }
 }
@@ -54,6 +55,8 @@ class TrainModel {
     this.graph = graph;
     this.decorate = decorate;         // (Train) -> svc object for the wire (adds late / next from TRUST); default: the match's own
     this.spanOf = null;               // (keyId) -> the id of the span of that berth, or null: set by the app
+    this.spanBox = null;              // (spanId) -> the span's bounding box [s, w, n, e] or null: set by the app (contract 19.1)
+    this.reachPadM = 200;             // metres added round the reach box: set by the app from spans.reachPadM
     this.motion = motion;             // MotionPlanner (section 11) or null
     this.onTransit = onTransit;       // (Train, keyId, secs) when a train leaves a berth it entered by a step (section 10)
     this.timeDep = new Set();         // trains whose JSON changes with the clock (held flag, clamped expected times)
@@ -83,9 +86,42 @@ class TrainModel {
   // ---- plumbing -------------------------------------------------------------------------------------
 
   _touch(t) {
-    const lat = t.placed ? t.lat : NaN, lon = t.placed ? t.lon : NaN;
-    for (const cs of this.changeSets) cs.note(t.id, lat, lon);
+    // The box clients last had (it is set when the JSON is built, i.e. when the train is sent); a placed train never yet built is its point.
+    const o = t.placed ? t.reach || [t.lat, t.lon, t.lat, t.lon] : null;
+    for (const cs of this.changeSets) cs.note(t.id, o);
     t.json = null;
+  }
+
+  /**
+   * Contract 19.1: where the page could draw this train. The box of its signalled point, of its current mv span and of the span of the
+   * mv it last had on a DIFFERENT berth (the page draws 12 s behind and a continuation runs from that span's end), padded by `reachPadM`.
+   * A train without an mv is just its point: nothing is drawn anywhere else. Called from trainJson with the plan's span (or null).
+   */
+  _reach(t, sp) {
+    if (sp === null) { t.mvSp = null; t.prevSp = null; t.mvKey = -1; }          // no mv: nothing to be drawn on, and the previous span goes with it
+    else if (t.mvKey !== t.keyId) { t.prevSp = t.mvSp; t.mvSp = sp; t.mvKey = t.keyId; }
+    else t.mvSp = sp;                                                           // a re-issue on the same berth (18.3): the previous span stands
+    let s = t.lat, w = t.lon, n = t.lat, e = t.lon;
+    if (sp !== null) {
+      if (this.spanBox) {
+        for (const id of [t.mvSp, t.prevSp]) {
+          let b = null;
+          try { b = id ? this.spanBox(id) : null; } catch (_) { b = null; }       // a lookup must never stop a train being served: it is then its point, padded
+          if (!b) continue;
+          if (b[0] < s) s = b[0]; if (b[1] < w) w = b[1]; if (b[2] > n) n = b[2]; if (b[3] > e) e = b[3];
+        }
+      }
+      const dLat = this.reachPadM / 111195, dLon = dLat / Math.max(0.01, Math.cos(Math.max(Math.abs(s), Math.abs(n)) * Math.PI / 180));
+      s -= dLat; n += dLat; w -= dLon; e += dLon;
+    }
+    t.reach = [s, w, n, e];
+  }
+
+  /** The train's reach box (building its JSON first if it is stale, which is where the box is set), or null when it is not placed. */
+  reachOf(t) {
+    if (!t.placed) return null;
+    if (!t.json) this.trainJson(t);
+    return t.reach;
   }
 
   _newId() { return 't' + this.boot + (++this.counter).toString(36); }
@@ -103,7 +139,7 @@ class TrainModel {
   _setPos(t, p, { step }) {
     const was = t.placed;
     const prevPos = was ? { lat: t.lat, lon: t.lon } : null;
-    if (!p) { t.placed = false; t.pl = null; t.place = null; return; }
+    if (!p) { t.placed = false; t.pl = null; t.place = null; t.reach = null; t.mvSp = null; t.prevSp = null; t.mvKey = -1; return; }
     t.placed = true; t.lat = p.lat; t.lon = p.lon; t.pl = p.pl; t.place = p;
     if (step && prevPos) {
       const h = bearingDeg(prevPos, p, this.cfg.minHeadingMetres || 20);
@@ -176,6 +212,7 @@ class TrainModel {
       id: this._newId(), hc, prevHc: null, keyId, at: ts, lastEventAt: ts, firstSeenAt: ts,
       lat: 0, lon: 0, pl: null, place: null, hdg: null, placed: false,
       enteredStep: false, timeDepAt: 0, svcDueAt: 0,
+      reach: null, mvSp: null, prevSp: null, mvKey: -1,
       recentKeys: [], recentAts: [], trail: [], svc: null, svcArea: null, svcHc: null, svcGen: 0, svcCheckAt: 0, json: null
     };
     this.stats.newTrains++;
@@ -406,8 +443,8 @@ class TrainModel {
     t.svcDueAt = 0;
     if (t.svc) o.svc = this.decorate ? this.decorate(t) : t.svc.svc;     // decorate may set t.svcDueAt: when the clock next changes it
     let due = Infinity;
+    let p = null;
     if (this.motion) {
-      let p = null;
       try { p = this.motion.plan(t, this.now()); } catch (_) { p = null; }
       if (p) {
         o.mv = p.mv;
@@ -415,6 +452,7 @@ class TrainModel {
         if (p.extendAt && p.extendAt < due) due = p.extendAt;         // a departure plan extends its dwell before it falls due (section 18.3)
       }
     }
+    this._reach(t, p ? p.mv.sp : null);
     if (t.svcDueAt && t.svcDueAt < due) due = t.svcDueAt;
     t.json = JSON.stringify(o);
     if (due !== Infinity) { t.timeDepAt = due; this.timeDep.add(t); }

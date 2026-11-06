@@ -7,7 +7,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('http');
 const { startRig } = require('./rig');
-const { sleep, until } = require('./helpers');
+const { sleep, until, getJson } = require('./helpers');
+const { inBbox } = require('../src/geo');
 
 function sse(port, query = '') {
   const events = [];
@@ -242,13 +243,13 @@ test('BUFFER CAP: a client whose write buffer passes the cap is dropped, not buf
   const { EventEmitter } = require('events');
   const { SseHub } = require('../src/sse');
   const train = { id: 't1', placed: true, lat: 51, lon: -1 };
-  const model = { byId: new Map([['t1', train]]), trainJson: () => '{"id":"t1"}' };
+  const model = { byId: new Map([['t1', train]]), trainJson: () => '{"id":"t1"}', reachOf: () => [51, -1, 51, -1] };
   const hub = new SseHub({ model, snapshot: { body: () => '{"trains":[]}' }, config: { maxSseClients: 5, coarseBboxDeg2: 25, coarseIntervalSecs: 10, pingSecs: 20, sseMaxBufferBytes: 1000 }, now: () => 1, mono: () => 1 });
   const mkRes = () => Object.assign(new EventEmitter(), { writableLength: 0, written: [], destroyed: false, writeHead() {}, write(t) { this.written.push(t); return true; }, end() {}, destroy() { this.destroyed = true; } });
   const slow = mkRes(), fast = mkRes();
   assert.equal(hub.add(new EventEmitter(), slow, { s: 50, w: -2, n: 52, e: 0 }), true);
   assert.equal(hub.add(new EventEmitter(), fast, { s: 50, w: -2, n: 52, e: 0 }), true);
-  const change = new Map([['t1', { olat: NaN, olon: NaN }]]);
+  const change = new Map([['t1', { obox: null }]]);
   hub.flush(change);
   assert.equal(slow.written.length, 2, 'snapshot and one update while its buffer was empty');
   slow.writableLength = 5000;                                   // the phone stopped reading
@@ -273,4 +274,63 @@ test('an aborted connection is cleaned up; closeAll on shutdown ends every strea
   assert.equal(rig.app.sse.size, 0);
   cs[1].close();
   await rig.stop();
+});
+
+// ---- contract 19.1: a train is in a box when the page could DRAW it there ----------------------------------------------------------
+
+/** Plant a span provider (the way transit.test.js does): berth keyIds -> span id, and span id -> box. `state.sp` may be changed between touches. */
+function plantSpans(rig, state) {
+  rig.app.spans = {
+    step() {},
+    forBerth: id => (state.sp[id] ? { id: state.sp[id], length: 500, stop: null } : null),
+    bboxOf: id => state.box[id] || null
+  };
+}
+
+test('19.1 /trains?bbox and the SSE snapshot return a train whose span crosses the box although its signalled point is outside; the old rule does not', async () => {
+  const rig = await world();
+  try {
+    const t = byHc(rig, '1H15'), g = rig.app.graph;
+    const keyId = g.lookup('LA', '0002');
+    const state = { sp: { [keyId]: 'sp_crossing' }, box: { sp_crossing: [t.lat, t.lon - 0.001, t.lat + 0.08, t.lon + 0.001] } };     // 9 km north of the point
+    plantSpans(rig, state);
+    for (let i = 0; i < 6; i++) rig.app.transit.add(keyId, 'stopping', 'passes', 60);
+    rig.app.model._touch(t);
+    await rig.settle(1200);
+    const R = `${t.lat + 0.05},${t.lon - 0.01},${t.lat + 0.06},${t.lon + 0.01}`;                // 5 km+ north of the train, inside the span's reach
+    assert.equal(inBbox(t.lat, t.lon, { s: t.lat + 0.05, w: t.lon - 0.01, n: t.lat + 0.06, e: t.lon + 0.01 }), false, 'the signalled point is outside the box (what the old rule tested)');
+    const r = (await getJson(rig.port, `/map/v1/trains?bbox=${R}`)).json;
+    assert.deepEqual(r.trains.map(x => x.hc), ['1H15'], '/trains?bbox');
+    assert.equal(r.trains[0].mv.sp, 'sp_crossing', 'and it is the same Train on the wire, mv and all');
+    assert.deepEqual(Object.keys(r.trains[0]).sort(), ['area', 'at', 'berth', 'hc', 'hdg', 'id', 'lat', 'lon', 'mv', 'pl', 'svc'].sort(), 'the Train shape is unchanged');
+    const far = (await getJson(rig.port, `/map/v1/trains?bbox=${t.lat + 0.3},${t.lon - 0.01},${t.lat + 0.31},${t.lon + 0.01}`)).json;
+    assert.deepEqual(far.trains, [], 'a box beyond the span and its pad');
+    const c = sse(rig.port, `?bbox=${R}`); await c.ready; await until(() => c.events.length >= 1);
+    assert.deepEqual(c.events[0].data.trains.map(x => x.hc), ['1H15'], 'the SSE snapshot');
+    c.close();
+  } finally { await rig.stop(); }
+});
+
+test('19.1 over a live stream: a train is upserted when its span starts to cross the box and removed when it stops, with its signalled point never in it', async () => {
+  const rig = await world();
+  try {
+    const t = byHc(rig, '1H15'), g = rig.app.graph;
+    const keyId = g.lookup('LA', '0002');
+    const state = { sp: {}, box: { sp_crossing: [t.lat, t.lon - 0.001, t.lat + 0.08, t.lon + 0.001] } };
+    plantSpans(rig, state);
+    for (let i = 0; i < 6; i++) rig.app.transit.add(keyId, 'stopping', 'passes', 60);
+    const R = `?bbox=${t.lat + 0.05},${t.lon - 0.01},${t.lat + 0.06},${t.lon + 0.01}`;
+    const c = sse(rig.port, R); await c.ready; await until(() => c.events.length >= 1);
+    assert.deepEqual(c.events[0].data.trains, [], 'no span yet: the train is drawn at its point, outside the box');
+
+    state.sp[keyId] = 'sp_crossing'; rig.app.model._touch(t);                    // the span arrives
+    await until(() => c.ofType('update').length >= 1, 2000, 'upsert');
+    assert.deepEqual(c.ofType('update')[0].data.upsert.map(x => x.hc), ['1H15']);
+    assert.deepEqual(c.ofType('update')[0].data.remove, []);
+
+    delete state.sp[keyId]; rig.app.model._touch(t);                             // and goes again: the old reach box is what says "remove"
+    await until(() => c.ofType('update').length >= 2, 2000, 'remove');
+    assert.deepEqual([c.ofType('update')[1].data.upsert, c.ofType('update')[1].data.remove], [[], [t.id]]);
+    c.close();
+  } finally { await rig.stop(); }
 });

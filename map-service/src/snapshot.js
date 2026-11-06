@@ -2,13 +2,12 @@
 
 // The precomputed snapshot. Rebuilt at most once a second, and only when something changed, from the
 // per-train JSON strings the model already caches. A request then costs a bbox filter over parallel
-// arrays plus a string join; the whole-GB body and its gzip are built once per version and shared.
+// arrays plus a string join (the box of each train is where the page could draw it, contract 19.1); the whole-GB body and its gzip are built once per version and shared.
 //
 // serverTime and feedStale are those of the moment the snapshot was built (<= 1 s old), which is what
 // lets the bodies be cached and compressed once instead of per request.
 
 const zlib = require('zlib');
-const { inBbox } = require('./geo');
 
 class Snapshot {
   constructor({ model, now = Date.now, gzipCacheEntries = 64 }) {
@@ -16,7 +15,7 @@ class Snapshot {
     this.version = 0;
     this.builtAt = now();
     this.feedStale = true;
-    this.lats = []; this.lons = []; this.jsons = []; this.ids = [];
+    this.boxes = new Float64Array(0); this.jsons = [];       // boxes: s, w, n, e per train (its REACH box, contract 19.1), four numbers a row
     this.count = 0;
     this._allBody = null; this._allGz = null; this._gzPending = null;
     this._boxCache = new Map();
@@ -24,13 +23,13 @@ class Snapshot {
   }
 
   rebuild(feedStale) {
-    const lats = [], lons = [], jsons = [];
+    const boxes = new Float64Array(this.model.byId.size * 4), jsons = [];
     for (const t of this.model.placed()) {
-      const j = this.model.trainJson(t);
+      const j = this.model.trainJson(t);       // builds the reach box as well
       if (j === null) continue;
-      lats.push(t.lat); lons.push(t.lon); jsons.push(j);
+      boxes.set(t.reach, jsons.length * 4); jsons.push(j);
     }
-    this.lats = lats; this.lons = lons; this.jsons = jsons; this.count = jsons.length;
+    this.boxes = boxes; this.jsons = jsons; this.count = jsons.length;
     this.feedStale = !!feedStale;
     this.builtAt = this.now();
     this.version++;
@@ -49,7 +48,9 @@ class Snapshot {
       return this._allBody;
     }
     const out = [];
-    for (let i = 0; i < this.count; i++) if (inBbox(this.lats[i], this.lons[i], bbox)) out.push(this.jsons[i]);
+    // A train is in the box when it could be DRAWN there, not only when it is signalled there: its reach box touches the request's.
+    const b = this.boxes, S = bbox.s, W = bbox.w, N = bbox.n, E = bbox.e;
+    for (let i = 0, k = 0; i < this.count; i++, k += 4) if (b[k] <= N && b[k + 2] >= S && b[k + 1] <= E && b[k + 3] >= W) out.push(this.jsons[i]);
     return this._wrap(out.join(','));
   }
 

@@ -34,5 +34,7 @@ function parseBbox(text) {
 
 const inBbox = (lat, lon, b) => lat >= b.s && lat <= b.n && lon >= b.w && lon <= b.e;
 const bboxDeg2 = b => (b.n - b.s) * (b.e - b.w);
+/** Does a REACH box [s, w, n, e] (contract 19.1) touch a request bbox {s,w,n,e}? Touching edges count, as inBbox does. */
+const reachHits = (r, b) => r[0] <= b.n && r[2] >= b.s && r[1] <= b.e && r[3] >= b.w;
 
-module.exports = { haversineKm, bearingDeg, round5, parseBbox, inBbox, bboxDeg2 };
+module.exports = { haversineKm, bearingDeg, round5, parseBbox, inBbox, bboxDeg2, reachHits };
