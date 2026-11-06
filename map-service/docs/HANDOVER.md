@@ -50,6 +50,24 @@ then the repo's `CLAUDE.md`. Product intent is the Claude Doc "UK Live Train Map
 | 3 carriages | Not started. Rich has subscribed to Darwin Push Port + snapshots on RDM. |
 | 4 enthusiast features, launch | Not started. |
 
+## Publishing phase 2 (2026-11-06, lead) — READY, waiting for Rich to say push
+
+- **CONTRACT 19.1 DEPLOYED** 2026-11-06 ~15:25 UTC (VPS `~/rail-map` at `7090736`; rollback point `e81f499`). The bbox
+  filters test a train's reach box (point + current and previous span), not its signalled point. Found by the browser
+  check: zoomed in, 21-40 % (phone) of the trains drawn on screen were never sent. Now 0.6-1.4 %; the rest are trains drawn
+  on continuations outside both spans' boxes (round 3: give joins a box).
+- **Page fix `8efd21e`:** a stack of standing trains whose lowest id had no heading was not squared, so it drew as a cross
+  (live Victoria: 15 trains, crossed in 480/480 samples -> 0).
+- **Publish branch `claude/map-phase2-publish`** (worktree `/Users/richandanna/rail-crossing-publish`, commit `28e2b7d`):
+  `origin/main` + `map/` from `claude/map-service` at `8efd21e`, re-stamped. Nothing outside `map/` changes. NOT pushed.
+  To publish: `git -C /Users/richandanna/rail-crossing-publish push origin claude/map-phase2-publish:main`.
+- Checked: page 219 tests + 28/28 mutations + fixture replay; browser `shots` all good; `phase2` all good except the
+  Brighton "stacked" scenario (the mock's `stack=BTN` no longer puts the trains on one point: fix the scenario, not the page)
+  and a marginal sequence frame (0.46 m vs 0.45, intermittent); `real.js` against the LIVE service through an ssh tunnel
+  (`ssh -N -L 127.0.0.1:3110:127.0.0.1:3100 ...` + `map/dev/cors-proxy.js --target 127.0.0.1:3110`) all good.
+- Seen live, round 3: junction areas (Clapham WI/XA/Q0) have most berths unspanned, so 18 of 29 trains there sit piled at
+  the station point (same as phase 1); approximate (`pl` a) trains drawn in streets off the line (5c).
+
 ## Fix round 2 — LIVE RESULTS (2026-11-06, lead)
 
 Six regions' LIVE recordings, 04:19-10:42 UTC 2026-11-06 (the morning peak; 36 segments each), copied to
