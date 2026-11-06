@@ -113,6 +113,151 @@ decision 1 at the end).
 | `td.positionStaleSecs` | When a train's last known berth is too old to project from | 240 | Live |
 | `td.areaEntryLeadSecs` | Rough "first seen in area → crossing" time, a stopgap. The code also has its own Portslade copy as a default | east 150, west 112 | Live + hard-coded default |
 
+## 6a. Berth geography and berth timings
+
+This is the heart of the prediction: which berths a train passes in each direction, what is physically
+in them, and how long each type of train takes from each berth to the road. A berth step ("strike") is
+turned into a barriers-down and barriers-up time using these numbers. The geography is written by hand
+and checked against the logs; the timings are **measured from the berth logs** by a script and stored
+beside the definition, so they can be regenerated without anyone retyping them.
+
+| Variable | What it means | Status |
+|---|---|---|
+| `directions.<d>.berths[]` | Every berth in the order a train meets it, approach side then past the road: berth code, role (approach chain / trigger / protecting / clear / past), what is inside it (a station, a platform, a signal), typical time spent in it | Partial: split today between `approachChain`, `clear` and the display `chain` |
+| `directions.<d>.berths[].contains` | A station or platform inside the berth. This is what makes a class split necessary (Southwick in 0006) and why a stopping train sits in a berth much longer | Hard-coded (Southwick only, in comments and one setting) |
+| `directions.<d>.farBerths` | Berths further out that still lead to the crossing, with a rough time to the road | Live (display only) |
+| `timings.toRoad.<d>.<class>.<berth>` | Measured seconds from entering that berth to the train reaching the road: median, spread, number of trains | Live (generated) |
+| `timings.between.<d>.<class>.<a>><b>` | Measured seconds between any two berths on the approach, used to project a trigger strike from wherever the train is now | Live (generated) |
+| `timings.queued.<d>.<class>.<berth>` | The same, measured only on trains queued behind another | Live (generated, east on) |
+| `timings.minTrains` | Smallest sample a timing is trusted on; smaller cells are left out, not guessed | 15 — Live |
+| `timings.sinceRoad.<d>.<berth>` | Seconds from the road to entering each berth past it (display) | Live (display chain) |
+| `close.classes.<c>` / `open.lagSecs.<c>` | Which berth triggers each class and the offsets; see sections 8 and 9 | Live |
+
+Portslade, from the live settings and the measured file:
+
+### Eastbound (Up, towards Brighton)
+
+**Berths in the order a train meets them**
+
+| # | Berth | Role | What is there | Typical time in berth (s) |
+|---|---|---|---|---|
+| 1 | 0016 | approach chain | furthest berth drawn | 132 |
+| 2 | 0014 | approach chain |  | 74 |
+| 3 | 0012 | approach chain |  | 37 |
+| 4 | 0010 | approach chain |  | 143 |
+| 5 | 0008 | approach chain |  | 75 |
+| 6 | 0006 | approach | Southwick station is inside this berth | 142 |
+| 7 | 0004 | protecting | last berth before the road (protecting) | 79 |
+| | **ROAD** | the crossing (0004 → 0002 is the step onto it) | Boundary Road | |
+| 8 | 0002 | clear | first berth past the road; Portslade eastbound platform | 115 |
+| 9 | T686 | past the crossing |  | 53 |
+| 10 | T684 | past the crossing |  |  |
+
+Further out, not drawn (rough seconds to the road, observer only): 0020 751, 0024 860, 0203 870, 0202 903, 0026 905, 0028 995, 0040 999, 0032 1054, 0030 1055, 0042 1065, 0034 1093, 0022 1129, 0036 1140, A030 1146, 0038 1157.
+
+**Seconds from entering each berth to the train reaching the road, by class** — median (spread, trains)
+
+| Berth | Fast (no stop) | Stopping | Stopping + Southwick | Empty (5xxx) | Freight |
+|---|---|---|---|---|---|
+| 0016 | 345 (±153, 253) | 608 (±51, 2231) | 726 (±81, 4549) | 504 (±166, 556) | 699 (±130, 38) |
+| 0014 | 299 (±126, 254) | 471 (±43, 2233) | 586 (±74, 4550) | 427 (±146, 558) | 605 (±113, 38) |
+| 0012 | 244 (±117, 254) | 395 (±42, 2233) | 511 (±72, 4550) | 363 (±130, 558) | 516 (±105, 38) |
+| 0010 | 208 (±104, 254) | 355 (±36, 2229) | 471 (±68, 4552) | 305 (±107, 558) | 416 (±78, 38) |
+| 0008 | 157 (±68, 254) | 189 (±28, 2235) | 320 (±60, 4553) | 228 (±86, 558) | 267 (±65, 38) |
+| 0006 | 96 (±58, 256) | 111 (±24, 2236) | 246 (±58, 4555) | 154 (±60, 558) | 165 (±58, 39) |
+| 0004 | 47 (±26, 257) | 58 (±20, 2235) | 81 (±44, 4555) | 77 (±30, 559) | 79 (±35, 39) |
+
+**How each class turns a strike into barrier times**
+
+| Class | Close is triggered by | Barriers down, seconds after that strike | So: barriers down before the train reaches the road | Barriers up after the train clears the road |
+|---|---|---|---|---|
+| Fast (no stop) | 0008 | 20 | 137 | 40 |
+| Stopping | 0008 | 55 | 134 | 40 |
+| Stopping + Southwick | 0006 | 100 | 146 | 40 |
+| Empty (5xxx) | 0008 | 85 | 143 | 40 |
+| Freight | 0006 | 20 | 145 | 70 |
+
+**Resulting estimate from a strike in each berth** — seconds after the strike: barriers down / barriers up. Further out than the trigger berth, the engine projects the trigger strike from the measured berth-to-berth time and adds the class offset; past it, the offset is counted down from when the trigger berth was entered.
+
+| Berth | Fast (no stop) | Stopping | Stopping + Southwick | Empty (5xxx) | Freight |
+|---|---|---|---|---|---|
+| 0016 | 202 / 385 | 473 / 648 | 568 / 766 | 335 / 544 | 526 / 769 |
+| 0014 | 156 / 339 | 331 / 511 | 428 / 626 | 251 / 467 | 447 / 675 |
+| 0012 | 103 / 284 | 254 / 435 | 354 / 551 | 189 / 403 | 357 / 586 |
+| 0010 | 67 / 248 | 212 / 395 | 317 / 511 | 143 / 345 | 263 / 486 |
+| 0008 | 20 / 197 | 55 / 229 | 171 / 360 | 85 / 268 | 118 / 337 |
+| 0006 | already down / 136 | already down / 151 | 100 / 286 | 20 / 194 | 20 / 235 |
+| 0004 | already down / 87 | already down / 98 | already down / 121 | already down / 117 | already down / 149 |
+
+**Same, for a train queued behind another (within 2 berths)** — seconds to the road, median (trains)
+
+| Berth | Fast (no stop) | Stopping | Stopping + Southwick | Empty (5xxx) | Freight |
+|---|---|---|---|---|---|
+| 0016 | 683 (16) | 673 (87) | 750 (287) | 658 (207) | — |
+| 0014 | 559 (24) | 527 (93) | 609 (303) | 560 (254) | 675 (17) |
+| 0012 | 475 (24) | 448 (84) | 527 (311) | 474 (250) | — |
+| 0010 | 393 (32) | 383 (302) | 467 (418) | 374 (286) | 484 (16) |
+| 0008 | 288 (29) | 234 (174) | 324 (287) | 282 (265) | — |
+| 0006 | 186 (38) | 139 (271) | 229 (330) | 188 (308) | — |
+| 0004 | 115 (15) | 79 (97) | 101 (152) | 103 (148) | — |
+
+### Westbound (Down, towards Worthing)
+
+**Berths in the order a train meets them**
+
+| # | Berth | Role | What is there | Typical time in berth (s) |
+|---|---|---|---|---|
+| 1 | T682 | approach chain | furthest berth drawn (no timings: under 15 trains a class) | 90 |
+| 2 | T677 | approach chain |  | 126 |
+| 3 | 0001 | approach chain |  | 45 |
+| 4 | 0003 | approach | approach berth | 36 |
+| 5 | 0005 | protecting | last berth before the road (protecting); Portslade westbound platform is inside it | 115 |
+| | **ROAD** | the crossing (0005 → 0007 is the step onto it) | Boundary Road | |
+| 6 | 0007 | clear | first berth past the road | 43 |
+| 7 | 0009 | past the crossing |  | 70 |
+| 8 | 0011 | past the crossing |  | 140 |
+| 9 | 0013 | past the crossing |  | 144 |
+| 10 | 0015 | past the crossing |  | 84 |
+| 11 | 0017 | past the crossing |  | 47 |
+
+**Seconds from entering each berth to the train reaching the road, by class** — median (spread, trains)
+
+| Berth | Fast (no stop) | Stopping | Empty (5xxx) | Freight |
+|---|---|---|---|---|
+| T682 | — | — | — | — |
+| T677 | 222 (±123, 49) | 338 (±60, 7080) | 205 (±75, 214) | 274 (±45, 34) |
+| 0001 | 94 (±29, 60) | 202 (±48, 7174) | 148 (±48, 266) | 192 (±42, 37) |
+| 0003 | 53 (±25, 60) | 153 (±25, 7172) | 89 (±36, 266) | 121 (±32, 37) |
+| 0005 | 22 (±24, 60) | 116 (±23, 7174) | 45 (±27, 267) | 48 (±17, 37) |
+
+**How each class turns a strike into barrier times**
+
+| Class | Close is triggered by | Barriers down, seconds after that strike | So: barriers down before the train reaches the road | Barriers up after the train clears the road |
+|---|---|---|---|---|
+| Fast (no stop) | 0001 | 2 (worked out; the 10 s minimum after a strike raises it to 10) | 92 | 18 |
+| Stopping | 0003 | 61 (worked out) | 92 | 18 |
+| Empty (5xxx) | 0001 | 56 (worked out) | 92 | 18 |
+| Freight | 0003 | 29 (worked out) | 92 | 30 |
+
+**Resulting estimate from a strike in each berth** — seconds after the strike: barriers down / barriers up. Further out than the trigger berth, the engine projects the trigger strike from the measured berth-to-berth time and adds the class offset; past it, the offset is counted down from when the trigger berth was entered.
+
+| Berth | Fast (no stop) | Stopping | Empty (5xxx) | Freight |
+|---|---|---|---|---|
+| T677 | 133 / 240 | 240 / 356 | 117 / 223 | 176 / 304 |
+| 0001 | 2 / 112 | 104 / 220 | 56 / 166 | 95 / 222 |
+| 0003 | already down / 71 | 61 / 171 | 6 / 107 | 29 / 151 |
+| 0005 | already down / 40 | 25 / 134 | already down / 63 | already down / 78 |
+
+**Same, for a train queued behind another (within 2 berths)** — seconds to the road, median (trains)
+
+| Berth | Stopping | Empty (5xxx) | Freight |
+|---|---|---|---|
+| T677 | 369 (547) | 283 (35) | 313 (15) |
+| 0001 | 262 (401) | 203 (67) | 213 (21) |
+| 0003 | 171 (187) | 138 (46) | — |
+
+Timings: `backend/data/transits.json`, generated 2026-07-26; queued cells 2026-10-27. Cells under 15 trains are left out rather than guessed.
+
 ## 7. Train types and timing classes
 
 | Variable | What it means | Portslade | Status |
@@ -225,6 +370,9 @@ so each needs your go-ahead.
 - **One definition file per crossing**, authored once: `backend/config/crossings/<id>.json` on
   `backend-v2`, laid out as sections 1–13 above, with every setting for one direction under that
   direction.
+- **Its berth timings in a generated file beside it** (`<id>.timings.json`, today's `transits.json`
+  section), written only by the measuring script, so hand-written geography and measured numbers never
+  overwrite each other.
 - **Everything else is generated from it** by one script (`scripts/build-crossings.js`, run like
   `bump-assets.sh`, output committed — no build step on deploy):
   - `/<id>/index.html` — the crossing's page: its own title, description, link-preview tags and
