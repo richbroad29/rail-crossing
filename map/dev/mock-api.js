@@ -54,7 +54,31 @@ process.stderr.write('mock: ' + sim.TRAINS.size + ' trains' + (NATIONAL ? ' (nat
 
 const flags = { stale: false, sse503: false, down: false };
 const clients = new Set();
-const inBox = (b, w) => w.lat >= b[0] && w.lat <= b[2] && w.lon >= b[1] && w.lon <= b[3];
+// CONTRACT 19.1, as the real service tests it: a train is in a box when its REACH box (its point, its current span and the span
+// of its previous berth, padded 200 m) meets the box. The page draws a tracked train on its spans 12 s behind, not at lat/lon.
+const spanBoxes = new Map(), lastSp = new Map();        // span id -> [s, w, n, e]; train id -> {sp, prev}
+function spanBox(id) {
+  let b = spanBoxes.get(id);
+  if (b === undefined) {
+    const sp = id && sim.span(id);
+    b = null;
+    if (sp) { b = [90, 180, -90, -180]; sp.path.forEach((p) => { b[0] = Math.min(b[0], p[0]); b[1] = Math.min(b[1], p[1]); b[2] = Math.max(b[2], p[0]); b[3] = Math.max(b[3], p[1]); }); }
+    spanBoxes.set(id, b);
+  }
+  return b;
+}
+function reachOf(w) {
+  const r = [w.lat, w.lon, w.lat, w.lon];
+  if (!w.mv) { lastSp.delete(w.id); return r; }
+  let s = lastSp.get(w.id);
+  if (!s) lastSp.set(w.id, s = { sp: w.mv.sp, prev: null });
+  else if (s.sp !== w.mv.sp) { s.prev = s.sp; s.sp = w.mv.sp; }
+  [spanBox(s.sp), spanBox(s.prev)].forEach((b) => { if (b) { r[0] = Math.min(r[0], b[0]); r[1] = Math.min(r[1], b[1]); r[2] = Math.max(r[2], b[2]); r[3] = Math.max(r[3], b[3]); } });
+  const dy = 200 / 110540, dx = 200 / (111320 * Math.cos(w.lat * Math.PI / 180));
+  r[0] -= dy; r[2] += dy; r[1] -= dx; r[3] += dx;
+  return r;
+}
+const inBox = (b, w) => { const r = reachOf(w); return r[0] <= b[2] && r[2] >= b[0] && r[1] <= b[3] && r[3] >= b[1]; };
 function parseBbox(q) {
   if (!q) return null;
   const p = q.split(',').map(Number);
@@ -79,7 +103,7 @@ setInterval(() => {
       if (inBox(c.bbox, w)) { sim.wiresSince(t, c.sentVer).forEach((x) => upsert.push(x)); c.known.add(t.id); }
       else if (c.known.has(t.id)) { remove.push(t.id); c.known.delete(t.id); }
     });
-    removedNow.forEach((id) => { if (c.known.delete(id)) remove.push(id); });
+    removedNow.forEach((id) => { lastSp.delete(id); if (c.known.delete(id)) remove.push(id); });
     c.sentVer = sim.ver;
     if (upsert.length || remove.length) sse(c.res, 'update', { serverTime: now, upsert, remove });
   });

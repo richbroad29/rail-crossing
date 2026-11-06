@@ -55,10 +55,14 @@ test('GET /trains: shape of the response and of a Train', async () => {
 });
 
 test('GET /trains?bbox filters; a bad bbox is a plain-sentence 400', async () => {
-  const all = json(await get('/map/v1/trains')).trains.length;
+  const every = json(await get('/map/v1/trains')).trains;
   const some = json(await get('/map/v1/trains?bbox=50.8,-0.3,50.95,0.0')).trains;
-  assert.ok(some.length < all);
-  some.forEach((t) => assert.ok(t.lat >= 50.8 && t.lat <= 50.95 && t.lon >= -0.3 && t.lon <= 0.0));
+  assert.ok(some.length < every.length);
+  // CONTRACT 19.1: every train whose point is in the box is sent; others only when their span reaches it (not within ~0.5 deg)
+  const inside = every.filter((t) => t.lat >= 50.8 && t.lat <= 50.95 && t.lon >= -0.3 && t.lon <= 0.0).map((t) => t.id).sort();
+  const sent = new Set(some.map((t) => t.id));
+  inside.forEach((id) => assert.ok(sent.has(id), id + ' is in the box but was not sent'));
+  some.forEach((t) => assert.ok(t.lat >= 50.3 && t.lat <= 51.45 && t.lon >= -0.8 && t.lon <= 0.5));
   const bad = await get('/map/v1/trains?bbox=1,2,3');
   assert.equal(bad.status, 400);
   assert.equal(typeof json(bad).error, 'string');
