@@ -9,8 +9,8 @@ is concerned. It came from reading every line of the backend (`backend-v2`) and 
 (`main`) for anything that is only true at Portslade, plus the existing settings in
 `backend/config/crossings.json` and `shared/crossings.json`. The internal observer app is out of scope.
 
-It supersedes `.claude/skills/crossing-launch/VARIABLES.md` as the list of variables. That file stays
-useful for *how to measure* each one.
+How to obtain each variable, and what breaks when it is wrong, is `.claude/skills/crossing-launch/MEASURING.md`;
+the process that uses both is that skill's `SKILL.md`.
 
 ## How to read the Status column
 
@@ -22,7 +22,7 @@ useful for *how to measure* each one.
 | **New** | Nothing in the app does this yet; the variable is what a crossing would need when it does. |
 | **Doc** | Description only. Nothing reads it, and nothing should. |
 
-Two rules carried over from `VARIABLES.md`: every number carries its provenance (sample size, date,
+Two standing rules: every number carries its provenance (sample size, date,
 method) or is labelled a guess; and derive rather than store wherever the engine allows.
 
 ---

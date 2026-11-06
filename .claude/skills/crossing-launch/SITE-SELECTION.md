@@ -1,6 +1,6 @@
 # Site selection — is this crossing worth it?
 
-Companion to `SKILL.md` Phase 0. The point of this document is to make the "no" cheap and the "yes"
+Companion to `SKILL.md` Stage 0. The point of this document is to make the "no" cheap and the "yes"
 evidenced, because the expensive mistake is instrumenting and half-calibrating a site that was never
 going to produce a useful product.
 
@@ -81,7 +81,7 @@ Q-freight that doesn't. At Portslade roughly half the area's freight is Q-pathed
 |---|---|---|
 | S-Class byte:bit already known (wiki, community map, or `sclass.json`) | ~3 weeks elapsed, no site time | **Best case** |
 | Area publishes S-Class; byte must be hunted from banked raw | ~6 weeks elapsed, no site time | **Good** — and the hunt also derives the topology |
-| No S-Class, but a willing local volunteer with the observer PWA | 3+ months, many sessions | Viable, fragile, depends on one person |
+| No S-Class, but a willing local volunteer | 3+ months, many sessions | Not supported today: the observer app is Portslade-only and internal |
 | No S-Class, no volunteer | — | **Don't start.** You cannot calibrate, and an uncalibrated launch is a false-alarm generator |
 
 The 12 LXG-positive describers already banking raw: **BM, X7, RT, EN, EH, HG, EK, B3, BU, Q3, Q5, EA**
@@ -90,8 +90,8 @@ of these is materially cheaper than one outside them.
 
 **This reverses the natural instinct.** The obvious way to pick the next crossing is "the busiest one
 people complain about". The cheap way is "the one whose signalling area tells us what its barriers are
-doing". Rich's decision (2026-09-19) is demand-led selection with a preference for S-Class sites — so
-demand generates the candidate list and Gate 4 orders it.
+doing". Rich's decisions: demand-led selection with a preference for S-Class sites (2026-09-19), and
+only sites with barrier data for now — so demand generates the candidate list and Gate 4 decides it.
 
 ---
 
