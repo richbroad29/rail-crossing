@@ -50,6 +50,38 @@ then the repo's `CLAUDE.md`. Product intent is the Claude Doc "UK Live Train Map
 | 3 carriages | Not started. Rich has subscribed to Darwin Push Port + snapshots on RDM. |
 | 4 enthusiast features, launch | Not started. |
 
+## Fix round 2 — LIVE RESULTS (2026-11-06, lead)
+
+Six regions' LIVE recordings, 04:19-10:42 UTC 2026-11-06 (the morning peak; 36 segments each), copied to
+`/Users/richandanna/rail-map-refdata/rec-live-20261106/` and scored with no respan by `map/dev/score-region.js`
+(12 s delay, 18.1 harness). The recorder keeps only a rolling 6 h, so the overnight hours had already gone; copy more
+down with `rsync -a -e "ssh -i ~/Downloads/ssh-key-2026-03-22.key" 'ubuntu@130.162.167.237:rail-map-data/record/' <that dir>/`
+at least every 6 h if a full day is wanted.
+
+| Region | train-h | steps | absorbed (target >= 90 %) | fades / train-h (target < 0.1) | gap / behind / re-appear | re-added (not counted) |
+| --- | --- | --- | --- | --- | --- | --- |
+| sussex | 426 | 11,944 | 93.3 % | 0.30 | 10 / 72 / 45 | 4 |
+| london | 640 | 30,291 | 99.4 % | 0.24 | 53 / 27 / 71 | 1,044 |
+| glasgow | 141 | 5,606 | 96.9 % | 0.24 | 0 / 8 / 26 | 0 |
+| manchester | 118 | 3,090 | 92.6 % | 0.86 | 20 / 16 / 66 | 17 |
+| cambrian | 18 | 138 | 92.3 % | 2.22 | 0 / 33 / 8 | 1 (tiny sample) |
+| ecml-rural | 27 | 455 | 84.3 % | 0.58 | 0 / 11 / 5 | 0 (small sample) |
+
+Backward 0, catch-up <= 1.50x, acceleration bound held, 0 teleports, everywhere. Service after 12 h: no WARN/ERROR in the
+journal, RSS 175 MB, transit 80k series of its 100k cap, 0 evicted.
+
+**Why the fades** (`map/dev/diag-fades.js`): the top five berths make 44-74 % of each region's fades, so round 3 is a list.
+- **behind** (the reference jumps > 2 km ahead): every one is a plan that expected the train to be far SLOWER than it was;
+  when the real step arrives the reference re-times into the next span. Manchester: all 16 at M3:0402, a departure berth
+  whose 17.4 dwell (30-182 s) outlasts the real stand: the train has gone before the dwell ends. Glasgow: 7 of 8 at
+  ED:0306 (3.8 km arrival span, dwell 60). Cambrian: MH:148C/151C departure dwells (120-149 s) too long. Sussex: TE:0432,
+  TE:H002, A3:RY25 (long spans, 3.7-7.6 km, predicted 250-500 s). Only 14 of 167 behind fades are ECS.
+- **holes** (re-appearance: the train passes berths with no span, drops to phase 1, fades back in): sussex X7:0112 x13,
+  X7:1415 x9; manchester MP:B352, M3:0532, M3:0502; glasgow ED:0426, G1:5520.
+- **gap** (consecutive spans not meeting, more than in the respan's 12): london CT:033C x25 (892 m) and Y9:1073/3107 (895 m),
+  manchester M3:0582 x20 (279 m), sussex AD:0161 (2,076 m). Check these joins' `how` (probably `fallback`, see below).
+- **re-added** (round 3 candidate 5a/5b, not in the fade count): London 1,044 in 640 train-h.
+
 ## Fix round 2 — DEPLOYED 2026-11-05 22:35 UTC (VPS `~/rail-map` at `e81f499`; rollback point `0161a0d`)
 
 CONTRACT 18.1-18.5: the harness's headline excludes "slower than predicted" waits and counts re-appearances as fades;
