@@ -710,7 +710,6 @@ function fbRevealMsg(txt){
 function showModal(type) {
   var title = '', body = '';
   var appUrl = BASE_URL + crossingId + '/';
-  var crossingShort = CFG.name.replace(' Level Crossing', '');
   var shareIcon = '<svg style="display:inline-block;vertical-align:middle;margin:0 3px" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#38BDF8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14v5a2 2 0 002 2h12a2 2 0 002-2v-5"/><path d="M12 3v12"/><path d="M8 7l4-4 4 4"/></svg>';
   var dotsIcon = '<svg style="display:inline-block;vertical-align:middle;margin:0 3px" width="16" height="16" viewBox="0 0 24 24" fill="#38BDF8"><circle cx="12" cy="5" r="2.5"/><circle cx="12" cy="12" r="2.5"/><circle cx="12" cy="19" r="2.5"/></svg>';
   if (type === 'homescreen') {
@@ -719,7 +718,6 @@ function showModal(type) {
       body = '<ol><li>Make sure you are viewing this page in <strong>Safari</strong></li>';
       body += '<li>Tap the <strong>Share button</strong> ' + shareIcon + ' (on newer iPhones, tap <strong>\u00b7\u00b7\u00b7</strong> first, then Share)</li>';
       body += '<li>Scroll down and tap <strong>"Add to Home Screen"</strong> (you may need to tap <strong>More</strong> first)</li>';
-      body += '<li>Name it <strong>"' + crossingShort + ' Crossing"</strong> or whatever you prefer</li>';
       body += '<li>Tap <strong>Add</strong></li></ol>';
       body += '<p>The app will appear on your home screen and open full-screen.</p>';
     } else if (isAndroid) {
@@ -727,7 +725,6 @@ function showModal(type) {
       body = '<ol><li>Open this page in <strong>Chrome</strong></li>';
       body += '<li>Tap the <strong>three-dot menu</strong> ' + dotsIcon + ' in the top right</li>';
       body += '<li>Tap <strong>"Add to Home screen"</strong> or <strong>"Install app"</strong></li>';
-      body += '<li>Name it <strong>"' + crossingShort + ' Crossing"</strong></li>';
       body += '<li>Tap <strong>Add</strong></li></ol>';
     } else {
       title = 'Add App to Home Screen';
