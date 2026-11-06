@@ -454,3 +454,34 @@ under 2 km apart — parallel tracks or opposite running, the case 17.1 (b) "bes
 therefore also tries 17.1 (b): routing to the nearest reachable point within 120 m of the next span's start (the step into
 that next berth then gets a 17.1 continuation as usual). Superseded gap chains must not accumulate: `this.chains` stays
 bounded (drop a chain once no current or retained span references it).
+
+## 19. Publishing phase 2 (lead, 2026-11-06)
+
+### 19.1 A train is in a box when the page could DRAW it there (service) — amends section 5's `bbox`
+
+**Why.** The bbox filters (`/trains?bbox`, the stream's snapshot and updates, the record taps) test the train's signalled
+`lat, lon`. The phase 2 page draws a tracked train somewhere else: on its spans, 12 s behind. Measured on the live recordings
+of 2026-11-06 (drawn vs signalled position, share of tracked train-time): London over 1 km 13.9 %, over 2 km 10.4 %, over 5 km
+6.1 %, p99 13.4 km; Sussex over 1 km 25.6 %, over 5 km 2.3 %. (The far tail is mostly phase-1 `pl` i/a estimates off the line,
+round 3 candidate 5c.) Zoomed in, a train drawn mid-screen is never sent, or is removed when its signalled point leaves the
+padded box and pops in again later. The browser check `phase2.js` found it: the train it centred on at zoom 16.2 vanished
+from the page's store. Phase 1 could not have this (drawn = signalled), so phase 2 must not ship without it.
+
+**Rule.** Each placed train has a REACH box: the bounding box of its signalled point, of its current `mv` span, and of the
+span its previous `mv` named (the page may still be drawing it there: it renders 12 s behind, and a continuation runs from that
+span's end to the current one's end), padded by `spans.reachPadM` (default 200 m: continuations "beside" sit up to 120 m off).
+A train without an `mv` has the point's box. A train is IN a request box when its reach box INTERSECTS it. This is the test
+for `/trains?bbox`, the SSE snapshot, SSE updates (upsert when the reach box intersects now; remove when it intersected
+before the change and does not now — ChangeSet keeps the old reach box instead of `olat, olon`), and the record taps (so a
+recording is what a page in that box would have got).
+
+- A span record carries its own bounding box, computed once when it is built (four numbers; the polyline is still not kept).
+  Gap-chain spans and continuations are covered through their canonical ids: no box per join is needed.
+- The previous span is the `sp` of the `mv` the train last had on a DIFFERENT berth (kept per train; cleared when the train
+  loses its `mv`). Same-berth re-issues (18.3) do not change it.
+- Cost: still one pass over parallel arrays per request (store four box arrays instead of `lats, lons`). Measure `/trains?bbox`
+  at a London zoom-12 and a zoom-16 box before and after, and the number of trains each returns.
+- `Train` on the wire is unchanged.
+- Measure the effect with the live recordings: for the London and Sussex regions, the share of tracked train-frames whose
+  drawn position lies inside a zoom-16 box (desktop 1440x900, and phone 390x844) around it but whose train the OLD rule would
+  not have sent with the page's 30 % pad; it must be 0 under the new rule except trains that have no `mv`.
