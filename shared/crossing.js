@@ -21,11 +21,43 @@ var closureTotal = 0;
 var lastPayloadAt = 0;
 var payloadAgeMs = Infinity;
 
-var isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
+var isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) ||
+  (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1); // iPadOS 13+ reports as a Mac
 var isAndroid = /Android/.test(navigator.userAgent);
 var lastRefreshTs = null;
 
 function $(id) { return document.getElementById(id); }
+
+// "Add as app" (header button + the Quick Links button). Chrome, Edge and Samsung Internet
+// fire beforeinstallprompt once the page meets their install criteria (portslade/
+// manifest.webmanifest + some engagement); we keep it so one tap opens the browser's own
+// "Install app" dialog. iOS has no equivalent API — Safari only installs from its Share
+// menu — so there, and in any browser that hasn't fired the event (yet), the button opens
+// the step-by-step guide instead. Guarded throughout: the audit harnesses load this file
+// with a stub window that has no addEventListener or matchMedia.
+var installPrompt = null;
+function isStandaloneApp() {
+  try {
+    return (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||
+      navigator.standalone === true;
+  } catch (e) { return false; }
+}
+function setAddAppVisible(show) { var b = $('addAppBtn'); if (b) b.classList.toggle('hidden', !show); }
+if (typeof window !== 'undefined' && window.addEventListener) {
+  window.addEventListener('beforeinstallprompt', function (e) { e.preventDefault(); installPrompt = e; });
+  window.addEventListener('appinstalled', function () { installPrompt = null; setAddAppVisible(false); });
+  setAddAppVisible(!isStandaloneApp());
+}
+function addAsApp() {
+  if (installPrompt) {
+    var p = installPrompt;
+    installPrompt = null; // single-use; the browser fires a fresh one if it is dismissed
+    p.prompt();
+    if (p.userChoice) p.userChoice.then(function (c) { if (c.outcome === 'accepted') setAddAppVisible(false); }, function () {});
+    return;
+  }
+  showModal('homescreen');
+}
 // The formatters, the closure mapping and the prediction itself all live in
 // shared/predict.js, and the observer app renders the same values from the same
 // functions — so neither app can drift into its own idea of what the barrier is doing.
@@ -683,15 +715,15 @@ function showModal(type) {
   var dotsIcon = '<svg style="display:inline-block;vertical-align:middle;margin:0 3px" width="16" height="16" viewBox="0 0 24 24" fill="#38BDF8"><circle cx="12" cy="5" r="2.5"/><circle cx="12" cy="12" r="2.5"/><circle cx="12" cy="19" r="2.5"/></svg>';
   if (type === 'homescreen') {
     if (isIOS) {
-      title = 'Add App to Home Screen \u2014 iPhone';
+      title = 'Add as App \u2014 iPhone';
       body = '<ol><li>Make sure you are viewing this page in <strong>Safari</strong></li>';
-      body += '<li>Tap the <strong>Share button</strong> ' + shareIcon + ' at the bottom</li>';
-      body += '<li>Scroll down and tap <strong>"Add to Home Screen"</strong></li>';
+      body += '<li>Tap the <strong>Share button</strong> ' + shareIcon + ' (on newer iPhones, tap <strong>\u00b7\u00b7\u00b7</strong> first, then Share)</li>';
+      body += '<li>Scroll down and tap <strong>"Add to Home Screen"</strong> (you may need to tap <strong>More</strong> first)</li>';
       body += '<li>Name it <strong>"' + crossingShort + ' Crossing"</strong> or whatever you prefer</li>';
       body += '<li>Tap <strong>Add</strong></li></ol>';
       body += '<p>The app will appear on your home screen and open full-screen.</p>';
     } else if (isAndroid) {
-      title = 'Add App to Home Screen \u2014 Android';
+      title = 'Add as App \u2014 Android';
       body = '<ol><li>Open this page in <strong>Chrome</strong></li>';
       body += '<li>Tap the <strong>three-dot menu</strong> ' + dotsIcon + ' in the top right</li>';
       body += '<li>Tap <strong>"Add to Home screen"</strong> or <strong>"Install app"</strong></li>';
