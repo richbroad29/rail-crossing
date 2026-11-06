@@ -35,9 +35,7 @@ if (!process.env.NR_FEED_USER) {
 const cifFetcher = require('../src/cif-fetcher');
 const { parseScheduleFile, applyUpdateExtract } = require('../src/schedule-parser');
 
-const crossingsConfig = JSON.parse(
-  fs.readFileSync(path.join(__dirname, '..', 'config', 'crossings.json'), 'utf-8')
-);
+const crossingsConfig = require('../src/crossing-definitions').loadCrossings();
 
 (async () => {
   const fullPath = cifFetcher.latestFilePath();

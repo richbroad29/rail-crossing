@@ -1130,8 +1130,7 @@ console.log('  -- openAfterSecs (bottom rung of the barrier-up ladder) --');
     st2._getOpenAfterSecs('east', 'cif') - st2._getOpenAfterSecs('east', 'ldbsv'), 61);
 
   // The shipped Portslade values, reaching _openPred with the train's own source.
-  const SHIPPED = JSON.parse(require('fs').readFileSync(
-    require('path').join(__dirname, '..', 'config', 'crossings.json'), 'utf8')).portslade;
+  const SHIPPED = require('../src/crossing-definitions').loadCrossings().portslade;
   const st = new CrossingState('portslade', SHIPPED);
   const at = (dir, src) => st._openPred(
     { ...mkT({ dir, headcode: dir === 'east' ? '1E90' : '2W90', bestTimeMs: BASE }), source: src },
@@ -1389,8 +1388,7 @@ console.log('  -- #12 west close: berth-anchored, cannot invert or jump --');
   // bug, so the thing worth asserting is that the deployed configuration cannot reproduce it.
   // (A hand-made fixture missing openLagSecs cannot anchor the period end to the clear step and
   // invents inversions that production does not have — which is how this test first "failed".)
-  const CFG = JSON.parse(require('fs').readFileSync(
-    require('path').join(__dirname, '..', 'config', 'crossings.json'), 'utf8')).portslade;
+  const CFG = require('../src/crossing-definitions').loadCrossings().portslade;
   // crossingId 'portslade' matters: the shipped config has no inline `transits`, so the class
   // transit table is loaded by id (config.transits || TRANSITS[crossingId]). With a dummy id the
   // offsets cannot be derived and every class silently falls back to the pre-strike lead.
@@ -1461,8 +1459,7 @@ console.log('  -- #12 west close: berth-anchored, cannot invert or jump --');
 //      polling /live (2.5s, from the observer) destroyed the evidence the gate needed.
 console.log('  -- #14 held countdowns: no trigger, no zero --');
 {
-  const SHIPPED = JSON.parse(require('fs').readFileSync(
-    require('path').join(__dirname, '..', 'config', 'crossings.json'), 'utf8')).portslade;
+  const SHIPPED = require('../src/crossing-definitions').loadCrossings().portslade;
   const T = BASE;
   // crossingId 'portslade' or the transit table does not load and every class silently
   // falls back to the pre-strike lead (method trap, 2026-08-01).
@@ -1577,8 +1574,7 @@ console.log('  -- #14 held countdowns: no trigger, no zero --');
 // a 1 Hz recompute on an idle crossing.
 console.log('  -- #19 held bounds are re-stamped on the clock, not left to decay --');
 {
-  const SHIPPED = JSON.parse(require('fs').readFileSync(
-    require('path').join(__dirname, '..', 'config', 'crossings.json'), 'utf8')).portslade;
+  const SHIPPED = require('../src/crossing-definitions').loadCrossings().portslade;
   const T = BASE;
   const STAMP = T + 600000;                    // long past any projection from 0005
   const WEST_OPEN_LAG = 18000;                 // openLagSecs.west.passenger
@@ -1699,8 +1695,7 @@ console.log('  -- #19 held bounds are re-stamped on the clock, not left to decay
 // This is #12 one scope wider — that was one train's own open preceding its own close.
 console.log('  -- #15 anchored ends cannot invert across periods --');
 {
-  const SHIPPED = JSON.parse(require('fs').readFileSync(
-    require('path').join(__dirname, '..', 'config', 'crossings.json'), 'utf8')).portslade;
+  const SHIPPED = require('../src/crossing-definitions').loadCrossings().portslade;
   const T = BASE;
 
   // The field case: a westbound stopper struck 0003 and sitting in the protecting berth
@@ -1799,8 +1794,7 @@ console.log('  -- #15 anchored ends cannot invert across periods --');
 // overlap, so essentially every merged period at Portslade is direction-alternating.
 console.log('  -- #18 a merged period ends on the last train to CLEAR, not the last by bestTime --');
 {
-  const SHIPPED = JSON.parse(require('fs').readFileSync(
-    require('path').join(__dirname, '..', 'config', 'crossings.json'), 'utf8')).portslade;
+  const SHIPPED = require('../src/crossing-definitions').loadCrossings().portslade;
 
   // T = 2E37's clear step (0004->0002), 13:41:44Z. Every other instant is the real observed
   // offset from it, so the arithmetic below is the field case and not a constructed one.
@@ -1928,8 +1922,7 @@ console.log('  -- #18 a merged period ends on the last train to CLEAR, not the l
 // justify a MERGE, because merging asserts a positive fact (these two overlap) that a bound
 // cannot support. It may still SPLIT: that is the direction that costs nothing if wrong.
 {
-  const SHIPPED = JSON.parse(require('fs').readFileSync(
-    require('path').join(__dirname, '..', 'config', 'crossings.json'), 'utf8')).portslade;
+  const SHIPPED = require('../src/crossing-definitions').loadCrossings().portslade;
 
   // T = 1S15's clear step (0004->0002), 09:54:16Z on 2026-08-23. Every other instant below is
   // that day's real TD offset from it, so this is the field case, not a constructed one.
@@ -2085,8 +2078,7 @@ console.log('  -- #18 a merged period ends on the last train to CLEAR, not the l
 // the wrong gap) the fractions move and this catches it.
 console.log('  -- trigger map --');
 {
-  const SHIPPED = JSON.parse(require('fs').readFileSync(
-    require('path').join(__dirname, '..', 'config', 'crossings.json'), 'utf8')).portslade;
+  const SHIPPED = require('../src/crossing-definitions').loadCrossings().portslade;
   const tg = new CrossingState('portslade', SHIPPED).getTriggers();
   const byKey = Object.fromEntries(tg.close.map(c => [`${c.direction}:${c.trainClass}`, c]));
 
@@ -2153,8 +2145,7 @@ console.log('  -- trigger map --');
 // which is what the "byte-identical" assertions at the end of this block are for.
 console.log('  -- step 0: closePendingReason / closePendingSince --');
 {
-  const SHIPPED = JSON.parse(require('fs').readFileSync(
-    require('path').join(__dirname, '..', 'config', 'crossings.json'), 'utf8')).portslade;
+  const SHIPPED = require('../src/crossing-definitions').loadCrossings().portslade;
   const T = BASE;
   const eastLocal = (hc, bestMs) => ({
     ...mkT({ dir: 'east', headcode: hc, bestTimeMs: bestMs }),
@@ -2340,8 +2331,7 @@ console.log('  -- step 0: closePendingReason / closePendingSince --');
 console.log('  -- step 0: the held-episode log --');
 {
   const logger = require('../src/logger');
-  const SHIPPED = JSON.parse(require('fs').readFileSync(
-    require('path').join(__dirname, '..', 'config', 'crossings.json'), 'utf8')).portslade;
+  const SHIPPED = require('../src/crossing-definitions').loadCrossings().portslade;
   const T = BASE;
   const realLogHeld = logger.logHeld;
   const lines = [];
@@ -2533,8 +2523,7 @@ console.log('  -- step 0: the held-episode log --');
 // that does not configure the limit must behave exactly as before.
 console.log('  -- 2026-10 queueMaxAhead: a train ahead only queues this one within N berths --');
 {
-  const SHIPPED = JSON.parse(require('fs').readFileSync(
-    require('path').join(__dirname, '..', 'config', 'crossings.json'), 'utf8')).portslade;
+  const SHIPPED = require('../src/crossing-definitions').loadCrossings().portslade;
   const variant = (n) => { const c = JSON.parse(JSON.stringify(SHIPPED));
     for (const d of ['eastbound', 'westbound']) { if (n === undefined) delete c.td[d].queueMaxAhead; else c.td[d].queueMaxAhead = n; }
     return c; };
@@ -2631,8 +2620,7 @@ console.log('  -- 2026-10 queueMaxAhead: a train ahead only queues this one with
 // is, and it must leave every other class exactly as it was.
 console.log('  -- 2026-10 queueExemptClasses: a class a queue does not delay is never queued --');
 {
-  const SHIPPED = JSON.parse(require('fs').readFileSync(
-    require('path').join(__dirname, '..', 'config', 'crossings.json'), 'utf8')).portslade;
+  const SHIPPED = require('../src/crossing-definitions').loadCrossings().portslade;
   const noExempt = () => { const c = JSON.parse(JSON.stringify(SHIPPED));
     for (const d of ['eastbound', 'westbound']) delete c.td[d].queueExemptClasses;
     return c; };
@@ -2728,8 +2716,7 @@ console.log('  -- 2026-10 queueExemptClasses: a class a queue does not delay is 
 // 0003>XING 153s with crossingLeadSecs 92; east passenger open lag 40s.
 console.log('  -- 2026-10-26 step 2: a queued train counts down from its own (queued) median --');
 {
-  const SHIPPED = JSON.parse(require('fs').readFileSync(
-    require('path').join(__dirname, '..', 'config', 'crossings.json'), 'utf8')).portslade;
+  const SHIPPED = require('../src/crossing-definitions').loadCrossings().portslade;
   const QT = JSON.parse(JSON.stringify(TABLE_NO_QUEUED));
   QT.queued = {
     maxAhead: { east: 2, west: 2 },
@@ -2928,8 +2915,7 @@ console.log('  -- 2026-10-26 step 2: a queued train counts down from its own (qu
 // outliving the train.
 console.log('  -- 2026-10-26: a train that has crossed is not still queued --');
 {
-  const SHIPPED = JSON.parse(require('fs').readFileSync(
-    require('path').join(__dirname, '..', 'config', 'crossings.json'), 'utf8')).portslade;
+  const SHIPPED = require('../src/crossing-definitions').loadCrossings().portslade;
   const T = BASE;
   const step = (st, hc, to, from, ts) => {
     st.recordTdSighting(hc, new Date(ts));
@@ -3049,8 +3035,7 @@ console.log('  -- #13 recompute on berth steps (coalesced) --');
     // loop CLOSES: a recompute arms it, it fires with no physical event behind it, and the
     // recompute it triggers arms the next one. Break any link and the bound decays again.
     {
-      const SHIPPED = JSON.parse(require('fs').readFileSync(
-        require('path').join(__dirname, '..', 'config', 'crossings.json'), 'utf8')).portslade;
+      const SHIPPED = require('../src/crossing-definitions').loadCrossings().portslade;
       const st = spy(new CrossingState('portslade', SHIPPED));
       const t0 = Date.now();
       // Stopped in 0008 with 0006 unstruck. 0008>0006 is a median 71s, so the projected

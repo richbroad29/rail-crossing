@@ -49,7 +49,7 @@ const OUT = argOf('--out', path.join(__dirname, '..', 'data', 'transits.json'));
 const LOGDIR = argOf('--logdir', path.join(__dirname, '..', 'data', 'logs', 'td'));
 const UNTIL = argOf('--until', null);
 const QUEUED_ONLY = args.includes('--queued-only');
-const CONFIG = argOf('--config', path.join(__dirname, '..', 'config', 'crossings.json'));
+const CONFIG = argOf('--config', require('../src/crossing-definitions').DEFAULT_DIR);
 
 // NAMING WARNING. `XING` is NOT a synthetic mid-crossing point — it is the CLEAR-BERTH
 // STRIKE, i.e. the moment the train steps 0004→0002 (east) or 0005→0007 (west), which is
@@ -99,7 +99,7 @@ const CONFIG = argOf('--config', path.join(__dirname, '..', 'config', 'crossings
   }
 
   // Queued cells: each run's strike at B, kept only when a train was within maxAhead of it then.
-  const cfgTd = (JSON.parse(fs.readFileSync(CONFIG, 'utf8')).portslade || {}).td || {};
+  const cfgTd = (require('../src/crossing-definitions').loadCrossings(CONFIG).portslade || {}).td || {};
   const maxAhead = {};
   for (const d of ['east', 'west']) {
     const v = (cfgTd[d === 'east' ? 'eastbound' : 'westbound'] || {}).queueMaxAhead;

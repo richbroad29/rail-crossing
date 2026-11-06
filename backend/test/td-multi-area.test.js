@@ -46,7 +46,7 @@ const readLines = f => (fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split('\n'
   try { tdPaths.tdLogDir('../x'); } catch (_) { threw = true; }
   check('an invalid area id is refused (it would become a path)', threw, true);
   check('live config needs exactly area LA',
-    tdPaths.crossingTdAreas(require('../config/crossings.json')).join(','), 'LA');
+    tdPaths.crossingTdAreas(require('../src/crossing-definitions').loadCrossings()).join(','), 'LA');
   check('areas are de-duplicated, area-less crossings skipped',
     tdPaths.crossingTdAreas({ a: { td: { area: 'LA' } }, b: { td: { area: 'BM' } }, c: { td: { area: 'LA' } }, d: {} }).join(','),
     'LA,BM');

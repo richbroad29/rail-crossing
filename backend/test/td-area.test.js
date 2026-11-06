@@ -10,7 +10,7 @@
 
 const CrossingState = require('../src/crossing-state');
 require('../src/logger').logHeld = function () {};
-const crossings = require('../config/crossings.json');
+const crossings = require('../src/crossing-definitions').loadCrossings();
 
 let pass = 0, fail = 0;
 function check(label, actual, expected) {

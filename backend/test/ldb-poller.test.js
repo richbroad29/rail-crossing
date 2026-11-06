@@ -57,7 +57,7 @@ function svc(over) {
 // timetable here, so it resolves from the place lists: London Victoria -> Littlehampton is
 // westbound by its destination.
 const { makeDirectionResolver } = require('../src/direction');
-const PLD_DIRECTIONS = require('../config/crossings.json').portslade.directions;
+const PLD_DIRECTIONS = require('../src/crossing-definitions').loadCrossings().portslade.directions;
 const board = (...services) => parseRdmJson({ trainServices: services }, makeDirectionResolver(PLD_DIRECTIONS));
 
 console.log('\nLDB time resolution — actual / forecast / timetable\n');

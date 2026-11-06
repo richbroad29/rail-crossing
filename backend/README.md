@@ -70,13 +70,13 @@ Rollback: `git reset --hard <HEAD-from-step-1> && sudo systemctl restart rail-cr
 
 ## Adding a new crossing
 
-Edit `config/crossings.json` and add a new entry. You need:
+Each crossing is one definition file, `config/crossings/<id>.json`; the file name is the crossing id
+(`src/crossing-definitions.js` loads them all). Copy `portslade.json` as the worked example — its
+`_comment_*` keys record where every number came from. The full list of variables, what each means and
+which the code reads today is `docs/crossing-definition.md` on `main`.
 
-1. **LDB station code** (CRS) and adjacent station codes
-2. **TD berth IDs** from SMART data (approach/clear per direction)
-3. **TIPLOC sets** — stations on each side of the crossing
-4. **Interpolation fractions** — where the crossing sits between timing points
-5. **Timing parameters** — closeBefore, openAfter, openLagSecs, consecutiveWindow
+The `presentation` block is read only by `scripts/build-crossings.js` on `main`, which generates the
+crossing's public page, home-screen app file, website settings, home-page entry and sitemap from it.
 
 ## Logs
 

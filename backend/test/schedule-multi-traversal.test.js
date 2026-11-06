@@ -24,9 +24,7 @@ const {
 } = require('../src/schedule-parser');
 const CrossingState = require('../src/crossing-state');
 
-const crossingsConfig = JSON.parse(
-  fs.readFileSync(path.join(__dirname, '..', 'config', 'crossings.json'), 'utf-8')
-);
+const crossingsConfig = require('../src/crossing-definitions').loadCrossings();
 
 let pass = 0, fail = 0;
 function check(label, actual, expected) {

@@ -16,9 +16,7 @@ const path = require('path');
 const { parseScheduleFile, applyUpdateExtract } = require('../src/schedule-parser');
 const { londonDateStamp } = require('../src/time-utils');
 
-const crossingsConfig = JSON.parse(
-  fs.readFileSync(path.join(__dirname, '..', 'config', 'crossings.json'), 'utf-8')
-);
+const crossingsConfig = require('../src/crossing-definitions').loadCrossings();
 
 let pass = 0, fail = 0;
 function check(label, actual, expected) {

@@ -10,7 +10,7 @@ const CrossingState = require('../src/crossing-state');
 require('../src/logger').logHeld = function () {};
 const { parseRdmJson } = require('../src/ldb-poller');
 const { matchesPlace, directionFromPlaces, validateDirections, makeDirectionResolver } = require('../src/direction');
-const cfg = require('../config/crossings.json').portslade;
+const cfg = require('../src/crossing-definitions').loadCrossings().portslade;
 const DIRS = cfg.directions;
 
 let pass = 0, fail = 0;

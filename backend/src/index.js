@@ -16,8 +16,9 @@ const { validateDirections } = require('./direction');
 const { parseLondonWallClock, londonDateStamp } = require('./time-utils');
 
 // Load config
-const CONFIG_PATH = path.join(__dirname, '..', 'config', 'crossings.json');
-const crossingsConfig = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
+// One definition file per crossing, config/crossings/<id>.json (src/crossing-definitions.js).
+const { loadCrossings } = require('./crossing-definitions');
+const crossingsConfig = loadCrossings();
 
 // Environment
 const RDM_API_KEY = process.env.RDM_API_KEY;       // RDM consumer key (preferred)

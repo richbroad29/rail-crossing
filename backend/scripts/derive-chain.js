@@ -29,7 +29,7 @@ const zlib = require('zlib');
 const ROOT = path.join(__dirname, '..');
 const { tdLogDir } = require('../src/td-paths');
 const OUT_DIR = path.join(ROOT, 'data', 'derived');
-const CONFIG = JSON.parse(fs.readFileSync(path.join(ROOT, 'config', 'crossings.json'), 'utf-8'));
+const CONFIG = require('../src/crossing-definitions').loadCrossings();
 
 // ---- args ----
 const args = process.argv.slice(2);

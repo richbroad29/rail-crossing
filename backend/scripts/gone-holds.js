@@ -32,8 +32,7 @@ const zlib = require('zlib');
 // td.<dir>.clear for Portslade. Read from the config so a berth change cannot silently
 // invalidate this script, with the shipped pair as the answer we expect to get.
 function clearPairs() {
-  const cfgPath = path.join(__dirname, '..', 'config', 'crossings.json');
-  const td = JSON.parse(fs.readFileSync(cfgPath, 'utf8')).portslade.td;
+  const td = require('../src/crossing-definitions').loadCrossings().portslade.td;
   return [
     { direction: 'east', from: td.eastbound.clear.from, to: td.eastbound.clear.to },
     { direction: 'west', from: td.westbound.clear.from, to: td.westbound.clear.to },

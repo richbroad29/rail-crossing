@@ -50,12 +50,12 @@ const CUTOFF = argOf('--cutoff', '2026-07-26');
 const RECENT = argOf('--recent', '2026-09-27');
 const CSV = argOf('--csv', null);
 const TABLE = argOf('--table', path.join(__dirname, '..', 'data', 'transits.json'));
-const CONFIG = argOf('--config', path.join(__dirname, '..', 'config', 'crossings.json'));
+const CONFIG = argOf('--config', require('../src/crossing-definitions').DEFAULT_DIR);
 const MIN_N = 15;
 const KS = [0, 0.5, 1, 1.5, 2, 3];
 
 const anchors = (() => {
-  const ct = JSON.parse(fs.readFileSync(CONFIG, 'utf8')).portslade.timing.closeTrigger;
+  const ct = require('../src/crossing-definitions').loadCrossings(CONFIG).portslade.timing.closeTrigger;
   const a = {};
   for (const d of ['east', 'west']) {
     a[d] = {};
@@ -482,7 +482,7 @@ const out = cells => console.log('  ' + cells.map(([v, w]) => (w < 0 ? String(v)
   //           actual crossing + open lag stands in for its predicted open). Otherwise: today.
   // Fit on training exactly as 6b (fitN at the configured N); scored only on the test window.
   {
-    const cfgAll = JSON.parse(fs.readFileSync(CONFIG, 'utf8')).portslade;
+    const cfgAll = require('../src/crossing-definitions').loadCrossings(CONFIG).portslade;
     const ctAll = cfgAll.timing.closeTrigger, tdAll = cfgAll.td || {}, lagAll = cfgAll.timing.openLagSecs || {};
     const dkey = d => (d === 'east' ? 'eastbound' : 'westbound');
     const QN = {}, EXEMPT = {}, LAG = {};
