@@ -230,17 +230,18 @@ the new crossing **before** launch, not after.
 
 ## Phase 7 — launch
 
-1. `backend/config/crossings.json` entry, with a provenance comment on every calibrated number: sample
+1. `backend/config/crossings/<id>.json` — the crossing's definition (`docs/crossing-definition.md` lists
+   every variable), with a provenance comment on every calibrated number: sample
    size, sd, date, and how it was derived. This repo's config is simultaneously its calibration
    documentation, and that is why the Portslade numbers survived contact with six months of tuning.
    Mark any un-calibrated value explicitly **GUESS**, as the Portslade entry does.
 2. `backend/data/transits.json` regenerated with the new crossing's key.
-3. `shared/crossings.json` entry — presentation only: `name`, `road`, `station`, `feedbackUrl`,
-   `confidenceWindows`. Nothing physical.
-4. Front-end route. Until the shell is parameterised this means copying `portslade/index.html`; add the
-   new path to `scripts/bump-assets.sh` `FILES=` or its assets go unstamped, which is the 2026-08-10
-   failure mode.
-5. `sh scripts/bump-assets.sh`, commit, push `main`.
+3. The definition's `presentation` block: page title, description, home-screen names, station name,
+   `listed`, confidence windows, display chain. Set `listed: false` until launch.
+4. On `main`: `git fetch`, then `node scripts/build-crossings.js`. It writes the crossing's page, app
+   file, `shared/crossings.json`, the home-page list and the sitemap. `bump-assets.sh` finds every
+   crossing page itself, so nothing goes unstamped (the 2026-08-10 failure mode).
+5. Commit the generated files, push `main`.
 6. Deploy backend per CLAUDE.md (`git merge --ff-only`, restart, verify `active (running)`).
 7. **Verify by reading the RUNNING code, not the file** — `curl` bypasses the service worker. Use
    `.claude/skills/crossing-audit/scripts/stale-check.js`.

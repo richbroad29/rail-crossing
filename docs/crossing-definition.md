@@ -1,6 +1,7 @@
 # The crossing definition — every variable a crossing has
 
-**Status:** draft for review, 2026-11-06. Nothing here changes behaviour yet.
+**Status:** 2026-11-06. The layout below is built (one definition file per crossing, generated pages);
+most variables in the tables are not yet wired up — see the Status column.
 **Worked example:** Portslade (Boundary Road). Every row gives Portslade's value.
 
 This is the complete list of what makes one level crossing different from another, as far as this app

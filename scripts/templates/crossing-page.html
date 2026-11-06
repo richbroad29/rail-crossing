@@ -1,0 +1,179 @@
+<!--
+  TEMPLATE for every crossing's page. scripts/build-crossings.js fills the {{...}} values from
+  the crossing's definition (backend/config/crossings/<id>.json on backend-v2, its `presentation`
+  block) and writes /<id>/index.html. Edit THIS file, never a generated page: the next build
+  overwrites them. Values are HTML-escaped by the generator.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="{{appShortName}}">
+<meta name="theme-color" content="#0F172A">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="../shared/icon-180.png">
+<link rel="icon" type="image/svg+xml" href="../shared/icon.svg">
+<title>{{pageTitle}}</title>
+<meta name="description" content="{{description}}">
+<link rel="canonical" href="{{url}}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="railcrossing.uk">
+<meta property="og:title" content="{{pageTitle}}">
+<meta property="og:description" content="{{description}}">
+<meta property="og:url" content="{{url}}">
+<meta property="og:image" content="https://railcrossing.uk/shared/icon-512.png">
+<meta name="twitter:card" content="summary">
+<link rel="stylesheet" href="../shared/crossing.css">
+<link rel="stylesheet" href="../shared/closure-card.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="hdr">
+    <div class="hdr-text">
+      <div class="hdr-title" id="crossingName">{{name}}</div>
+      <div class="hdr-road" id="crossingRoad">{{road}}</div>
+    </div>
+    <button class="add-app-btn hidden" id="addAppBtn" onclick="addAsApp()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M12 8v6M9.5 11.5 12 14l2.5-2.5"/></svg>Add as app</button>
+  </div>
+
+  <div class="status-card" id="statusCard">
+    <div class="status-title" id="statusTitle">LOADING...</div>
+    <div class="status-msg" id="statusMsg">Fetching live train data...</div>
+  </div>
+
+  <div class="barrier-wrap">
+    <!-- Two booms, one each side. Posts flush with the ends of the road and standing ON the
+         road line (y=95), booms a constant 91 long so they stop 10 apart when down.
+         The frame is DELIBERATELY too short to contain a raised boom: 91 long pivoting at
+         y=49 needs 90 units of headroom and the viewBox gives 19, so the raised and closing
+         booms run off the top and are clipped. That is the intended trade — a frame tall
+         enough to hold them leaves half the picture empty whenever the barriers are down,
+         which is the state people look at it in. Clipped at the edge reads as "continues
+         past the frame"; drawing the boom shorter instead (an earlier attempt scaled it)
+         reads as a stubby half-boom, which is worse. Keep the length constant.
+         Move the viewBox top and you trade empty space against how much boom is visible. -->
+    <svg width="200" height="68" viewBox="0 30 200 68">
+      <rect x="2" y="45" width="8" height="50" rx="2" fill="#555"/>
+      <rect x="190" y="45" width="8" height="50" rx="2" fill="#555"/>
+      <!-- The fills here are the LOADING state, before updateStatus() has a prediction to
+           colour them with. They must be set explicitly: an SVG rect with no fill defaults
+           to black, which on this background is invisible, so the barrier appeared to be
+           missing for the first moment after load. -->
+      <g id="barrierArmL" style="transform-origin:6px 49px;transition:transform 1s ease">
+        <rect x="6" y="45" width="91" height="8" rx="3" class="arm-bar" fill="#475569"/>
+        <rect x="22" y="45" width="13" height="8" rx="1" class="stripe" fill="#94A3B8" opacity=".3"/>
+        <rect x="48" y="45" width="13" height="8" rx="1" class="stripe" fill="#94A3B8" opacity=".3"/>
+        <rect x="74" y="45" width="13" height="8" rx="1" class="stripe" fill="#94A3B8" opacity=".3"/>
+      </g>
+      <g id="barrierArmR" style="transform-origin:194px 49px;transition:transform 1s ease">
+        <rect x="103" y="45" width="91" height="8" rx="3" class="arm-bar" fill="#475569"/>
+        <rect x="113" y="45" width="13" height="8" rx="1" class="stripe" fill="#94A3B8" opacity=".3"/>
+        <rect x="139" y="45" width="13" height="8" rx="1" class="stripe" fill="#94A3B8" opacity=".3"/>
+        <rect x="165" y="45" width="13" height="8" rx="1" class="stripe" fill="#94A3B8" opacity=".3"/>
+      </g>
+      <!-- r=5.5 against an 8-wide post, so the lamp overhangs it by 1.5 on each side, and
+           reaches x=0.5 / x=199.5. The posts sit 2 in from the frame edge for exactly this
+           reason: on a post flush with the edge the outer half of the lamp would fall
+           outside the viewBox and be sliced flat. Any larger radius needs the posts moved
+           further in again. -->
+      <circle cx="6" cy="70" r="5.5" id="lightA" fill="#DC2626" opacity="0"/>
+      <circle cx="194" cy="70" r="5.5" id="lightB" fill="#DC2626" opacity="0"/>
+      <line x1="0" y1="95" x2="200" y2="95" stroke="#888" stroke-width="3" stroke-dasharray="10,8"/>
+      <text x="100" y="92" text-anchor="middle" fill="#888" font-size="8" font-family="monospace" id="roadLabel">{{roadLabel}}</text>
+    </svg>
+  </div>
+
+  <!-- A two-slot timeline of the next two events, each "when it happens" over "how long the
+       state it starts lasts". The slots are POSITIONAL, not fixed roles: slot 0 is always
+       whatever happens next, so it is Next Open while the barriers are down and Next Close
+       while the crossing is clear. Slot 2 sits off the right edge holding the event after
+       those two; it exists so the strip can be pushed along when one happens.
+       Every line has an id because the audit harnesses drive this file through a stub DOM
+       that implements getElementById and nothing else. -->
+  <div class="cards">
+    <div class="cards-track" id="cardsTrack">
+      <div class="card">
+        <div class="card-label" id="c0label"></div>
+        <div class="card-value" id="c0value" style="color:#475569">--</div>
+        <div class="card-sub" id="c0sub"></div>
+      </div>
+      <div class="card">
+        <div class="card-label" id="c1label"></div>
+        <div class="card-value" id="c1value" style="color:#475569">--</div>
+        <div class="card-sub" id="c1sub"></div>
+      </div>
+      <div class="card">
+        <div class="card-label" id="c2label"></div>
+        <div class="card-value" id="c2value" style="color:#475569"></div>
+        <div class="card-sub" id="c2sub"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="debugPanel" class="debug-panel hidden"></div>
+
+  <!-- HIDDEN 2026-11-06 at Rich's request; kept so it can come back. To restore, remove
+       "hidden" from this div. All the code behind it (openFeedbackPicker etc. in
+       shared/crossing.js) is untouched. The observer app has its own capture flow and is
+       unaffected. -->
+  <div class="section hidden" id="accuracySection">
+    <div style="font-size:12px;font-weight:600;margin-bottom:6px">Help improve accuracy</div>
+    <div style="font-size:11px;color:#94A3B8;margin-bottom:8px">Tap when you see the barriers move:</div>
+    <div class="feedback-btns">
+      <button class="fb-btn fb-closed" onclick="openFeedbackPicker('closing')">Barriers Closing Now</button>
+      <button class="fb-btn fb-open" onclick="openFeedbackPicker('opening')">Barriers Opening Now</button>
+    </div>
+    <div class="fb-picker hidden" id="fbPicker"></div>
+    <div class="fb-msg hidden" id="fbMsg"></div>
+  </div>
+
+  <div class="section">
+    <div class="section-hdr">
+      <span>Upcoming Closures</span>
+      <button class="refresh-btn" id="refreshBtn" onclick="refreshData()"></button>
+    </div>
+    <div id="closureList"><div class="empty">Fetching live data...</div></div>
+    <button class="show-more-btn hidden" id="showMoreBtn" onclick="showMoreClosures()">Show More</button>
+  </div>
+
+  <div class="section">
+    <div style="font-size:12px;font-weight:600;margin-bottom:6px">How It Works</div>
+    <div class="info-text">
+      Powered by live train times and real-time railway signalling. As trains approach, we forecast when the barriers will come down &mdash; and by detecting the exact moment each train clears the crossing, we give you a sharper estimate of when they'll lift again.
+    </div>
+    <a class="feedback-link" href="https://forms.gle/MvEes4H9pqSVyKpS8" target="_blank">Share Feedback</a>
+  </div>
+
+  <div class="section">
+    <div style="font-size:12px;font-weight:600;margin-bottom:8px">Quick Links</div>
+    <div class="setup-row">
+      <a class="setup-btn" href="https://forms.gle/Tv3UcPDVcLygoG1D9" target="_blank" style="text-decoration:none">Request Your Local Crossing</a>
+      <a class="setup-btn coffee-btn" href="https://buymeacoffee.com/richardbroad29" target="_blank" style="text-decoration:none">Buy Me a Coffee</a>
+    </div>
+  </div>
+
+  <div class="error hidden" id="errorBox"></div>
+  <div class="footer">Estimates only · Not a safety system · Always obey signals & barriers</div>
+</div>
+
+<div class="modal-overlay" id="modalOverlay" onclick="closeModal(event)">
+  <div class="modal" onclick="event.stopPropagation()">
+    <h3 id="modalTitle"></h3>
+    <div id="modalBody"></div>
+    <button class="modal-close" onclick="closeModal()">Got it</button>
+  </div>
+</div>
+
+<script src="../shared/predict.js"></script>
+<script src="../shared/closure-card.js"></script>
+<script src="../shared/crossing.js"></script>
+<script>
+initCrossing('{{id}}');
+</script>
+<script data-goatcounter="https://richbroad29.goatcounter.com/count"
+        async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>
