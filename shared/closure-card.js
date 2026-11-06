@@ -104,7 +104,7 @@
       // passed here, so the two cannot drift apart: a user glancing between them sees one
       // number, not two that agree by luck.
       //
-      // fmtEta carries the held case with it — "≥ 9s" while the train has not cleared,
+      // fmtEta carries the held case with it — "> 9s" while the train has not cleared,
       // "held" once even that bound has passed, "Soon" when a live countdown reaches zero
       // before the state catches up. Each is the token the card above is showing at that
       // moment, so the mirror holds in the awkward states too, not just the tidy one.

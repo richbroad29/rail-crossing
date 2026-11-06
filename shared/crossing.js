@@ -118,7 +118,7 @@ function buildEventCard(kind, pr, closedForMs, openForMs) {
                              : (closedForMs > 0 ? 'Closed for ' + fmtDownFor(closedForMs) : '') };
 }
 
-// fmtEta renders a held value as "≥ 1m 40s" and a live one as the plain countdown; the
+// fmtEta renders a held value as "> 1m 40s" and a live one as the plain countdown; the
 // sub-line says so in words when held, because a bound has no duration to promise.
 //
 // A live countdown is measured from `t` and a held one from `heldT` (PREDICT.heldRef): the
@@ -368,7 +368,7 @@ function updateStatus() {
       // Held: a train is stopped short of the point that triggers the barrier, so the
       // countdown is a floor, not a prediction. Deliberately worded WITHOUT the berth —
       // "0006" means nothing to someone at the roadside. The observer, which is a field
-      // tool, does name it. "≥" carries the floor in the space of one line: the long form
+      // tool, does name it. ">" carries the floor in the space of one line: the long form
       // wrapped on a phone, and a line that sometimes wraps is a card that changes size.
       // Past the bound, fmtHeld reads "held", so drop the number rather than print "for held".
       // Measured from the payload stamp rather than from now (pr.heldRef), so the bound

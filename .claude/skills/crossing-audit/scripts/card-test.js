@@ -14,7 +14,7 @@
 // will show two different answers to "how long until I can cross", inches apart, and it will
 // look deliberate. That is the failure this exists to catch.
 //
-// The held states are asserted too, because they are where a mirror usually cracks: "≥ 9s"
+// The held states are asserted too, because they are where a mirror usually cracks: "> 9s"
 // while a train has not cleared, "held" once even that bound has passed, "Soon" when a live
 // countdown reaches zero before the state catches up. Each has to be the token the card above
 // is showing at that instant.
@@ -96,14 +96,14 @@ console.log('\nA held value is a bound, so it must NOT tick between polls\n');
   const fresh = [0, 4, 8, 10].map(secs => at(secs, secs * 1000).pill);
   console.log('  age 0/4/8/10s ->', fresh.join('  ->  '));
   check('the bound holds across a whole poll cycle', new Set(fresh).size, 1);
-  check('...at the value the backend stamped', fresh[0], '\u2265 18s');
+  check('...at the value the backend stamped', fresh[0], '> 18s');
   // The mirror has to survive the new reference too: the pill and the Next Open card are
   // fed the same instant, or they drift apart in exactly the state this file exists for.
   const mid = at(8, 8000);
   check('pill and Next Open card still agree while held', mid.pill, mid.box);
   // Pinned, not frozen. Past HELD_FRESH_MS (15s) the app has lost touch and the bound ages.
   const stale = at(20, 20000);
-  check('a stale payload lets it decay again', stale.pill, '\u2265 13s');
+  check('a stale payload lets it decay again', stale.pill, '> 13s');
   check('...and eventually says so outright', at(40, 40000).pill, 'held');
   // The non-regression: a LIVE countdown is a prediction of a moment and must still tick,
   // payload age or not. Only bounds are pinned.

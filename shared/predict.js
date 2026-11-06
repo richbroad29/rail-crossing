@@ -65,7 +65,7 @@
   // A countdown whose trigger has NOT fired. The value is a lower bound recomputed against
   // now, so it does not tick down — rendering it as a bare countdown would read as a hung
   // clock. Prefixed instead, and the caller pairs it with a "held" note.
-  function fmtHeld(ms) { return ms <= 0 ? 'held' : '≥ ' + fmtCountdown(ms); }
+  function fmtHeld(ms) { return ms <= 0 ? 'held' : '> ' + fmtCountdown(ms); }
   // The countdown for a close/open card: held bound or live countdown, whichever applies.
   function fmtEta(ms, held) { return held ? fmtHeld(ms) : fmtSoon(ms); }
   // A duration (not a countdown) — reads as a length of time, to the nearest 10 s:

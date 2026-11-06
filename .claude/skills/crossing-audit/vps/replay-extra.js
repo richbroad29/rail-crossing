@@ -92,7 +92,7 @@ for (const rec of main) {
     // failure was noise. Only an absurd magnitude that still renders as a live countdown is
     // a real problem.
     const absurd = [closeIn, openIn, d.downForMs].filter(v =>
-      typeof v === 'number' && v < -600e3 && !strs.some(s => /Soon|held|≥/.test(String(s))));
+      typeof v === 'number' && v < -600e3 && !strs.some(s => /Soon|held|≥|> /.test(String(s))));
     if ((bad.length || absurd.length || d.error) && R.skew.length < 25) {
       R.skew.push({ t: rec.t, offsetSecs: off / 1000, state: d.status, strings: strs, bad, absurd, error: d.error });
     }
