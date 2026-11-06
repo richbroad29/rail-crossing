@@ -10,10 +10,11 @@
 //     buffer grows past `sseMaxBufferBytes`: a stalled phone must not make the server hold megabytes.
 //
 // No per-client memory of "what this client knows": the model reports each changed train with its
-// position BEFORE the change, so for any box: now inside -> upsert; was inside, now not -> remove.
+// REACH box (where the page could draw it, contract 19.1)
+// BEFORE the change, so for any box: now inside -> upsert; was inside, now not -> remove.
 
 const { performance } = require('perf_hooks');
-const { inBbox, bboxDeg2 } = require('./geo');
+const { reachHits, bboxDeg2 } = require('./geo');
 
 class SseHub {
   // `now` stamps what is sent (serverTime); `mono` times the batches and pings, so a wall-clock step
@@ -65,8 +66,9 @@ class SseHub {
     for (const [id, o] of map) {
       const t = this.model.byId.get(id);
       const cur = t && t.placed ? t : null;
-      const isIn = cur && (!bbox || inBbox(cur.lat, cur.lon, bbox));
-      const wasIn = !Number.isNaN(o.olat) && (!bbox || inBbox(o.olat, o.olon, bbox));
+      const reach = cur ? this.model.reachOf(cur) : null;
+      const isIn = reach && (!bbox || reachHits(reach, bbox));
+      const wasIn = o.obox && (!bbox || reachHits(o.obox, bbox));
       if (isIn) upsert.push(this.model.trainJson(cur)); else if (wasIn) remove.push(id);
     }
     return { upsert, remove };

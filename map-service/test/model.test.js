@@ -259,11 +259,11 @@ test('the change set reports each train with its position BEFORE the first chang
   m.apply(ev('CC', 'LA', '1H15', null, '0001', T0));
   let changes = cs.take();
   const id = trainAt(m, g, 'LA', '0001').id;
-  assert.ok(Number.isNaN(changes.get(id).olat), 'a new train had no previous position');
+  assert.equal(changes.get(id).obox, null, 'a new train had no previous position');
   m.apply(ev('CA', 'LA', '1H15', '0001', '0003', T0 + 1000));
   m.apply(ev('CB', 'LA', '1H15', '0003', null, T0 + 2000));
   changes = cs.take();
-  assert.equal(changes.get(id).olat, 51.0, 'the position at the START of the batch, however many changes followed');
+  assert.deepEqual(changes.get(id).obox, [51.0, -1.0, 51.0, -1.0], 'the box at the START of the batch (a train without an mv: its point), however many changes followed');
   assert.equal(m.byId.has(id), false);
 });
 

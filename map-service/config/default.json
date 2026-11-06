@@ -110,6 +110,7 @@
     "stepBudgetMs": 15,
     "routeCacheEntries": 300,
     "maxSpans": 120000,
+    "reachPadM": 200,
     "maxImpliedMps": 60,
     "maxGapBerths": 4,
     "minGapMetres": 10,

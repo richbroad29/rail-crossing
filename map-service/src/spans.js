@@ -115,6 +115,9 @@ class SpanBuilder {
 
   get size() { return this.byBerth.size; }
 
+  /** A span's bounding box [s, w, n, e], from its canonical id (current or superseded: the record keeps it), or null when unknown. Contract 19.1. */
+  bboxOf(id) { const r = this._canon(id); return r && r.box ? r.box : null; }
+
   forBerth(keyId) { const r = this.byBerth.get(keyId); return r ? { id: r.id, length: r.length, stop: r.stop } : null; }
 
   // ---- planning: which chains of berths lie between which stops ---------------------------------------------------
@@ -338,6 +341,24 @@ class SpanBuilder {
   /** `spans.maxImpliedMps`: the fastest a berth's (or chain's) span may imply, in m/s. Absent = 60; a huge value turns the rule off. */
   _maxMps() { const v = this.cfg.maxImpliedMps; return Number.isFinite(v) && v > 0 ? v : 60; }
 
+  /**
+   * The bounding box [s, w, n, e] of the route between d0 and d1, four numbers (contract 19.1): the polyline is cut once here and dropped.
+   * It is what lets a bbox filter ask "could the page be drawing this train in the box" without the path. Null when the library cannot cut it.
+   */
+  _boxOf(route, d0, d1) {
+    let pts;
+    try { pts = this.track.slice(route, d0, d1); } catch (_) { return null; }
+    if (!Array.isArray(pts) || !pts.length) return null;
+    let s = Infinity, w = Infinity, n = -Infinity, e = -Infinity;
+    for (const p of pts) {
+      const la = p[0], lo = p[1];
+      if (!(Number.isFinite(la) && Number.isFinite(lo))) return null;
+      if (la < s) s = la; if (la > n) n = la;
+      if (lo < w) w = lo; if (lo > e) e = lo;
+    }
+    return [s, w, n, e];
+  }
+
   _build(chain) {
     const g = this.graph;
     const out = { noRoute: false, tooFast: false, built: 0 };
@@ -375,7 +396,7 @@ class SpanBuilder {
         this.stats.recut++;
       } else if (this.byBerth.size >= (this.cfg.maxSpans || 120000)) continue;
       const id = hash(`${g.keyOf[keyId]}|${chain.key}|${Math.round(d0)}|${Math.round(d1)}|${Math.round(cut.L)}`);
-      const rec = { id, keyId, chainKey: chain.key, d0, d1, length: len, stop, rule };
+      const rec = { id, keyId, chainKey: chain.key, d0, d1, length: len, stop, rule, box: this._boxOf(route, d0, d1) };
       if (chain.gap) { rec.gap = true; this.gap.seen.add(keyId); }
       this.byBerth.set(keyId, rec); this.byId.set(id, rec);
       this.stats.built++; out.built++;
