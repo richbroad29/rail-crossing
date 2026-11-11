@@ -2,6 +2,7 @@ const https = require('https');
 const logger = require('./logger');
 const { parseLondonWallClock, londonDateStamp } = require('./time-utils');
 const { makeDirectionResolver } = require('./direction');
+const { isNonRailService } = require('./service-kind');
 
 /**
  * LDB Poller — queries departure board data for crossing predictions.
@@ -309,8 +310,8 @@ function parseRdmJson(body, resolveDirection) {
   for (const svc of serviceList) {
     if (!svc) continue;
     if (svc.isCancelled) continue;
-    if (svc.serviceType === 'bus') continue;
-    if (svc.category === 'BR' || svc.category === 'BS') continue;
+    // Buses and ships never cross: the same rule as the timetable (src/service-kind.js).
+    if (isNonRailService({ category: svc.category, serviceType: svc.serviceType })) continue;
 
     const origin = svc.origin?.location?.[0]?.locationName ||
                    svc.origin?.[0]?.locationName || '?';
@@ -355,7 +356,7 @@ function parseSoapXml(xml, source = 'ldbsv', resolveDirection) {
   for (const sv of services) {
     if (!sv.match(/:?sta>/) && !sv.match(/:?std>/)) continue;
     if (/isCancelled>true/i.test(sv)) continue;
-    if (/serviceType>bus/i.test(sv)) continue;
+    if (isNonRailService({ category: getVal(sv, 'category'), serviceType: getVal(sv, 'serviceType') })) continue;
 
     let origin = '?', dest = '?';
     const origBlock = sv.match(/origin>[\s\S]*?<\/.*?origin>/i);

@@ -1,3 +1,4 @@
+const { isNonRailService } = require('./service-kind');
 const fs = require('fs');
 const zlib = require('zlib');
 const readline = require('readline');
@@ -227,6 +228,11 @@ function extractTrainFields(sched) {
     uid: sched.CIF_train_uid,
     stp: sched.CIF_stp_indicator || 'P',
     headcode, category, trainType,
+    // A bus or ship (src/service-kind.js). Kept through the STP merge rather than dropped on
+    // read, because a bus OVERLAY of a train's UID must still win over that train's permanent
+    // schedule — dropping it early would let the replaced train back in as a phantom closure.
+    // Dropped where cancellations are: when the results are collected.
+    nonRail: isNonRailService({ status: sched.train_status, category }),
     operator: sched.atoc_code || '',
     power: segment.CIF_power_type || '',
     runsAsRequired,
@@ -316,6 +322,7 @@ function buildLegEntry(fields, locations, schedCfg, leg) {
     stp: fields.stp,
     runsAsRequired: fields.runsAsRequired,
     daysPattern: fields.daysPattern,
+    nonRail: !!fields.nonRail,
     estimatedCrossingTime: minsToTimeStr(estMins),
     estimatedCrossingMins: estMins,
     nearWestTiploc: leg.nearWest.tiploc,
@@ -395,7 +402,7 @@ async function parseScheduleFile(filePath, crossingsConfig) {
   // changing a single Portslade prediction). Instead we COUNT and LOG them so
   // they are visible rather than silently dropped, per the catch-every-closure
   // posture (if this assumption ever breaks, the counts make it obvious).
-  const skipped = { tiInsert: 0, taAmend: 0, tiplocOther: 0, crLocations: 0, crOnTraversing: 0 };
+  const skipped = { tiInsert: 0, taAmend: 0, tiplocOther: 0, crLocations: 0, crOnTraversing: 0, nonRail: 0 };
   // Schedules dropped by analyseRoute's ambiguous branch — interleaved west/east calls we
   // cannot express as a single traversal. Collected so the drop is visible in the log
   // instead of silent; see the comment at that branch for why they stay dropped.
@@ -455,7 +462,10 @@ async function parseScheduleFile(filePath, crossingsConfig) {
   // time over-reported the expansion.
   for (const [key, entries] of schedulesByUid) {
     const crossingId = key.split('|')[0];
-    const kept = entries.filter(e => e.stp !== 'C');
+    // Cancellations and buses/ships (nonRail) never reach a crossing. Both are decided AFTER the
+    // STP merge, so a bus overlay still suppresses the train it replaces.
+    const kept = entries.filter(e => e.stp !== 'C' && !e.nonRail);
+    skipped.nonRail += entries.filter(e => e.stp !== 'C' && e.nonRail).length;
     for (const entry of kept) results[crossingId].push(entry);
     if (kept.length > 1) {
       multiLeg.push({
@@ -478,6 +488,9 @@ async function parseScheduleFile(filePath, crossingsConfig) {
     for (const t of trains) types[t.trainType] = (types[t.trainType] || 0) + 1;
     console.log(`  ${id}: ${trains.length} trains (${JSON.stringify(types)})`);
   }
+
+  // Buses and ships that crossed a crossing's timing points and were dropped (service-kind.js).
+  if (skipped.nonRail) console.log(`Schedule: dropped ${skipped.nonRail} bus/ship service(s) — not trains, never a closure`);
 
   // Visibility for the deliberately-unapplied CR/TI/TA records (see FINDING).
   console.log(
@@ -624,7 +637,8 @@ async function applyUpdateExtract(updateFilePath, crossingsConfig, baseByCrossin
   for (const [key, entries] of schedulesByUid) {
     const crossingId = key.split('|')[0];
     for (const entry of entries) {
-      if (entry.stp !== 'C' && results[crossingId]) results[crossingId].push(entry);
+      // Same rule as the full parse: cancellations and buses/ships are dropped after the merge.
+      if (entry.stp !== 'C' && !entry.nonRail && results[crossingId]) results[crossingId].push(entry);
     }
   }
   for (const id of crossingIds) {
