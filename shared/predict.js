@@ -363,6 +363,22 @@
   // filled IN PLACE, never replaced, so anything that took a reference to PREDICT.CHAIN before
   // that (observe.js does, at load) sees the chain once it arrives. Until then — or for a
   // crossing with no chain — every train is "elsewhere in the area".
+  // ---- Direction slots (per crossing, from config) --------------------------------------
+  // A crossing names its own two directions (Portslade: east, west) and says how each is drawn —
+  // shared/crossings.json `directions`: { <slot>: { arrow, marker, colour, boardTime } }. Each app
+  // calls PREDICT.setDirections(CFG.directions) beside setChain. The shared code never names a
+  // slot; a direction it has no entry for (none loaded yet, or 'unknown') is drawn as a grey dot
+  // and read off its arrival time.
+  var DIRS = {};
+  var NO_DIR = { arrow: '·', marker: '·', colour: '#94A3B8', boardTime: 'arrival' };
+  function setDirections(dirs) { DIRS = dirs || {}; }
+  function dirLook(d) {
+    var e = Object.prototype.hasOwnProperty.call(DIRS, d) ? DIRS[d] : null;
+    if (!e) return NO_DIR;
+    return { arrow: e.arrow || NO_DIR.arrow, marker: e.marker || NO_DIR.marker,
+             colour: e.colour || NO_DIR.colour, boardTime: e.boardTime || NO_DIR.boardTime };
+  }
+
   var CHAIN = {};
   // Precomputed per direction: berth → node index, and the crossing index.
   var CHAININ = {};
@@ -663,6 +679,7 @@
   root.PREDICT = {
     CLOSING_SOON_MS: CLOSING_SOON_MS,
     CHAIN: CHAIN, CHAININ: CHAININ, setChain: setChain,
+    setDirections: setDirections, dirLook: dirLook,
     fmtTime: fmtTime, fmtShort: fmtShort, fmtCountdown: fmtCountdown, fmtUncertainty: fmtUncertainty,
     fmtCountdownRough: fmtCountdownRough, fmtWhen: fmtWhen, fmtSoon: fmtSoon,
     fmtHeld: fmtHeld, fmtEta: fmtEta, heldRef: heldRef,

@@ -129,6 +129,16 @@ function websiteSettings(defs) {
     if (t.closeBefore != null) e.closeBefore = t.closeBefore;
     if (t.openAfter != null) e.openAfter = t.openAfter;
     if (p.debugOpenAfterFreightMins != null) e.openAfterFreight = p.debugOpenAfterFreightMins;
+    // Each direction slot, in definition order, as the pages draw it (shared/predict.js
+    // setDirections): arrow/marker/colour from presentation.directions, and which board time
+    // the feedback picker shows from the backend's directions.<dir>.boardTime. The slot names
+    // are the crossing's own; the shared code never names one.
+    const look = p.directions || {};
+    e.directions = {};
+    for (const [slot, dir] of Object.entries(d.directions || {})) {
+      e.directions[slot] = { ...(look[slot] || {}) };
+      if (dir && dir.boardTime) e.directions[slot].boardTime = dir.boardTime;
+    }
     if (p._comment_chain) e._comment_chain = p._comment_chain;
     if (p.chain) e.chain = p.chain;
     if (p._comment_offChainEta) e._comment_offChainEta = p._comment_offChainEta;

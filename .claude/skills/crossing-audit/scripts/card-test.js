@@ -26,6 +26,8 @@ const ROOT = path.join(__dirname, '..', '..', '..', '..');
 eval(fs.readFileSync(path.join(ROOT, 'shared/predict.js'), 'utf8'));
 eval(fs.readFileSync(path.join(ROOT, 'shared/closure-card.js'), 'utf8'));
 const P = globalThis.PREDICT, C = globalThis.CLOSURE_CARD;
+// This crossing's arrows and colours, as the apps load them (shared/predict.js setDirections).
+P.setDirections(JSON.parse(fs.readFileSync(path.join(ROOT, 'shared/crossings.json'), 'utf8')).portslade.directions);
 
 let pass = 0, fail = 0;
 function check(label, actual, expected) {

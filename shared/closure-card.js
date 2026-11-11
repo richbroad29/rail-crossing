@@ -60,10 +60,9 @@
   // (The ± band was part of that set until 2026-08-14; the window it came from now reaches
   // the user only as the precision of the pill's countdown — see fmtWhen in predict.js.)
   function trainRow(t) {
-    var dirColor = t.direction === 'east' ? '#38BDF8' : '#FB923C';
-    var arrow = t.direction === 'east' ? '→' : '←';
+    var look = root.PREDICT.dirLook(t.direction);   // this crossing's arrow + colour (setDirections)
     return '<div class="closure-train">'
-      + '<span style="color:' + dirColor + ';font-weight:700;flex-shrink:0">' + arrow + '</span>'
+      + '<span style="color:' + look.colour + ';font-weight:700;flex-shrink:0">' + look.arrow + '</span>'
       + '<span class="closure-train-route">' + esc(t.origin) + ' → ' + esc(t.destination) + esc(typeLabel(t)) + '</span>'
       + '</div>';
   }

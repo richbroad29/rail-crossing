@@ -8,6 +8,9 @@ description: The process for adding a new level crossing to railcrossing.uk — 
 > **Changelog** — 2026-11-06: rewritten around the per-crossing definition file and generated pages
 > (items 1–9 of `docs/multi-crossing-readiness.md` shipped). Calibration tooling is marked *to be
 > rebuilt*. Add a dated line here whenever a stage changes, and say why.
+> 2026-11-12: direction slots are named by the definition, not the code (any two names; every
+> per-direction block keyed by them). Board time per direction is a live setting and Stage 4 now
+> confirms it from the feed instead of only from the map, because a wrong pick is silent.
 
 Take a candidate from "someone asked for it" to "live and accurate" **without anyone standing at the
 crossing**. The signalling feed calibrates it: start logging first, measure everything from the feed,
@@ -108,11 +111,18 @@ crossing spanning two TD areas.
   - Timing points each side, the side the crossing's own station counts as, seconds from each nearby
     timing point to the crossing (definition §5).
   - The board station, or none (§4); which board time (arrival, departure) is nearest the crossing in
-    each direction.
-  - Direction (§3): each slot's Up/Down designation, label, and `placesBeyond` — every origin and
-    destination the board shows, by which side of the crossing it lies.
+    each direction (`directions.<d>.boardTime`): decide from the platform position, then **confirm
+    from the feed** — `MEASURING.md` has the method. Only arrival and departure are supported; a
+    crossing whose board station is not at the crossing needs code work first.
+  - Direction (§3): name the two slots (any names — every per-direction block in the definition
+    uses the same two), each slot's Up/Down designation, label, `presentation.directions` arrow,
+    marker and colour, and `placesBeyond` — every origin and destination the board shows, by which
+    side of the crossing it lies.
+  - Timing points each side as `schedule.tiplocsBefore.<d>`: the points a train going that way
+    passes BEFORE the crossing.
   - **Validate** against a day of CIF: traversal count matches Stage 1, no ambiguous drops; place lists
-    agree with the timetable direction on ≥ 99% of matched board trains (Portslade: 34,028 / 34,031).
+    agree with the timetable direction on ≥ 99% of matched board trains (Portslade: 34,028 / 34,031);
+    the board-time check above agrees with the map, or the definition says why not.
 - **Out:** definition §3–5.
 - **Exit:** validation passes, and no board train resolves to a guessed direction.
 
@@ -193,8 +203,8 @@ Almost all of it is waiting for logs. Instrument several candidates at once; Sta
   acceptance checks only; fill in the commands when the tools exist. They must read both the collection
   log (`sclass/cclass-<AREA>-*`) and the crossing log (`td/<AREA>/`).
 - **Unwired variables.** Most of the definition is still Hard-coded to Portslade. The close algorithm
-  is being unified and the direction slots renamed (`east`/`west` → per-crossing names); re-check the
-  Code readiness list after each lands.
+  was unified (2026-11-06) and the direction slots made per-crossing names (2026-11-12); re-check the
+  Code readiness list after each further change lands.
 - **Crossings without S-Class.** Rich: only sites with barrier data for now. The observer app is
   Portslade-only and internal, so there is no field-observation path for a new site.
 - **Dark run visibility.** An unlisted crossing still has a reachable page and is predicted live by the

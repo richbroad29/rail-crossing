@@ -64,14 +64,19 @@ These decide which *logic* applies, not just which numbers.
 
 ## 3. Directions
 
-Each crossing has two direction "slots". Their internal names are `east` and `west` today (see
-decision 1 at the end).
+Each crossing has two direction "slots", and its definition names them: the two keys of `directions`
+(Portslade: `east`, `west`). Every per-direction block in the definition is keyed by the same two names
+(`td.<d>`, `schedule.tiplocsBefore.<d>`, `schedule.interpolation.<d>`, `timing.*.<d>`,
+`presentation.*.<d>`), and the code never names a slot, so a crossing may call them anything —
+`up`/`down`, `north`/`south`. The backend refuses to start on a definition with other than two slots or
+with a block keyed by any other name. Live 2026-11-12 (decision 1 at the end); proved by replaying
+Portslade with its slots renamed `up`/`down`.
 
 | Variable | What it means | Portslade | Status |
 |---|---|---|---|
 | `directions.<d>.line` | Official Up/Down designation | east = up, west = down | Doc (recorded, not read) |
 | `directions.<d>.label` | Name shown to people | Eastbound / Westbound | Hard-coded |
-| `directions.<d>.arrow`, `.color` | Arrow and colour on the closure cards | → blue / ← orange | Hard-coded |
+| `presentation.directions.<d>.arrow`, `.marker`, `.colour` | Arrow and colour on the closure cards and debug list; marker in the feedback picker | → ▶ blue / ← ◀ orange | Live (2026-11-12) |
 | `directions.<d>.placesBeyond` | Places beyond the crossing that way, used to work out a departure-board train's direction when the timetable can't | 14 places east, 40 west | Live (2026-11-06) |
 
 ## 4. The nearby station and the departure board
@@ -80,7 +85,7 @@ decision 1 at the end).
 |---|---|---|---|
 | `ldb.station` | Station whose live departure board is read. Can be none | PLD | Live, but **none crashes the board poll** every 30 s |
 | `ldb.stationAtCrossing` | Whether that station is right at the crossing. The code assumes every train on the board stops "here", which is only true if it is | true | Hard-coded |
-| `directions.<d>.boardTime` | Which station time is closest to the crossing: **arrival** (crossing is before the platform), **departure** (after), or **none** | east = arrival, west = departure | Hard-coded |
+| `directions.<d>.boardTime` | Which station time is closest to the crossing: **arrival** (crossing is before the platform), **departure** (after), or **none**. Decides which board time a train is predicted from, and which time the feedback picker shows | east = arrival, west = departure | Live (2026-11-12) for arrival/departure; **none** not supported yet |
 | `directions.<d>.stationToCrossingSecs` | Typical seconds between that board time and the train being on the road | west: on the road about 46 s after departure (measured); east: not measured — a 180 s close lead off the arrival is used instead | Partial (only inside the close leads) |
 | `ldb.adjacentStations` | Neighbouring stations | FSG, HOV | Doc (nothing reads it) |
 | `ldb.rows`, `ldb.windowMins` | How much of the board is fetched | 30 rows, 120 min | Hard-coded |
@@ -91,7 +96,7 @@ decision 1 at the end).
 | Variable | What it means | Portslade | Status |
 |---|---|---|---|
 | `schedule.stationTiploc` | The crossing's own station in timetable code. Used to tell stopping trains from fast ones | PSLDAWH | Live |
-| `schedule.sides.<d>` | Timing points on each side; a train crosses if it passes points on both sides | 27 west, 12 east | Live |
+| `schedule.tiplocsBefore.<d>` | Timing points a train going that way passes BEFORE the crossing — the side it comes from — so the two lists are the two sides; a train crosses if it passes points on both, in the direction whose list it meets first | east: 27 (the places west of the crossing); west: 12 | Live (keyed by slot since 2026-11-12; was `tiplocs_west`/`tiplocs_east`) |
 | `schedule.stationSide` | Which side the crossing's own station counts as. Without it, a train that starts or terminates at Portslade, crossing on its way, has no point on one side and **is missed** | — | Hard-coded (missing) |
 | `schedule.timingPoints` | For each timing point next to the crossing, the seconds from it to the crossing. Today one fraction is used between *whichever* two points bracket the crossing, though it was set for Shoreham↔Hove | Shoreham → Hove, 0.7 eastbound / 0.3 westbound | Partial |
 | `directions.<d>.approachStops` | Stations inside the approach whose stop changes the timing (Southwick inside berth 0006 adds about 160 s) | east: Southwick (STHWICK) in 0006 → class "stoppingLocal"; west: none | Partial (one station, eastbound only) |
@@ -264,7 +269,7 @@ Timings: `backend/data/transits.json`, generated 2026-07-26; queued cells 2026-1
 | Variable | What it means | Portslade | Status |
 |---|---|---|---|
 | `classify.headcodes` | What the first digit of a train's code means. Today **4xxx and 8xxx freight and 0xxx light engines count as passenger trains**; Portslade rarely sees them, Southampton would | 6, 7 freight; 5 empty; 3 test | Hard-coded |
-| `directions.<d>.classes` | The ordered rules that put a train in a timing class, e.g. freight, empty, fast, stopping, calls at Southwick | east: freight → empty → fast → stopping → stoppingLocal; west: **stopping → freight → empty → fast** | Hard-coded, and the two directions are checked in a different order by accident |
+| `td.<d>.classRule` | The ordered rules that put a train in a timing class. **approachStop**: freight → empty → fast → stopping, split on whether it also calls at the station inside the approach (stoppingLocal). **stopping** (the default): stopping → freight → empty → fast | east: approachStop; west: **stopping** | Live (2026-11-12). The west order checks "stopping" before "freight" by accident — bug 3 below |
 | `directions.<d>.defaultClass` | Class used when a train's stopping pattern is unknown | east stoppingLocal, west stopping | Hard-coded |
 | `test` class | Test trains (3xxx, e.g. the autumn rail-head treatment train) run slowly but are timed as fast or stopping | none | New |
 
@@ -357,10 +362,9 @@ so each needs your go-ahead.
 
 ## Decisions needed
 
-1. **Direction names.** Keep the internal slot names `east`/`west` with a display label per crossing, or
-   rename them `up`/`down`. Renaming touches about 90 places in the code and the API's wire format.
-   Recommendation: rename when the two close algorithms are merged (decision 2), since that rewrites the
-   same code anyway.
+1. **Direction names.** DECIDED 2026-11-07, DONE 2026-11-12: neither. The definition names its own two
+   slots and the code reads them from there (section 3), so Portslade keeps `east`/`west` and its API
+   and logs are unchanged, while a new crossing can use `up`/`down` or anything else.
 2. **One close algorithm.** East and west run different code paths at Portslade (queue hold, minimum
    after the step, board-vs-timetable leads). Merge them into one, driven by the settings above, with
    Portslade's current behaviour as its settings — provable by replay as before.

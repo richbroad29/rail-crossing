@@ -885,6 +885,7 @@
       .then(function (all) {
         CFG = all[CROSSING_ID] || null;
         PREDICT.setChain(CFG && CFG.chain);
+        PREDICT.setDirections(CFG && CFG.directions);   // the closure card's arrows and colours
         BERTH_ETA = (CFG && CFG.offChainEta) || {};
       })
       .catch(function () { })

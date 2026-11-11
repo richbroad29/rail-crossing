@@ -442,8 +442,12 @@ function renderDebugPanel() {
 
   if (CFG) {
     var cb = CFG.closeBefore, oa = CFG.openAfter;
-    var cbStr = (typeof cb === 'object') ? 'E:' + cb.east + 'm W:' + cb.west + 'm' : cb + 'm';
-    var oaStr = (typeof oa === 'object') ? 'E:' + oa.east + 'm W:' + oa.west + 'm' : oa + 'm';
+    // Per direction, labelled by the slot's initial: "E:1.5m W:2.5m" at Portslade.
+    var perDir = function (v) {
+      return Object.keys(v).map(function (k) { return k.charAt(0).toUpperCase() + ':' + v[k] + 'm'; }).join(' ');
+    };
+    var cbStr = (typeof cb === 'object') ? perDir(cb) : cb + 'm';
+    var oaStr = (typeof oa === 'object') ? perDir(oa) : oa + 'm';
     html += '<div class="dbg-row">closeBefore: ' + cbStr + ' · openAfter: ' + oaStr + '</div>';
   }
 
@@ -456,7 +460,7 @@ function renderDebugPanel() {
       var t = trains[i];
       var cl = new Date(t.bestTime.getTime() - getCloseBefore(t.direction) * 60000);
       var op = new Date(t.bestTime.getTime() + getOpenAfter(t.direction, t) * 60000);
-      var arrow = t.direction === 'east' ? '→' : '←';
+      var arrow = PREDICT.dirLook(t.direction).arrow;
       html += '<div class="dbg-row">' +
         fmtShort(t.scheduledTime || t.bestTime) + ' ' + arrow + ' ' +
         t.origin + ' → ' + t.destination +
@@ -476,7 +480,7 @@ function renderDebugPanel() {
 // event-moment snapshot. Berth topology + time-to-crossing are ported from the
 // observer app's 28-day TD derivation (Portslade-specific).
 // ============================================================================
-function fbArrow(d){ return d==='east'?'▶':d==='west'?'◀':'·'; }
+function fbArrow(d){ return PREDICT.dirLook(d).marker; }
 function fbEsc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 // A gap in words. Coarse above two minutes (where the estimate can't support seconds),
 // exact below it — which is the whole window in which someone is actually standing at the
@@ -608,13 +612,14 @@ function fbStopTimers(){
   if(fbTickTimer){ clearInterval(fbTickTimer); fbTickTimer = null; }
 }
 function fbMinOf(hhmm){ var m=/^(\d{1,2}):(\d{2})/.exec(hhmm||''); return m ? (parseInt(m[1],10)*60 + parseInt(m[2],10)) : null; }
-// Direction-appropriate time for the card's right column: westbound departure,
-// eastbound arrival, with a lateness tag vs schedule. Returns { time, tag, cls }.
+// Direction-appropriate time for the card's right column — the board time nearest the crossing
+// for this direction (the definition's directions.<dir>.boardTime; Portslade westbound departure,
+// eastbound arrival), with a lateness tag vs schedule. Returns { time, tag, cls }.
 function fbTimeParts(t){
-  var isWest = t.direction==='west';
-  var live = isWest ? t.liveDep : t.liveArr;
-  var liveReal = isWest ? t.liveDepReal : t.liveArrReal;
-  var sched = isWest ? t.schedDep : t.schedArr;
+  var dep = PREDICT.dirLook(t.direction).boardTime === 'departure';
+  var live = dep ? t.liveDep : t.liveArr;
+  var liveReal = dep ? t.liveDepReal : t.liveArrReal;
+  var sched = dep ? t.schedDep : t.schedArr;
   var time = live || sched || t.liveStr || t.schedStr || '';
   if(!time) return { time:'', tag:'', cls:'' };
   // No real estimate means we are showing the timetable, so say so. Comparing the
@@ -746,11 +751,15 @@ async function initCrossing(id) {
   crossingId = id;
   try {
     var configUrl = BASE_URL + 'shared/crossings.json';
-    var resp = await fetch(configUrl);
+    // no-cache: revalidate every load, so a page whose shared code was just updated (those
+    // URLs carry a version stamp) never runs it against a crossings.json the browser cached
+    // from before — the two change together.
+    var resp = await fetch(configUrl, { cache: 'no-cache' });
     var allConfig = await resp.json();
     CFG = allConfig[id];
     if (!CFG) { $('statusMsg').textContent = 'Unknown crossing: ' + id; return; }
     PREDICT.setChain(CFG.chain);   // this crossing's berth chain (shared/predict.js setChain)
+    PREDICT.setDirections(CFG.directions);   // ...and how each of its directions is drawn
   } catch(e) {
     $('statusMsg').textContent = 'Failed to load config: ' + e.message;
     return;

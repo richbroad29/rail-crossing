@@ -13,6 +13,20 @@
       "west": 0.5
     },
     "openAfterFreight": 1.5,
+    "directions": {
+      "east": {
+        "arrow": "→",
+        "marker": "▶",
+        "colour": "#38BDF8",
+        "boardTime": "arrival"
+      },
+      "west": {
+        "arrow": "←",
+        "marker": "◀",
+        "colour": "#FB923C",
+        "boardTime": "departure"
+      }
+    },
     "_comment_chain": "The berth chain a train steps through towards and past the crossing, per direction, nearest-last on the way in. {x:true} is the crossing itself. gap = median seconds in that berth; role marks the approach/protecting/clear berths; ttc = {q1,med,q3} seconds from ENTERING an approach berth to the train passing the crossing; tac = the same from passing the crossing to entering a cleared berth. Reference for both = the train stepping out of the protecting berth (the TRAIN on the crossing, not the barrier). Measured over 28 days of TD logs (backend scripts/derive-ttc.js). Read by shared/predict.js (PREDICT.setChain): position labels, the feedback picker ranking and the observer map. Moved here verbatim from a constant in predict.js on 2026-11-06 (multi-crossing item 6) so the shared code carries no Portslade data; a crossing without a chain shows every train as elsewhere in the area.",
     "chain": {
       "east": [
