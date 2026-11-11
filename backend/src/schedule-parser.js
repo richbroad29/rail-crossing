@@ -56,17 +56,24 @@ function isActiveToday(schedule) {
 const MIDNIGHT_WRAP_THRESHOLD_MINS = 720;
 
 // Determine if a schedule traverses a crossing based on TIPLOC sets.
-// Returns { traverses: true, legs: [{ direction, nearWest, nearEast }, ...] } when it does,
-// otherwise { traverses: false }. `legs` has one entry per traversal and is almost always
+// `crossingConfig.tiplocsBefore.<dir>` lists the timing points a train travelling in direction
+// <dir> passes BEFORE the crossing, i.e. those on the side it comes from; the two lists are the
+// two sides of the crossing. Keyed by the crossing's own direction slots (Portslade: east lists
+// the places west of the crossing, west the places east of it).
+// Returns { traverses: true, legs: [{ direction, from, to }, ...] } when it does, otherwise
+// { traverses: false }. `from` is the last timing point before the crossing and `to` the first
+// after it, each { tiploc, time }. `legs` has one entry per traversal and is almost always
 // length 1 — an out-and-back working gives more (see the interleaved branch below). The
-// single-traversal case also keeps direction/nearWest/nearEast at the top level, which is
-// what callers read when they know there is only one.
+// single-traversal case also keeps direction/from/to at the top level, which is what callers
+// read when they know there is only one.
 function analyseRoute(locations, crossingConfig) {
-  const westSet = new Set(crossingConfig.tiplocs_west);
-  const eastSet = new Set(crossingConfig.tiplocs_east);
+  const before = crossingConfig.tiplocsBefore || {};
+  const [dirA, dirB] = Object.keys(before);
+  const setA = new Set(before[dirA] || []);    // the side a dirA train comes from
+  const setB = new Set(before[dirB] || []);
 
-  let firstWest = null, lastWest = null;
-  let firstEast = null, lastEast = null;
+  let firstA = null, lastA = null;
+  let firstB = null, lastB = null;
 
   // Midnight unwrap (intended behaviour): CIF times are wall-clock HHMM within
   // a single service day, so a service departing late evening and continuing
@@ -96,34 +103,35 @@ function analyseRoute(locations, crossingConfig) {
     const time = raw + offset;
     prevTime = time;
 
-    const isWest = westSet.has(tip);
-    const isEast = eastSet.has(tip);
-    if (isWest) {
-      if (!firstWest) firstWest = { tiploc: tip, time };
-      lastWest = { tiploc: tip, time };
+    const inA = setA.has(tip);
+    const inB = setB.has(tip);
+    if (inA) {
+      if (!firstA) firstA = { tiploc: tip, time };
+      lastA = { tiploc: tip, time };
     }
-    if (isEast) {
-      if (!firstEast) firstEast = { tiploc: tip, time };
-      lastEast = { tiploc: tip, time };
+    if (inB) {
+      if (!firstB) firstB = { tiploc: tip, time };
+      lastB = { tiploc: tip, time };
     }
-    if (isWest || isEast) marks.push({ side: isWest ? 'W' : 'E', tiploc: tip, time });
+    // `side` names the direction a train is travelling when it LEAVES that side.
+    if (inA || inB) marks.push({ side: inA ? dirA : dirB, tiploc: tip, time });
   }
 
   // Train must have calls on BOTH sides of the crossing
-  if (!lastWest || !firstEast || !firstWest || !lastEast) {
+  if (!lastA || !firstB || !firstA || !lastB) {
     return { traverses: false };
   }
 
-  // Determine direction: if west calls come before east calls, train is eastbound
-  if (lastWest.time < firstEast.time) {
-    const leg = { direction: 'east', nearWest: lastWest, nearEast: firstEast };
+  // Determine direction: side A's calls all before side B's means travelling dirA
+  if (lastA.time < firstB.time) {
+    const leg = { direction: dirA, from: lastA, to: firstB };
     return { traverses: true, ...leg, legs: [leg] };
-  } else if (lastEast.time < firstWest.time) {
-    const leg = { direction: 'west', nearWest: firstWest, nearEast: lastEast };
+  } else if (lastB.time < firstA.time) {
+    const leg = { direction: dirB, from: lastB, to: firstA };
     return { traverses: true, ...leg, legs: [leg] };
   }
 
-  // West and east timing points INTERLEAVE. Two different things look like this, and
+  // The two sides' timing points INTERLEAVE. Two different things look like this, and
   // `transitions` — each west<->east change of side — is what tells them apart. A
   // transition is `bracketPair` when it is exactly the configured interpolation pair,
   // i.e. the two timing points that actually bracket this crossing.
@@ -156,8 +164,8 @@ function analyseRoute(locations, crossingConfig) {
   for (let i = 1; i < marks.length; i++) {
     if (marks[i].side === marks[i - 1].side) continue;
     const from = marks[i - 1], to = marks[i];
-    const direction = from.side === 'W' ? 'east' : 'west';
-    const pair = interp[direction === 'east' ? 'eastbound' : 'westbound'] || {};
+    const direction = from.side;
+    const pair = interp[direction] || {};
     const bracketPair = from.tiploc === pair.from && to.tiploc === pair.to;
     transitions.push({
       direction,
@@ -166,11 +174,8 @@ function analyseRoute(locations, crossingConfig) {
       gapMins: Math.round((to.time - from.time) * 10) / 10,
       bracketPair
     });
-    // A transition runs from the side the train is LEAVING to the side it is joining, so
-    // eastbound its two marks are already (west, east) and westbound they are reversed.
-    legs.push(direction === 'east'
-      ? { direction, nearWest: from, nearEast: to }
-      : { direction, nearWest: to, nearEast: from });
+    // A transition runs from the side the train is LEAVING to the side it is joining.
+    legs.push({ direction, from, to });
   }
 
   if (transitions.length > 1 && transitions.every(t => t.bracketPair)) {
@@ -179,22 +184,16 @@ function analyseRoute(locations, crossingConfig) {
   return { traverses: false, ambiguous: true, transitions };
 }
 
-// Estimate crossing time by interpolation between two timing points
-function estimateCrossingTime(nearWest, nearEast, direction, interpolation) {
-  const interpConfig = interpolation[direction === 'east' ? 'eastbound' : 'westbound'];
+// Estimate crossing time by interpolation between two timing points: the crossing is
+// `fraction` of the way from the leg's `from` timing point to its `to`, per direction
+// (interpolation.<dir>).
+function estimateCrossingTime(leg, interpolation) {
+  const interpConfig = interpolation[leg.direction];
   if (!interpConfig) return null;
 
   const fraction = interpConfig.fraction;
-
-  if (direction === 'east') {
-    // Travelling west→east: crossing is fraction of the way from west to east
-    const duration = nearEast.time - nearWest.time;
-    return nearWest.time + duration * fraction;
-  } else {
-    // Travelling east→west: crossing is fraction of the way from east to west
-    const duration = nearWest.time - nearEast.time;
-    return nearEast.time + duration * fraction;
-  }
+  const duration = leg.to.time - leg.from.time;
+  return leg.from.time + duration * fraction;
 }
 
 // STP indicator priority — higher replaces lower. C (cancel) > N (new STP) >
@@ -297,9 +296,7 @@ function buildCrossingEntries(fields, locations, crossingCfg, ambiguousOut) {
 
 // One traversal -> one schedule entry, or null when its crossing time cannot be estimated.
 function buildLegEntry(fields, locations, schedCfg, leg) {
-  const estMins = estimateCrossingTime(
-    leg.nearWest, leg.nearEast, leg.direction, schedCfg.interpolation
-  );
+  const estMins = estimateCrossingTime(leg, schedCfg.interpolation);
   if (estMins === null) return null;
 
   return {
@@ -325,10 +322,10 @@ function buildLegEntry(fields, locations, schedCfg, leg) {
     nonRail: !!fields.nonRail,
     estimatedCrossingTime: minsToTimeStr(estMins),
     estimatedCrossingMins: estMins,
-    nearWestTiploc: leg.nearWest.tiploc,
-    nearWestTime: minsToTimeStr(leg.nearWest.time),
-    nearEastTiploc: leg.nearEast.tiploc,
-    nearEastTime: minsToTimeStr(leg.nearEast.time),
+    nearFromTiploc: leg.from.tiploc,
+    nearFromTime: minsToTimeStr(leg.from.time),
+    nearToTiploc: leg.to.tiploc,
+    nearToTime: minsToTimeStr(leg.to.time),
     origin: resolveTiploc(locations[0].tiploc_code),
     destination: resolveTiploc(locations[locations.length - 1].tiploc_code),
     source: 'schedule'

@@ -142,13 +142,14 @@ function extractTrain(svc, resolveDirection) {
     : { direction: 'unknown', source: 'unknown' };
   const direction = resolved.direction;
 
-  // Each direction reads its own three values, and the choice is physical: the crossing
-  // sits immediately west of the platform, so a westbound train pulls out of the platform
-  // straight onto it (departure) while an eastbound one crosses on its way in (arrival).
-  // An 'unknown' train reads the arrival first, as east does; it only reaches a prediction
-  // once its berth has placed it, and from then on the berth strike times it, not this.
+  // Each direction reads its own three values, and the choice is physical — the definition's
+  // directions.<dir>.boardTime, whichever board time is nearest the crossing. Portslade: the
+  // crossing sits immediately west of the platform, so a westbound train pulls out of the
+  // platform straight onto it (departure) while an eastbound one crosses on its way in
+  // (arrival). An 'unknown' train reads the arrival first; it only reaches a prediction once
+  // its berth has placed it, and from then on the berth strike times it, not this.
   let sch, est, act;
-  if (direction !== 'west') {
+  if (resolved.boardTime !== 'departure') {
     sch = sta || std; est = eta || etd; act = ata || atd;
   } else {
     sch = std || sta; est = etd || eta; act = atd || ata;
@@ -476,7 +477,7 @@ const estimateMemory = new Map();
  *
  * auth = { mode: 'rdm', apiKey: '...' }     — RDM REST API
  *    or { mode: 'soap', token: '...' }       — Direct SOAP endpoint
- * opts.timetableDirection = ({uid, headcode, at}) => 'east'|'west'|null — this crossing's
+ * opts.timetableDirection = ({uid, headcode, at}) => a direction slot or null — this crossing's
  *    timetable lookup (CrossingState.timetableDirection), step 1 of direction resolution.
  */
 async function pollCrossing(crossingId, config, auth, opts = {}) {

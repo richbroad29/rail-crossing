@@ -48,8 +48,17 @@ function checkTruthy(label, actual) {
   else { console.log(`  FAIL  ${label} (got: ${actual})`); fail++; }
 }
 
+// Every config here has Portslade's two direction slots, east and west, with east sorted by the
+// approach-stop class rule — the shape the engine had hard-coded before the slots were named by
+// the definition (2026-11-12). A config's own td.east settings are kept.
+const slotted = c => ({
+  directions: { east: {}, west: {} },
+  ...c,
+  td: { ...(c.td || {}), east: { classRule: 'approachStop', ...((c.td || {}).east || {}) } }
+});
+
 const WEST_LEAD_SECS = 112;
-const cfg = {
+const cfg = slotted({
   name: 'Test Crossing', road: 'Test Rd',
   timing: {
     closeBefore: { east: 1.5, west: 2.5 },
@@ -57,7 +66,7 @@ const cfg = {
     consecutiveWindow: 1.5,
     areaEntryLeadSecs: { east: 150, west: WEST_LEAD_SECS }
   }
-};
+});
 
 function lateFreight() {
   return {
@@ -117,11 +126,11 @@ const now = Date.now();
 // _mergeTrains). Applies to any CIF-only train; freight and non-stopping passenger are the
 // ones with no LDB copy to fall back on.
 {
-  const lagCfg = {
+  const lagCfg = slotted({
     ...cfg,
-    td: { eastbound: { clear: { from: '0004', to: '0002' } }, westbound: { clear: { from: '0005', to: '0007' } } },
+    td: { east: { clear: { from: '0004', to: '0002' } }, west: { clear: { from: '0005', to: '0007' } } },
     timing: { ...cfg.timing, openLagSecs: { east: { passenger: 40, freight: 70 }, west: { passenger: 18, freight: 30 } } }
-  };
+  });
   const mk = () => {
     const st = new CrossingState('test', lagCfg);
     st._scheduleTimeToDate = () => new Date(now - 60 * 60000);  // booked an hour ago
@@ -157,11 +166,11 @@ console.log('\nTD-triggered open — clear-step anchor\n');
 
 const BASE = 1700000000000; // fixed epoch ms for deterministic assertions
 
-const anchorCfg = {
+const anchorCfg = slotted({
   name: 'Anchor Test', road: 'Test Rd',
   td: {
-    eastbound: { clear: { from: '0004', to: '0002' } },
-    westbound: { clear: { from: '0005', to: '0007' } }
+    east: { clear: { from: '0004', to: '0002' } },
+    west: { clear: { from: '0005', to: '0007' } }
   },
   timing: {
     closeBefore: { east: 1.5, west: 2.5 },
@@ -173,7 +182,7 @@ const anchorCfg = {
       west: { passenger: 18, freight: 30 }
     }
   }
-};
+});
 
 // Minimal merged-train shape as _computeClosures consumes (bestTime a Date).
 function mkTrain(o) {
@@ -313,11 +322,11 @@ console.log('\nTD-triggered close + direction-aware hold + gated state\n');
 
 // closeTrigger + mergeOppositeMaxGapSecs + td.approach berths. No openLagSecs, so
 // _anchorEndToClearStep leaves the end at the raw predicted open (deterministic).
-const closeCfg = {
+const closeCfg = slotted({
   name: 'Close Test', road: 'Test Rd',
   td: {
-    eastbound: { approach: { from: '0006', to: '0004' }, clear: { from: '0004', to: '0002' } },
-    westbound: { approach: { from: '0003', to: '0005' }, clear: { from: '0005', to: '0007' } }
+    east: { approach: { from: '0006', to: '0004' }, clear: { from: '0004', to: '0002' } },
+    west: { approach: { from: '0003', to: '0005' }, clear: { from: '0005', to: '0007' } }
   },
   timing: {
     closeBefore: { east: 1.5, west: 2.5 },
@@ -342,10 +351,10 @@ const closeCfg = {
     },
     mergeOppositeMaxGapSecs: 20
   }
-};
+});
 // Directional grouping WITHOUT closeTrigger: close = bestTime − closeBefore (east 90s,
 // west 150s), open = bestTime + 30s — clean gap arithmetic for the merge tests.
-const mergeCfg = {
+const mergeCfg = slotted({
   name: 'Merge Test', road: 'Test Rd',
   timing: {
     closeBefore: { east: 1.5, west: 2.5 },
@@ -353,16 +362,16 @@ const mergeCfg = {
     consecutiveWindow: 1.5,
     mergeOppositeMaxGapSecs: 20
   }
-};
+});
 // Neither trigger present → legacy consecutiveWindow grouping, close = bestTime − closeBefore.
-const legacyCfg = {
+const legacyCfg = slotted({
   name: 'Legacy Test', road: 'Test Rd',
   timing: {
     closeBefore: { east: 1.5, west: 2.5 },
     openAfter: { east: 0.5, west: 0.5 },
     consecutiveWindow: 1.5
   }
-};
+});
 
 // Merged-train shape with a settable source (ldb ⇒ stopping) and scheduledTime.
 function mkT(o) {
@@ -644,10 +653,10 @@ console.log('  -- gated state (confirmed start / predicted countdown) --');
 // barrier had really lifted (2m03s of false barriers-down).
 console.log('  -- clear-step-aware merge key --');
 
-const mergeClearCfg = {
+const mergeClearCfg = slotted({
   ...closeCfg,
   timing: { ...closeCfg.timing, openLagSecs: { east: { passenger: 45, freight: 70 }, west: { passenger: 18, freight: 30 } } }
-};
+});
 
 {
   // BASE = the moment 1S27 cleared. Offsets are the real ones from the incident.
@@ -746,15 +755,15 @@ console.log('  -- CLOSING_SOON window --');
 // depending on whether the service calls there. Each class anchors to its own berth.
 console.log('  -- per-class eastbound anchors --');
 
-const classCfg = {
+const classCfg = slotted({
   name: 'Class Test', road: 'Test Rd',
   td: {
-    eastbound: {
+    east: {
       approach: { from: '0006', to: '0004' },
       clear: { from: '0004', to: '0002' },
       approachChain: ['0016', '0014', '0012', '0010', '0008', '0006', '0004']
     },
-    westbound: {
+    west: {
       approach: { from: '0003', to: '0005' },
       clear: { from: '0005', to: '0007' },
       approachChain: ['T682', 'T677', '0001', '0003', '0005']
@@ -788,12 +797,12 @@ const classCfg = {
     },
     mergeOppositeMaxGapSecs: 20
   }
-};
+});
 
 // class determination
 {
   const st = new CrossingState('t', classCfg);
-  const cls = (o) => st._eastClass({ ...mkT({ dir: 'east', ...o }), callsAtApproach: o.callsAtApproach });
+  const cls = (o) => st._approachStopClass({ ...mkT({ dir: 'east', ...o }), callsAtApproach: o.callsAtApproach });
   check('freight → freight class', cls({ headcode: '6O68', type: 'freight' }), 'freight');
   check('5xxx ECS → ecs class', cls({ headcode: '5T91', type: 'ecs' }), 'ecs');
   check('LDB stopper NOT calling Southwick → stopping (class A)',
@@ -803,7 +812,7 @@ const classCfg = {
   check('unknown Southwick answer → stoppingLocal (the calibrated rule)',
     cls({ headcode: '1N99', bestTimeMs: BASE, callsAtApproach: null }), 'stoppingLocal');
   const cifPass = { ...mkT({ dir: 'east', headcode: '1Z01', bestTimeMs: BASE, source: 'cif' }), callsAtStation: false };
-  check('non-caller passenger → fast', st._eastClass(cifPass), 'fast');
+  check('non-caller passenger → fast', st._approachStopClass(cifPass), 'fast');
 }
 
 // Southwick answer resolved from the CIF schedule by UID, for an LDB-sourced train
@@ -811,7 +820,7 @@ const classCfg = {
   const st = new CrossingState('t', classCfg);
   st.scheduleTrains = [{ uid: 'W12345', headcode: '1H67', callsAtApproach: false, callsAtStation: true }];
   const t = { ...mkT({ dir: 'east', headcode: '1H67', bestTimeMs: BASE }), uid: 'W12345' };
-  check('LDB train inherits the Southwick answer from CIF by UID', st._eastClass(t), 'stopping');
+  check('LDB train inherits the Southwick answer from CIF by UID', st._approachStopClass(t), 'stopping');
 }
 
 // each class anchors to its own berth + offset
@@ -2158,7 +2167,7 @@ console.log('  -- step 0: closePendingReason / closePendingSince --');
     const st = new CrossingState('portslade', SHIPPED);
     const now = new Date(T + dwellSecs * 1000);
     // `freight` is for the overlap case below, and only for it. Since 2026-10-25 east
-    // stoppingLocal is in td.eastbound.queueExemptClasses — the backtest measures no
+    // stoppingLocal is in td.east.queueExemptClasses — the backtest measures no
     // queueing penalty on it — so it can no longer raise 'queued' and could not carry two
     // rules at once. East freight anchors at 0006 like stoppingLocal does, so a train
     // standing in 0008 still has an expired projection ('unstruck'), and it is not exempt,
@@ -2172,7 +2181,7 @@ console.log('  -- step 0: closePendingReason / closePendingSince --');
     st.recordTdBerth({ headcode: hc, to: '0008', from: '0010', ts: iso(T), event: 'CA' });
     st.recordTdSighting(hc, new Date(T));
     // A leader two berths ahead (in 0004, the follower being in 0008) — close enough to queue
-    // it under the shipped td.eastbound.queueMaxAhead of 2. This used to stand the leader on
+    // it under the shipped td.east.queueMaxAhead of 2. This used to stand the leader on
     // the crossing berth, 0002, which is THREE ahead of 0008 and so, since 2026-10, correctly
     // not a queue at all: the backtest measured a +5s delay at that distance. The test is about
     // two rules holding one train at once, not about distance, so the leader moved in.
@@ -2525,7 +2534,7 @@ console.log('  -- 2026-10 queueMaxAhead: a train ahead only queues this one with
 {
   const SHIPPED = require('../src/crossing-definitions').loadCrossings().portslade;
   const variant = (n) => { const c = JSON.parse(JSON.stringify(SHIPPED));
-    for (const d of ['eastbound', 'westbound']) { if (n === undefined) delete c.td[d].queueMaxAhead; else c.td[d].queueMaxAhead = n; }
+    for (const d of ['east', 'west']) { if (n === undefined) delete c.td[d].queueMaxAhead; else c.td[d].queueMaxAhead = n; }
     return c; };
   const UNLIMITED = variant(undefined), ONE = variant(1);
   const T = BASE;
@@ -2622,7 +2631,7 @@ console.log('  -- 2026-10 queueExemptClasses: a class a queue does not delay is 
 {
   const SHIPPED = require('../src/crossing-definitions').loadCrossings().portslade;
   const noExempt = () => { const c = JSON.parse(JSON.stringify(SHIPPED));
-    for (const d of ['eastbound', 'westbound']) delete c.td[d].queueExemptClasses;
+    for (const d of ['east', 'west']) delete c.td[d].queueExemptClasses;
     return c; };
   const T = BASE;
   // Both follow a leader two berths ahead — inside the shipped queueMaxAhead of 2, so distance
@@ -2685,7 +2694,7 @@ console.log('  -- 2026-10 queueExemptClasses: a class a queue does not delay is 
       queuedHold(st._closeTimeInfo(LOCAL, now)));
   }
 
-  // Westbound has no stoppingLocal at all (_eastClass is east-only), so the empty list there
+  // Westbound has no stoppingLocal at all (only east uses classRule approachStop), so the empty list there
   // is correct rather than an omission — assert the class genuinely cannot arise.
   {
     const W = { ...mkT({ dir: 'west', headcode: '1W01', bestTimeMs: T + 200000 }),
@@ -2873,9 +2882,9 @@ console.log('  -- 2026-10-26 step 2: a queued train counts down from its own (qu
   // section 7: west queued countdowns would be 22.5% early against 5.9% for west clear trains.
   {
     const sw = (east, west) => { const c = JSON.parse(JSON.stringify(SHIPPED));
-      c.td.eastbound.queuedEstimate = east; c.td.westbound.queuedEstimate = west; return c; };
+      c.td.east.queuedEstimate = east; c.td.west.queuedEstimate = west; return c; };
     check('premise: shipped east on, west off',
-      `${SHIPPED.td.eastbound.queuedEstimate}/${SHIPPED.td.westbound.queuedEstimate}`, 'true/undefined');
+      `${SHIPPED.td.east.queuedEstimate}/${SHIPPED.td.west.queuedEstimate}`, 'true/undefined');
     check('east switched off: identical to no cells',
       sig(world(withQ(sw(false, undefined)), ONE_AHEAD)._closeTimeInfo(F, now)),
       sig(world(holdOnly(SHIPPED), ONE_AHEAD)._closeTimeInfo(F, now)));

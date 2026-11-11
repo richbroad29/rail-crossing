@@ -34,8 +34,8 @@ const zlib = require('zlib');
 function clearPairs() {
   const td = require('../src/crossing-definitions').loadCrossings().portslade.td;
   return [
-    { direction: 'east', from: td.eastbound.clear.from, to: td.eastbound.clear.to },
-    { direction: 'west', from: td.westbound.clear.from, to: td.westbound.clear.to },
+    { direction: 'east', from: td.east.clear.from, to: td.east.clear.to },
+    { direction: 'west', from: td.west.clear.from, to: td.west.clear.to },
   ];
 }
 

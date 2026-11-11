@@ -32,7 +32,8 @@ function checkTruthy(label, actual) {
 
 const cfg = {
   name: 'Test Crossing', road: 'Test Rd',
-  td: { area: 'LA' },
+  directions: { east: {}, west: {} },
+  td: { area: 'LA', east: { classRule: 'approachStop' } },
   live: { ttlSecs: 240 },
   timing: { closeBefore: { east: 1.5, west: 2.5 }, openAfter: { east: 0.5, west: 0.5 }, consecutiveWindow: 1.5 }
 };

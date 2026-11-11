@@ -484,7 +484,7 @@ const out = cells => console.log('  ' + cells.map(([v, w]) => (w < 0 ? String(v)
   {
     const cfgAll = require('../src/crossing-definitions').loadCrossings(CONFIG).portslade;
     const ctAll = cfgAll.timing.closeTrigger, tdAll = cfgAll.td || {}, lagAll = cfgAll.timing.openLagSecs || {};
-    const dkey = d => (d === 'east' ? 'eastbound' : 'westbound');
+    const dkey = d => d;   // td is keyed by the direction slot itself (was eastbound/westbound)
     const QN = {}, EXEMPT = {}, LAG = {};
     for (const d of ['east', 'west']) {
       const v = (tdAll[dkey(d)] || {}).queueMaxAhead;

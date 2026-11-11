@@ -20,9 +20,9 @@ const cfg = {
     schedule: {
       tiploc_station: 'PSLDAWH',
       tiploc_approach_call: 'STHWICK',
-      tiplocs_west: ['SHRHMBS'], tiplocs_east: ['HOVE'],
-      interpolation: { eastbound: { from: 'SHRHMBS', to: 'HOVE', fraction: 0.7 },
-                       westbound: { from: 'HOVE', to: 'SHRHMBS', fraction: 0.3 } }
+      tiplocsBefore: { east: ['SHRHMBS'], west: ['HOVE'] },
+      interpolation: { east: { from: 'SHRHMBS', to: 'HOVE', fraction: 0.7 },
+                       west: { from: 'HOVE', to: 'SHRHMBS', fraction: 0.3 } }
     },
     timing: {}
   }

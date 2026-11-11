@@ -52,7 +52,7 @@ function anchorsFor(dirKey) {
     { b: d.clear.to, role: 'clear' }
   ];
 }
-const ANCHORS = { east: anchorsFor('eastbound'), west: anchorsFor('westbound') };
+const ANCHORS = { east: anchorsFor('east'), west: anchorsFor('west') };
 const ROLE = { east: {}, west: {} };
 ['east', 'west'].forEach(d => ANCHORS[d].forEach(a => { ROLE[d][a.b] = a.role; }));
 

@@ -35,11 +35,10 @@ function londonParts(d) {
 
 // Minimal Portslade-shaped crossing config (real TIPLOCs both sides).
 const cfg = {
-  tiplocs_west: ['SHRHMBS'],
-  tiplocs_east: ['HOVE'],
+  tiplocsBefore: { east: ['SHRHMBS'], west: ['HOVE'] },
   interpolation: {
-    eastbound: { from: 'SHRHMBS', to: 'HOVE', fraction: 0.7 },
-    westbound: { from: 'HOVE', to: 'SHRHMBS', fraction: 0.3 }
+    east: { from: 'SHRHMBS', to: 'HOVE', fraction: 0.7 },
+    west: { from: 'HOVE', to: 'SHRHMBS', fraction: 0.3 }
   }
 };
 
@@ -55,7 +54,7 @@ console.log(`\nFix 2 — midnight crossing  (TZ env: ${process.env.TZ || '(not s
   check('midnight service traverses', route.traverses, true);
   check('direction is east', route.direction, 'east');
 
-  const estMins = estimateCrossingTime(route.nearWest, route.nearEast, route.direction, cfg.interpolation);
+  const estMins = estimateCrossingTime(route, cfg.interpolation);
   // SHRHMBS=1435, HOVE unwrapped=1450, est = 1435 + 0.7*15 = 1445.5 → after midnight.
   check('estimatedCrossingMins rolled past 1440', estMins > 1440, true);
 
@@ -95,7 +94,7 @@ console.log(`\nFix 2 — midnight crossing  (TZ env: ${process.env.TZ || '(not s
   ];
   const route = analyseRoute(locations, cfg);
   check('daytime service traverses east', route.traverses && route.direction === 'east', true);
-  const estMins = estimateCrossingTime(route.nearWest, route.nearEast, route.direction, cfg.interpolation);
+  const estMins = estimateCrossingTime(route, cfg.interpolation);
   check('daytime estimate stays under 1440', estMins < 1440, true);
 }
 
@@ -107,7 +106,7 @@ console.log(`\nFix 2 — midnight crossing  (TZ env: ${process.env.TZ || '(not s
   ];
   const route = analyseRoute(locations, cfg);
   check('westbound midnight service traverses west', route.traverses && route.direction === 'west', true);
-  const estMins = estimateCrossingTime(route.nearWest, route.nearEast, route.direction, cfg.interpolation);
+  const estMins = estimateCrossingTime(route, cfg.interpolation);
   check('westbound estimate is monotonic (>= west timing point)', estMins >= 1435, true);
 }
 

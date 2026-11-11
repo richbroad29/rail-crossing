@@ -155,6 +155,11 @@ class CrossingState {
     this.id = crossingId;
     this.config = config;
     this.timing = config.timing;
+    // The crossing's two direction slots, in definition order. The code never names a slot
+    // itself: each crossing names its own in `directions` (Portslade: east, west — the order
+    // every loop below runs in), and every per-direction block in the definition is keyed by
+    // those names. crossing-definitions.js refuses a definition without exactly two.
+    this.slots = Object.keys(config.directions || {});
     // Measured berth→berth transits for this crossing. config.transits wins so a test (or
     // a second crossing) can supply its own; otherwise the generated file. Empty ⇒ no
     // projection, and every path falls back to the bestTime estimates.
@@ -409,14 +414,19 @@ class CrossingState {
     this._markDirty();
   }
 
+  // A direction's TD settings (td.<slot>), or undefined for a direction that is not one of
+  // this crossing's slots — 'unknown', or absent.
+  _tdFor(direction) {
+    const td = this.config && this.config.td;
+    return td && this.slots.includes(direction) ? td[direction] : undefined;
+  }
+
   // Which direction's crossing clear step (from→to) is, or null if it isn't one.
   _matchClearStep(from, to) {
-    const td = this.config && this.config.td;
-    if (!td) return null;
-    const e = td.eastbound && td.eastbound.clear;
-    if (e && e.from === from && e.to === to) return 'east';
-    const w = td.westbound && td.westbound.clear;
-    if (w && w.from === from && w.to === to) return 'west';
+    for (const dir of this.slots) {
+      const c = this._tdFor(dir) && this._tdFor(dir).clear;
+      if (c && c.from === from && c.to === to) return dir;
+    }
     return null;
   }
 
@@ -509,8 +519,8 @@ class CrossingState {
   _matchCloseStrikeBerth(to) {
     const td = this.config && this.config.td;
     if (!td) return null;
-    for (const dir of ['east', 'west']) {
-      const cfg = td[dir === 'east' ? 'eastbound' : 'westbound'];
+    for (const dir of this.slots) {
+      const cfg = td[dir];
       if (!cfg) continue;
       if (Array.isArray(cfg.approachChain)) {
         if (cfg.approachChain.includes(to)) return dir;
@@ -527,7 +537,7 @@ class CrossingState {
     const ct = this.timing && this.timing.closeTrigger && this.timing.closeTrigger[direction];
     if (!ct) return true;
     if (ct.classes) return Object.values(ct.classes).some(c => c && c.berth === berth);
-    const cfg = this.config.td[direction === 'east' ? 'eastbound' : 'westbound'];
+    const cfg = this._tdFor(direction);
     return !!(cfg && cfg.approach && cfg.approach.from === berth);
   }
 
@@ -688,7 +698,7 @@ class CrossingState {
     const nearest = (cands, windowMs) => {
       let best = null, bestD = Infinity;
       for (const s of cands) {
-        if (s.direction !== 'east' && s.direction !== 'west') continue;
+        if (!this.slots.includes(s.direction)) continue;
         const est = this._scheduleTimeToDate(s.estimatedCrossingMins);
         const d = est && Number.isFinite(atMs) ? Math.abs(est.getTime() - atMs) : (cands.length === 1 ? 0 : Infinity);
         if (d < bestD) { bestD = d; best = s; }
@@ -699,7 +709,7 @@ class CrossingState {
       const byUid = this.scheduleTrains.filter(s => s.uid && s.uid === q.uid);
       if (byUid.length) {
         const dirs = new Set(byUid.map(s => s.direction));
-        if (dirs.size === 1) { const [d] = dirs; if (d === 'east' || d === 'west') return d; }
+        if (dirs.size === 1) { const [d] = dirs; if (this.slots.includes(d)) return d; }
         const d = nearest(byUid, Infinity);
         if (d) return d;
       }
@@ -717,8 +727,8 @@ class CrossingState {
     const td = this.config && this.config.td;
     if (!td || !berth) return null;
     const hits = [];
-    for (const [dir, key] of [['east', 'eastbound'], ['west', 'westbound']]) {
-      const c = td[key] || {};
+    for (const dir of this.slots) {
+      const c = td[dir] || {};
       const set = new Set([...(c.approachChain || []), c.clear && c.clear.from, c.clear && c.clear.to].filter(Boolean));
       if (set.has(berth)) hits.push(dir);
     }
@@ -760,7 +770,7 @@ class CrossingState {
       // other direction's berths, so its real strikes are never matched. None of 34,399
       // Portslade board trains over 179 days reached this branch (2026-11-06).
       let direction = t.direction;
-      if (direction !== 'east' && direction !== 'west') {
+      if (!this.slots.includes(direction)) {
         const live = t.headcode ? this.liveTrains.get(t.headcode) : null;
         direction = live ? this._directionFromBerth(live.berth) : null;
         if (!direction) {
@@ -1024,9 +1034,10 @@ class CrossingState {
     return null;
   }
 
-  // Which eastbound timing class a train belongs to. The classes exist because approach
-  // berth 0006 contains Southwick: a service calling there occupies 0006 ~3x longer,
-  // so the same strike means a very different time-to-crossing. See closeTrigger._comment.
+  // Class rule 'approachStop' (td.<dir>.classRule), for a direction whose approach berth
+  // contains a station. Portslade eastbound: approach berth 0006 contains Southwick, so a
+  // service calling there occupies 0006 ~3x longer, and the same strike means a very
+  // different time-to-crossing. See closeTrigger._comment.
   //   freight       6xxx/7xxx — ~100s slower than fast passenger at every berth
   //   ecs           5xxx
   //   stoppingLocal calls Portslade AND Southwick   (1N/1S/2Y Brighton services)
@@ -1034,7 +1045,7 @@ class CrossingState {
   //   fast          calls neither
   // An unknown Southwick answer falls to 'stoppingLocal', whose 0006 anchor is the
   // one number with field calibration behind it.
-  _eastClass(t) {
+  _approachStopClass(t) {
     if (t.trainType === 'freight') return 'freight';
     if (t.trainType === 'ecs') return 'ecs';
     if (!this._isStopping(t)) return 'fast';
@@ -1042,11 +1053,15 @@ class CrossingState {
   }
 
   // The train's class, for BOTH directions — the single definition of the discriminator the
-  // prediction actually uses. Eastbound splits four ways because Southwick sits inside the
-  // approach berth (see _eastClass); westbound has no equivalent, so it splits on whether the
-  // train calls at the crossing station.
+  // prediction actually uses. Which rule a direction uses is its td.<dir>.classRule:
+  //   'approachStop' — five classes, splitting stopping trains on whether they also call at
+  //                    the station inside the approach berth (_approachStopClass). Portslade
+  //                    east, because Southwick sits inside 0006.
+  //   'stopping'     — four classes, asking first whether the train calls at the crossing
+  //                    station (so a stopping freight is 'stopping'). Portslade west, and the
+  //                    default when classRule is absent.
   //
-  // This used to be inlined in _transit while _closeAnchor called _eastClass directly — two
+  // This used to be inlined in _transit while _closeAnchor called the east rule directly — two
   // copies that could drift, and nothing outside could ask "which class did you use?". It is
   // now also surfaced on the B1 live feed so a barrier observation is recorded against the
   // class the predictor picked, rather than one re-derived afterwards by an analyst.
@@ -1057,7 +1072,8 @@ class CrossingState {
   // put four of the five map markers in the wrong place.
   _classOf(t) {
     if (t.forceClass) return t.forceClass;
-    if (t.direction === 'east') return this._eastClass(t);
+    const rule = (this._tdFor(t.direction) || {}).classRule;
+    if (rule === 'approachStop') return this._approachStopClass(t);
     if (this._isStopping(t)) return 'stopping';
     return t.trainType === 'freight' ? 'freight' : t.trainType === 'ecs' ? 'ecs' : 'fast';
   }
@@ -1065,8 +1081,7 @@ class CrossingState {
   // The single approach berth for a direction (td.<dir>.approach.from). Used by the
   // westbound rule and by legacy flat east configs; strikes are always keyed by berth.
   _approachBerth(direction) {
-    const cfg = this.config && this.config.td &&
-      this.config.td[direction === 'east' ? 'eastbound' : 'westbound'];
+    const cfg = this._tdFor(direction);
     return cfg && cfg.approach ? cfg.approach.from : undefined;
   }
 
@@ -1145,7 +1160,7 @@ class CrossingState {
     if (this._queueExemptClass(t)) return null;
     const spec = this._closeAnchor(t);
     if (!spec || typeof spec.offsetSecs !== 'number') return null;
-    const cfg = this.config.td && this.config.td[t.direction === 'east' ? 'eastbound' : 'westbound'];
+    const cfg = this._tdFor(t.direction);
     // Opt-in per direction (td.<dir>.queuedEstimate). The trade is not the same both ways:
     // backtest section 7 has east queued countdowns as often early as east clear ones, but
     // west ones four times as often as west clear ones, for a 12% cut. See the config comment.
@@ -1200,7 +1215,7 @@ class CrossingState {
   _closeAnchor(t) {
     const ct = this.timing && this.timing.closeTrigger && this.timing.closeTrigger[t.direction];
     if (!ct || !ct.classes) return null;
-    // _classOf, not `east ? _eastClass : null`. A no-op today — west has no `classes` block,
+    // _classOf, not `east ? <east rule> : null`. A no-op today — west has no `classes` block,
     // so the guard above returns first and the old expression's `null` was never reached. But
     // it means adding west per-class anchors (register #12) works instead of being silently
     // ignored, which the hard-coded null would have caused.
@@ -1269,7 +1284,7 @@ class CrossingState {
     if (!ct) return cbFallback();
 
     const stopping = this._isStopping(t);
-    const dirCfg = this.config.td && this.config.td[t.direction === 'east' ? 'eastbound' : 'westbound'];
+    const dirCfg = this._tdFor(t.direction);
 
     // Apply a class offset to its anchor. Three cases, and the third is register #14:
     //   real strike       -> strike + offset. Known to the second, monotone, not held.
@@ -1477,8 +1492,7 @@ class CrossingState {
   // the gate passes the strike TTL — the same window over which it would trust a strike
   // record, since trusting the absence of one is the same fact.
   _chainIndex(t, maxAgeMs, now) {
-    const cfg = this.config && this.config.td &&
-      this.config.td[t.direction === 'east' ? 'eastbound' : 'westbound'];
+    const cfg = this._tdFor(t.direction);
     const chain = cfg && cfg.approachChain;
     if (!Array.isArray(chain) || !t.headcode) return null;
     const live = this.liveTrains.get(t.headcode);
@@ -1513,7 +1527,7 @@ class CrossingState {
     const anchor = this._closeAnchor(t);
     const berth = anchor ? anchor.berth : this._approachBerth(t.direction);
     if (!berth) return false;
-    const cfg = this.config.td[t.direction === 'east' ? 'eastbound' : 'westbound'];
+    const cfg = this._tdFor(t.direction);
     const chain = cfg && cfg.approachChain;
     if (!Array.isArray(chain)) return false;
     const anchorIdx = chain.indexOf(berth);
@@ -1594,7 +1608,7 @@ class CrossingState {
   // chain strikes in closeStrikeSeen. Null when it cannot be placed ahead (no strike recorded
   // by then, or recorded at or behind fromBerth) — callers treat null as "no evidence".
   _stepsAheadAt(direction, fromBerth, headcode, atMs) {
-    const cfg = this.config.td && this.config.td[direction === 'east' ? 'eastbound' : 'westbound'];
+    const cfg = this._tdFor(direction);
     const chain = cfg && cfg.approachChain;
     if (!Array.isArray(chain)) return null;
     const fromIdx = chain.indexOf(fromBerth);
@@ -1612,7 +1626,7 @@ class CrossingState {
   // 0 means what it says (no train ahead ever queues this one); it must not fall through to
   // unlimited, which is the opposite.
   _queueMaxAhead(direction) {
-    const cfg = this.config.td && this.config.td[direction === 'east' ? 'eastbound' : 'westbound'];
+    const cfg = this._tdFor(direction);
     const v = cfg && cfg.queueMaxAhead;
     return (typeof v === 'number' && v >= 0) ? v : Infinity;
   }
@@ -1623,7 +1637,7 @@ class CrossingState {
   // a class whose measured delay is zero has no queued behaviour to describe — holding it
   // is asserting a delay the calibration says is not there. Absent/empty ⇒ no exemption.
   _queueExemptClass(t) {
-    const cfg = this.config.td && this.config.td[t.direction === 'east' ? 'eastbound' : 'westbound'];
+    const cfg = this._tdFor(t.direction);
     const list = cfg && cfg.queueExemptClasses;
     return Array.isArray(list) && list.indexOf(this._classOf(t)) >= 0;
   }
@@ -1654,7 +1668,7 @@ class CrossingState {
   // result now also carries `steps`, the distance to the nearest train ahead.
   _blockedByAhead(t, now, maxAhead = Infinity) {
     if (!t || !t.headcode || !t.direction) return null;
-    const cfg = this.config.td && this.config.td[t.direction === 'east' ? 'eastbound' : 'westbound'];
+    const cfg = this._tdFor(t.direction);
     const chain = cfg && cfg.approachChain;
     if (!Array.isArray(chain)) return null;
     const hereIdx = this._chainIndex(t, CLOSE_STRIKE_TTL_MS, now);
@@ -1711,7 +1725,7 @@ class CrossingState {
     //
     // Hold, never drop: the prediction is untouched, so the countdown and CLOSING_SOON
     // still run. What is deferred is only the assertion that the barrier is already down.
-    const dirCfg = this.config.td && this.config.td[t.direction === 'east' ? 'eastbound' : 'westbound'];
+    const dirCfg = this._tdFor(t.direction);
     const protecting = dirCfg && dirCfg.clear && dirCfg.clear.from;
     // UNLIMITED on purpose (no queueMaxAhead): the 2026-10 distance limit narrows what the
     // countdown calls queued, not when the app may assert BARRIERS DOWN.
@@ -2535,8 +2549,8 @@ class CrossingState {
     const ct = (this.timing && this.timing.closeTrigger) || {};
     const out = { crossingId: this.id, close: [], open: [], chain: {}, clear: {} };
 
-    for (const direction of ['east', 'west']) {
-      const dirCfg = td[direction === 'east' ? 'eastbound' : 'westbound'];
+    for (const direction of this.slots) {
+      const dirCfg = td[direction];
       if (!dirCfg) continue;
       const chain = Array.isArray(dirCfg.approachChain) ? dirCfg.approachChain : [];
       out.chain[direction] = chain.concat(['XING']);
@@ -2588,7 +2602,7 @@ class CrossingState {
   // Walk `offsetSecs` of measured travel downstream from `berth`, and report where it runs
   // out as a fraction of the leg it lands in. Returns null when the legs aren't measured.
   _placeOnChain(direction, cls, berth, offsetSecs) {
-    const chain = (this.config.td[direction === 'east' ? 'eastbound' : 'westbound'] || {}).approachChain;
+    const chain = (this._tdFor(direction) || {}).approachChain;
     if (!Array.isArray(chain)) return null;
     const nodes = chain.concat(['XING']);
     let i = nodes.indexOf(berth);

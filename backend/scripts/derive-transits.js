@@ -102,7 +102,7 @@ const CONFIG = argOf('--config', require('../src/crossing-definitions').DEFAULT_
   const cfgTd = (require('../src/crossing-definitions').loadCrossings(CONFIG).portslade || {}).td || {};
   const maxAhead = {};
   for (const d of ['east', 'west']) {
-    const v = (cfgTd[d === 'east' ? 'eastbound' : 'westbound'] || {}).queueMaxAhead;
+    const v = (cfgTd[d] || {}).queueMaxAhead;
     maxAhead[d] = (typeof v === 'number' && v >= 0) ? v : 2;
   }
   markAhead(allRuns);

@@ -113,9 +113,9 @@ const portsladeCfg = crossingsConfig.portslade.schedule;
     check('  ...first leg east', route.legs[0].direction, 'east');
     check('  ...second leg west', route.legs[1].direction, 'west');
     check('  ...east leg brackets SHRHMBS->HOVE',
-      `${route.legs[0].nearWest.tiploc}>${route.legs[0].nearEast.tiploc}`, 'SHRHMBS>HOVE');
-    check('  ...west leg brackets HOVE->SHRHMBS (nearEast is the HOVE it left)',
-      `${route.legs[1].nearEast.tiploc}>${route.legs[1].nearWest.tiploc}`, 'HOVE>SHRHMBS');
+      `${route.legs[0].from.tiploc}>${route.legs[0].to.tiploc}`, 'SHRHMBS>HOVE');
+    check('  ...west leg brackets HOVE->SHRHMBS (from is the HOVE it left)',
+      `${route.legs[1].from.tiploc}>${route.legs[1].to.tiploc}`, 'HOVE>SHRHMBS');
   }
 
   {
@@ -212,6 +212,8 @@ const portsladeCfg = crossingsConfig.portslade.schedule;
   const BASE_MS = Date.now();
   const stateCfg = {
     name: 'T', road: 'R',
+    directions: { east: {}, west: {} },
+    td: { east: { classRule: 'approachStop' } },
     live: { ttlSecs: 240 },
     transits: { west: { freight: { '0003>XING': { secs: 60, sdSecs: 10 } } } },
     timing: {
@@ -320,8 +322,8 @@ const portsladeCfg = crossingsConfig.portslade.schedule;
     const clearCfg = {
       ...stateCfg,
       td: {
-        eastbound: { clear: { from: '0004', to: '0002' } },
-        westbound: { clear: { from: '0005', to: '0007' } }
+        east: { clear: { from: '0004', to: '0002' } },
+        west: { clear: { from: '0005', to: '0007' } }
       },
       timing: {
         ...stateCfg.timing,

@@ -29,12 +29,18 @@
 //     are diverted Brighton -> London Victoria trains, which step 1 gets right);
 //   - none of the 34,399 came out unknown.
 //
-// Direction KEYS stay 'east'/'west' (the internal slots every config table is keyed on);
-// what each slot means is per crossing — `directions.<dir>.line` records the official
-// Up/Down designation, which is what holds on a line that does not run east-west.
+// Direction KEYS are the crossing's two slots, named by its own definition (`directions`:
+// Portslade east/west); nothing here names a slot. What each slot means is per crossing —
+// `directions.<dir>.line` records the official Up/Down designation.
 
-const DIRS = ['east', 'west'];
-const OPPOSITE = { east: 'west', west: 'east' };
+// The two slot names, in definition order.
+function slotsOf(directions) { return Object.keys(directions || {}); }
+
+// The other slot. Derived, never configured: a crossing has exactly two.
+function oppositeOf(directions, dir) {
+  const s = slotsOf(directions);
+  return s.length === 2 && s.includes(dir) ? s[1 - s.indexOf(dir)] : null;
+}
 
 function norm(s) { return typeof s === 'string' ? s.trim().toLowerCase().replace(/\s+/g, ' ') : ''; }
 
@@ -47,25 +53,25 @@ function matchesPlace(name, place) {
   return !!p && (n === p || n.startsWith(p + ' '));
 }
 
-// Which direction's list a place name is on: 'east' | 'west' | null. A name matching BOTH
+// Which direction's list a place name is on: a slot name, or null. A name matching BOTH
 // lists is a config error, reported as null rather than guessed — validateDirections refuses
 // such a config at startup anyway.
 function placeSide(name, directions) {
   const n = norm(name);
   if (!n || !directions) return null;
-  const hits = DIRS.filter(d => {
+  const hits = slotsOf(directions).filter(d => {
     const list = directions[d] && directions[d].placesBeyond;
     return Array.isArray(list) && list.some(p => matchesPlace(n, p));
   });
   return hits.length === 1 ? hits[0] : null;
 }
 
-// Step 2: destination first, then origin. Returns 'east' | 'west' | null.
+// Step 2: destination first, then origin. Returns a slot name or null.
 function directionFromPlaces(directions, origin, dest) {
   const d = placeSide(dest, directions);
   if (d) return d;
   const o = placeSide(origin, directions);
-  if (o) return OPPOSITE[o];
+  if (o) return oppositeOf(directions, o);
   return null;
 }
 
@@ -73,29 +79,35 @@ function directionFromPlaces(directions, origin, dest) {
 function validateDirections(directions) {
   const problems = [];
   if (!directions) return problems;     // absent: places step simply never answers
-  for (const d of DIRS) {
+  const slots = slotsOf(directions);
+  for (const d of slots) {
     const list = directions[d] && directions[d].placesBeyond;
     if (list !== undefined && !Array.isArray(list)) problems.push(`directions.${d}.placesBeyond must be a list`);
   }
-  const e = (directions.east && directions.east.placesBeyond) || [];
-  const w = (directions.west && directions.west.placesBeyond) || [];
-  for (const a of e) for (const b of w) {
-    if (matchesPlace(a, b) || matchesPlace(b, a)) problems.push(`"${a}" (east) and "${b}" (west) overlap — a place would match both`);
+  if (slots.length !== 2) return problems;       // crossing-definitions.js reports the count
+  const [x, y] = slots;
+  const a = (directions[x] && directions[x].placesBeyond) || [];
+  const b = (directions[y] && directions[y].placesBeyond) || [];
+  for (const p of a) for (const q of b) {
+    if (matchesPlace(p, q) || matchesPlace(q, p)) problems.push(`"${p}" (${x}) and "${q}" (${y}) overlap — a place would match both`);
   }
   return problems;
 }
 
 // The full resolver for one crossing. `timetableDirection` is ({uid, headcode, at}) =>
-// 'east'|'west'|null, or absent. Returns { direction, source } with source one of
-// 'timetable' | 'places' | 'unknown'.
+// a slot name or null, or absent. Returns { direction, source, boardTime } with source one of
+// 'timetable' | 'places' | 'unknown', and boardTime that slot's `directions.<dir>.boardTime`
+// (which board time is nearest the crossing: 'arrival' | 'departure'), absent when unknown.
 function makeDirectionResolver(directions, timetableDirection) {
+  const found = (direction, source) =>
+    ({ direction, source, boardTime: directions[direction] && directions[direction].boardTime });
   return q => {
     const tt = timetableDirection ? timetableDirection(q) : null;
-    if (tt === 'east' || tt === 'west') return { direction: tt, source: 'timetable' };
+    if (slotsOf(directions).includes(tt)) return found(tt, 'timetable');
     const pl = directionFromPlaces(directions, q.origin, q.dest);
-    if (pl) return { direction: pl, source: 'places' };
+    if (pl) return found(pl, 'places');
     return { direction: 'unknown', source: 'unknown' };
   };
 }
 
-module.exports = { matchesPlace, placeSide, directionFromPlaces, validateDirections, makeDirectionResolver };
+module.exports = { slotsOf, oppositeOf, matchesPlace, placeSide, directionFromPlaces, validateDirections, makeDirectionResolver };

@@ -15,6 +15,15 @@
 //   Prints one JSON summary line, then up to 5 example differences. ticksDiffering 0 = identical.
 //   Always run a control (a deliberate change that SHOULD differ) before trusting a zero.
 //
+//   Optional, by environment:
+//   DEF_B=<file>     engine B reads this definition instead (a definition-shape change: A the old
+//                    file, B the new one).
+//   RENAME_B=<json>  e.g. '{"east":"up","west":"down"}': engine B runs with its definition's
+//                    direction slots — and its transit table's direction keys — renamed, every
+//                    input direction is renamed on the way in, and every output is renamed back
+//                    before comparing. The proof that the engine does not care what a crossing
+//                    calls its directions.
+//
 // First used 2026-11-06 for the merged close algorithm: 4 days, 2.78M per-train predictions, 0 diffs.
 //
 // Feeds both CrossingState instances the day's real TD berth steps (as recordTdEvent), the
@@ -45,6 +54,22 @@ function engine(root) {
 }
 const A = engine(rootA), B = engine(rootB);
 const def = JSON.parse(fs.readFileSync(defFile, 'utf8'));
+const RENAME = process.env.RENAME_B ? JSON.parse(process.env.RENAME_B) : null;
+const BACK = RENAME ? Object.fromEntries(Object.entries(RENAME).map(([k, v]) => [v, k])) : null;
+// Rename every object key and every string value that is exactly a slot name, at any depth.
+const renamed = (o, map) => {
+  if (!map) return o;
+  if (Array.isArray(o)) return o.map(x => renamed(x, map));
+  if (o && typeof o === 'object') return Object.fromEntries(Object.entries(o).map(([k, v]) => [map[k] || k, renamed(v, map)]));
+  return typeof o === 'string' && map[o] ? map[o] : o;
+};
+let defB = process.env.DEF_B ? JSON.parse(fs.readFileSync(process.env.DEF_B, 'utf8')) : def;
+if (RENAME) {
+  const transitsB = JSON.parse(fs.readFileSync(path.join(rootB, 'backend/data/transits.json'), 'utf8')).portslade;
+  defB = { ...renamed(defB, RENAME), transits: renamed(transitsB, RENAME) };
+}
+const toB = o => renamed(JSON.parse(JSON.stringify(o)), RENAME);
+const fromB = o => renamed(JSON.parse(JSON.stringify(o)), BACK);     // via JSON: Dates become strings first
 const silence = fn => { const w = console.warn, l = console.log; console.warn = console.log = () => {}; try { return fn(); } finally { console.warn = w; console.log = l; } };
 
 // ---- inputs ----
@@ -86,8 +111,8 @@ const start = Math.max(RealDate.parse(`${day}T00:30:00Z`), td.length ? td[0].ms 
 const end = Math.min(td.length ? td[td.length - 1].ms : 0, ldb.length ? ldb[ldb.length - 1].ms : 0);
 NOW = start;
 const a = new A('portslade', JSON.parse(JSON.stringify(def)));
-const b = new B('portslade', JSON.parse(JSON.stringify(def)));
-silence(() => { a.updateScheduleTrains(JSON.parse(JSON.stringify(sched))); b.updateScheduleTrains(JSON.parse(JSON.stringify(sched))); });
+const b = new B('portslade', JSON.parse(JSON.stringify(defB)));
+silence(() => { a.updateScheduleTrains(JSON.parse(JSON.stringify(sched))); b.updateScheduleTrains(toB(sched)); });
 
 let ti = 0, li = -1, ticks = 0, diffs = 0, closures = 0, held = 0, trainsCompared = 0;
 const examples = [];
@@ -97,16 +122,16 @@ for (let t = start; t <= end; t += TICK) {
   while (ti < td.length && td[ti].ms <= t) { const e = td[ti++]; a.recordTdEvent(e); b.recordTdEvent(e); }
   let changed = false;
   while (li + 1 < ldb.length && ldb[li + 1].ms <= t) { li++; changed = true; }
-  if (changed) { const tr = ldb[li].trains; silence(() => { a.updateLdbTrains(JSON.parse(JSON.stringify(tr))); b.updateLdbTrains(JSON.parse(JSON.stringify(tr))); }); }
+  if (changed) { const tr = ldb[li].trains; silence(() => { a.updateLdbTrains(JSON.parse(JSON.stringify(tr))); b.updateLdbTrains(toB(tr)); }); }
   silence(() => { a._recompute(); b._recompute(); });
-  const sa = norm(a.getApiState(6)), sb = norm(b.getApiState(6));
+  const sa = norm(a.getApiState(6)), sb = norm(fromB(b.getApiState(6)));
   ticks++;
   const st = JSON.parse(sa); closures += (st.upcomingClosures || []).length;
   held += (st.upcomingClosures || []).filter(c => c.closePending || c.holdingOpen || (c.trains || []).some(x => x.held)).length;
   // every merged train's predicted close, through each engine's own function
   const ma = silence(() => a._mergeTrains(new Date(t))), mb = silence(() => b._mergeTrains(new Date(t)));
   const ca = JSON.stringify(ma.map(x => [x.headcode, x.direction, a._closeTimeInfo(x, new Date(t))]));
-  const cb = JSON.stringify(mb.map(x => [x.headcode, x.direction, b._closeTimeInfo(x, new Date(t))]));
+  const cb = JSON.stringify(fromB(mb.map(x => [x.headcode, x.direction, b._closeTimeInfo(x, new Date(t))])));
   trainsCompared += ma.length;
   if (sa !== sb || ca !== cb) {
     diffs++;

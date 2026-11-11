@@ -8,14 +8,17 @@
     "station": "PLD",
     "adjacentStations": ["FSG", "HOV"]
   },
-  "_comment_directions": "Which way a departure-board train is going (src/direction.js). The board gives no direction, so: (1) the crossing's own timetable entry for the train, by UID else headcode at the nearest time; (2) else these lists, DESTINATION first then origin; (3) else 'unknown', resolved from the berth chain once the train reaches it - never a default. placesBeyond = the places that lie beyond the crossing when travelling that way; an entry matches a board name exactly or as its leading words ('london' covers London Victoria and London Bridge; 'ford' does not match Watford). line = the official Up/Down designation of each slot: on the West Coastway Up is towards Brighton, so east = up. Places reachable both ways round (Horsham, via Brighton or the Arun Valley) are deliberately on neither list. SET FROM 179 days of logs, 2026-11-06: these lists name every origin and destination the PLD board showed (28 names), and on the 34,031 trains with a timetable match the lists alone agreed with the timetable on 34,028 - the 3 misses are diverted Brighton -> London Victoria trains, which step 1 gets right. For another crossing, list the board's origins/destinations by which side of the crossing they lie, and check against the timetable the same way.",
+  "_comment_directions": "Which way a departure-board train is going (src/direction.js). The board gives no direction, so: (1) the crossing's own timetable entry for the train, by UID else headcode at the nearest time; (2) else these lists, DESTINATION first then origin; (3) else 'unknown', resolved from the berth chain once the train reaches it - never a default. placesBeyond = the places that lie beyond the crossing when travelling that way; an entry matches a board name exactly or as its leading words ('london' covers London Victoria and London Bridge; 'ford' does not match Watford). line = the official Up/Down designation of each slot: on the West Coastway Up is towards Brighton, so east = up. Places reachable both ways round (Horsham, via Brighton or the Arun Valley) are deliberately on neither list. SET FROM 179 days of logs, 2026-11-06: these lists name every origin and destination the PLD board showed (28 names), and on the 34,031 trains with a timetable match the lists alone agreed with the timetable on 34,028 - the 3 misses are diverted Brighton -> London Victoria trains, which step 1 gets right. For another crossing, list the board's origins/destinations by which side of the crossing they lie, and check against the timetable the same way. The two keys of `directions` ARE the crossing's direction slots: every per-direction block in this file (td, schedule, timing, presentation) is keyed by the same two names, and the code never names a slot itself — so a crossing may call them anything (up/down, north/south). Exactly two.",
+  "_comment_boardTime": "directions.<dir>.boardTime = which departure-board time is nearest the crossing for a train travelling that way: 'arrival' if the train reaches the crossing BEFORE the platform, 'departure' if after (src/ldb-poller.js). Portslade: the crossing is immediately west of the platform, so east = arrival (crosses on its way in), west = departure (pulls out of the platform straight onto it). Was hard-coded until 2026-11-12. A train whose direction is unknown reads the arrival first. For another crossing, see crossing-launch MEASURING.md: decide from the platform position, then confirm from the feed.",
   "directions": {
     "east": {
       "line": "up",
+      "boardTime": "arrival",
       "placesBeyond": ["Brighton", "Hove", "Preston Park", "London", "Clapham Junction", "Battersea Park", "East Croydon", "Redhill", "Gatwick Airport", "Three Bridges", "Haywards Heath", "Burgess Hill", "Lewes", "Eastbourne"]
     },
     "west": {
       "line": "down",
+      "boardTime": "departure",
       "placesBeyond": ["Fishersgate", "Southwick", "Shoreham-by-Sea", "Lancing", "East Worthing", "Worthing", "West Worthing", "Durrington-on-Sea", "Goring-by-Sea", "Angmering", "Littlehampton", "Ford", "Arundel", "Barnham", "Bognor Regis", "Chichester", "Fishbourne", "Bosham", "Nutbourne", "Southbourne", "Emsworth", "Warblington", "Havant", "Bedhampton", "Hilsea", "Fratton", "Portsmouth", "Cosham", "Portchester", "Fareham", "Swanwick", "Bursledon", "Hamble", "Netley", "Sholing", "Woolston", "Bitterne", "St Denys", "Southampton", "Eastleigh"]
     }
   },
@@ -23,20 +26,23 @@
   "td": {
     "area": "LA",
     "_comment_chain": "approachChain is the berth order a train steps through on the way IN, nearest-last. It gives (a) the set of berths whose strike-in is recorded, and (b) an ordering so the CLOSED backstop can tell whether a train is still upstream of its close anchor. Derived from TD step order (see the berth-chain derivation) and verified against SMART.",
-    "_comment_queueExemptClasses": "Classes a train ahead does NOT delay, so the queued hold never applies to them however close the leader is. queueMaxAhead limits the DISTANCE; this limits the CLASS, and without it the rule holds trains the backtest says are not delayed. SET FROM the same scripts/backtest-transits.js section 6a run as queueMaxAhead (2026-10-05): east stoppingLocal measured -9s at 1 ahead and -34s at 2 - no penalty at any distance, because the booked Southwick stop sits inside the approach berth and absorbs the queue. Measured over 2026-10-22..23 of live TD, stoppingLocal was 688 of the 838 queued holds raised eastbound, so this is the bulk of the rule firing on the one class its own calibration exempts. Westbound has no stoppingLocal (_eastClass is east-only), hence the empty list rather than a copy. Absent or empty = every class can be queued, the behaviour before 2026-10-25. For another crossing, re-run the backtest and list any class whose 6a row shows no material delay at distance 1.",
+    "_comment_queueExemptClasses": "Classes a train ahead does NOT delay, so the queued hold never applies to them however close the leader is. queueMaxAhead limits the DISTANCE; this limits the CLASS, and without it the rule holds trains the backtest says are not delayed. SET FROM the same scripts/backtest-transits.js section 6a run as queueMaxAhead (2026-10-05): east stoppingLocal measured -9s at 1 ahead and -34s at 2 - no penalty at any distance, because the booked Southwick stop sits inside the approach berth and absorbs the queue. Measured over 2026-10-22..23 of live TD, stoppingLocal was 688 of the 838 queued holds raised eastbound, so this is the bulk of the rule firing on the one class its own calibration exempts. Westbound has no stoppingLocal (only east uses classRule approachStop), hence the empty list rather than a copy. Absent or empty = every class can be queued, the behaviour before 2026-10-25. For another crossing, re-run the backtest and list any class whose 6a row shows no material delay at distance 1.",
     "_comment_queuedEstimate": "Step 2 (2026-10-26): true = a train QUEUED at its freshest chain strike (a same-direction train within queueMaxAhead berths ahead at that instant) counts down from its own queued median - transits.json portslade.queued, built by scripts/derive-transits.js --queued-only - instead of being held. Absent or false = off, the behaviour before 2026-10-26; opt-in per direction because the trade differs. SET FROM scripts/backtest-transits.js section 7, trained to 2026-07-26 and replayed over the 89 test days to 2026-10-25, every 10 s to the protecting strike. EAST on: on-screen Train held 3,594 -> 2,179 train-s/day (-39%); the countdowns shown instead MAE 45.9s, bias +14.9s, 20.1% more than 30s early - in line with east clear trains (6b: 39.3s, 21.7% early), against 95.8s MAE / 1.4% early on the clear median they would otherwise run past. WEST off: held only -12% (2,454 -> 2,166) and the countdowns would be 22.5% early against 3.4% today and 5.9% for west clear trains - a safety regression for a small gain; west holds are unstruck, step 3. The replay reproduces the live held log for west (2,454 vs 2,433 s/day on 10-19 Oct). For another crossing, run section 7 and switch on only where the early rate stays in line with that direction's clear trains.",
     "_comment_queueMaxAhead": "How far ahead a same-direction train can be and still count as QUEUING this one, in berths along approachChain (the clear-step destination, 0002 east / 0007 west, is one step past the last chain berth). Applies to the COUNTDOWN's queued hold only (crossing-state queuedBound); the BARRIERS DOWN gate keeps the unlimited test. Absent = unlimited, the behaviour before 2026-10. SET FROM scripts/backtest-transits.js section 6a, 2026-10-05, training window to 2026-07-26: the delay on each class's anchor->crossing row, by distance to the train ahead at the anchor strike, against trains with nothing ahead. East stopping 0008>XING (none ahead 186s, n=1660): 1 ahead +73s (n=26), 2 ahead +41s (n=148), 3 ahead +5s (n=401) - the delay stops after 2. West stopping 0003>XING: 1 ahead +41s (n=51), 2 ahead +15s (n=136). The +73s matches C20's independent +77s. stoppingLocal shows NO penalty at any distance (-9s, -34s: the Southwick stop absorbs it). ECS is the exception, delayed at every distance (+219/+109/+70s) - about 3% of traffic, left to the queued/clear transit split. Validated: under 'any' the backtest reproduces the live held log's queued time (23,108 vs ~21,400 train-s/day, 2026-09-27..10-05); at N=2 it predicts 32% of that remains. For another crossing, re-run the backtest and read N off 6a: the furthest distance that still carries a material delay.",
-    "eastbound": {
+    "_comment_classRule": "td.<dir>.classRule = how a train is sorted into a timing class for that direction (crossing-state _classOf). 'approachStop': five classes - freight, ecs, fast (not calling at the crossing station), then stopping trains split on whether they ALSO call at the station inside the approach berth (schedule.tiploc_approach_call): stoppingLocal if so or unknown, stopping if not. Portslade east, because Southwick sits inside 0006 (see schedule._comment_tiploc_approach_call). 'stopping' (also the default): calls at the crossing station -> stopping, checked FIRST (so a stopping freight is stopping); else freight, ecs, fast. Portslade west. Was hard-coded by direction until 2026-11-12.",
+    "east": {
+      "classRule": "approachStop",
       "approach": { "from": "0006", "to": "0004" },
       "clear":    { "from": "0004", "to": "0002" },
       "approachChain": ["0016", "0014", "0012", "0010", "0008", "0006", "0004"],
       "queueMaxAhead": 2,
       "queueExemptClasses": ["stoppingLocal"],
       "queuedEstimate": true,
-      "_comment_queueHold": "true = a train queued behind another (within queueMaxAhead, not an exempt class) shows Train held: its countdown is a lower bound until the train ahead clears (crossing-state queuedBound). Absent or false = only the queued countdown estimate applies (queuedEstimate). Was hard-coded east-only until 2026-11-06, when the two directions' close code was merged; this records that behaviour. West has never held (see westbound: its holds were judged a safety trade, register #20/C20).",
+      "_comment_queueHold": "true = a train queued behind another (within queueMaxAhead, not an exempt class) shows Train held: its countdown is a lower bound until the train ahead clears (crossing-state queuedBound). Absent or false = only the queued countdown estimate applies (queuedEstimate). Was hard-coded east-only until 2026-11-06, when the two directions' close code was merged; this records that behaviour. West has never held (see td.west: its holds were judged a safety trade, register #20/C20).",
       "queueHold": true
     },
-    "westbound": {
+    "west": {
+      "classRule": "stopping",
       "approach": { "from": "0003", "to": "0005" },
       "clear":    { "from": "0005", "to": "0007" },
       "approachChain": ["T682", "T677", "0001", "0003", "0005"],
@@ -49,22 +55,25 @@
     "tiploc_station": "PSLDAWH",
     "_comment_tiploc_approach_call": "SOUTHWICK (CORPUS-verified STHWICK) sits INSIDE eastbound approach berth 0006. Services calling there spend a median 160s in 0006 (range 124-203) against 49s (44-79) for those that don't — two disjoint populations, so the 0006 strike-in means completely different things depending on the calling pattern. VALIDATED against a full day of TD: this flag reproduces the observed split with 0 mismatches in 93 runs. (Fishersgate, also on this stretch, does NOT split it — 41/93 mismatches — so do not swap it back on the assumption that the nearest station is the relevant one.) Read from the CIF schedule for every service, then applied to LDB-sourced trains by UID/headcode.",
     "tiploc_approach_call": "STHWICK",
-    "tiplocs_west": [
+    "_comment_tiplocsBefore": "tiplocsBefore.<dir> = the timing points a train travelling that way passes BEFORE the crossing - the places on the side it comes from - so the two lists are the two sides of the crossing (src/schedule-parser.js analyseRoute). A schedule calling on both sides crosses in the direction whose list it meets first. Portslade: east lists the places WEST of the crossing, west the places east of it. Was tiplocs_west/tiplocs_east until 2026-11-12.",
+    "tiplocsBefore": {
+      "east": [
       "FSHRSGT", "STHWICK", "SHRHMBS", "LNCG",
       "WORTHNG", "WWRTHNG", "WWRTMS", "EWRTHNG", "DRNGTOS",
       "GORNGBS", "ANGMRNG", "ARUNDLJ", "LTLHMJN", "LTLHMPT",
       "FORD", "BRHM", "CHCHSTR", "PSEA", "PHBR",
       "HAVANT", "FAREHAM", "COSHAM", "SOTON",
       "BOSHAM", "NUTBORN", "SBOURNE", "EMSWTH"
-    ],
-    "tiplocs_east": [
+      ],
+      "west": [
       "ALDTON", "HOVE", "HOVEY36", "BRGHTN", "LOVRSWS", "BRGHWS",
       "BRGHRC", "BRGHTTY", "BRGH280", "BRGHLRD",
       "PRSP", "PRSPSDG"
-    ],
+      ]
+    },
     "interpolation": {
-      "eastbound": { "from": "SHRHMBS", "to": "HOVE", "fraction": 0.7 },
-      "westbound": { "from": "HOVE", "to": "SHRHMBS", "fraction": 0.3 }
+      "east": { "from": "SHRHMBS", "to": "HOVE", "fraction": 0.7 },
+      "west": { "from": "HOVE", "to": "SHRHMBS", "fraction": 0.3 }
     }
   },
 
@@ -112,7 +121,7 @@
           "ecs":      { "berth": "0001", "_derived": "148-92 = +56s. transit n=266; barrier lead n=0 GUESS. 0003 would be -3s, infeasible. 3.5%" },
           "fast":     { "berth": "0001", "_derived": "94-92 = +2s. transit n=60; barrier lead n=0 GUESS, and FRAGILE — fires ~instantly on the strike, so pipeline latency eats the margin. 0003 would be -39s. 0.8%" }
         },
-        "_comment_unknown": "A train whose class cannot be resolved falls to `stopping` (see _classOf/_eastClass fallbacks), which is the right default: 95% of westbound traffic is stopping.",
+        "_comment_unknown": "A train whose class cannot be resolved falls to `stopping` (see _classOf/_approachStopClass fallbacks), which is the right default: 95% of westbound traffic is stopping.",
         "minAfterStrikeSecs": 10,
         "safetyNetSecs": 90
       }
@@ -132,6 +141,11 @@
     "appName": "Portslade Crossing",
     "appShortName": "Crossing",
     "stationName": "Portslade",
+    "_comment_directions": "How each direction slot is drawn on the website (shared/predict.js setDirections): arrow = the closure card and debug list, marker = the feedback picker, colour = the arrow's colour. The time column the picker shows comes from directions.<dir>.boardTime, not from here. Moved out of the shared code on 2026-11-12, where east/west were hard-coded; a direction with no entry is drawn as a grey dot.",
+    "directions": {
+      "east": { "arrow": "→", "marker": "▶", "colour": "#38BDF8" },
+      "west": { "arrow": "←", "marker": "◀", "colour": "#FB923C" }
+    },
     "_comment_confidenceWindows": "Heuristic defaults — to be calibrated against empirical TD event logs once sufficient data is collected",
     "confidenceWindows": {"schedule_secs": 120, "ldb_near_secs": 90, "td_approach_secs": 60, "td_protecting_secs": 30},
     "_comment_chain": "The berth chain a train steps through towards and past the crossing, per direction, nearest-last on the way in. {x:true} is the crossing itself. gap = median seconds in that berth; role marks the approach/protecting/clear berths; ttc = {q1,med,q3} seconds from ENTERING an approach berth to the train passing the crossing; tac = the same from passing the crossing to entering a cleared berth. Reference for both = the train stepping out of the protecting berth (the TRAIN on the crossing, not the barrier). Measured over 28 days of TD logs (backend scripts/derive-ttc.js). Read by shared/predict.js (PREDICT.setChain): position labels, the feedback picker ranking and the observer map. Moved here verbatim from a constant in predict.js on 2026-11-06 (multi-crossing item 6) so the shared code carries no Portslade data; a crossing without a chain shows every train as elsewhere in the area.",
