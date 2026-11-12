@@ -143,6 +143,8 @@
     "appName": "Portslade Crossing",
     "appShortName": "Crossing",
     "stationName": "Portslade",
+    "_comment_figures": "The About block's measured figures (burger-menu ticket 12), from the app's own open/close record: backend/scripts/crossing-figures.js. Re-measured at each twice-yearly check (crossing-directory-refresh skill). The build rounds them for the page.",
+    "figures": {"asOf": "November 2026", "window": "2026-10-15..2026-11-11", "closures": 4088, "downP25Secs": 114, "downP75Secs": 218, "closuresPerDay": 164, "busiestHour": 11},
     "_comment_directions": "How each direction slot is drawn on the website (shared/predict.js setDirections): arrow = the closure card and debug list, marker = the feedback picker, colour = the arrow's colour. The time column the picker shows comes from directions.<dir>.boardTime, not from here. Moved out of the shared code on 2026-11-12, where east/west were hard-coded; a direction with no entry is drawn as a grey dot.",
     "directions": {
       "east": { "arrow": "→", "marker": "▶", "colour": "#38BDF8" },
