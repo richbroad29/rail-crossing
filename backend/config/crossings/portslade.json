@@ -1,6 +1,8 @@
 {
   "name": "Portslade Level Crossing",
   "road": "Boundary Road",
+  "_comment_crossingNumber": "Network Rail's crossing number (its Crossing UID): the crossing's identity in the crossing list (scripts/crossing-list.csv on main), which supplies its position, town, council, county and country. The website build fails without it.",
+  "crossingNumber": 1950,
   "crossingType": "MCB-CCTV",
   "signalBox": "Lancing",
 
@@ -138,8 +140,6 @@
   "_comment_presentation": "What the public website needs and the backend ignores. Read only by scripts/build-crossings.js on main, which generates this crossing's page (/<id>/index.html with its title, description and link-preview tags), its home-screen app file, the website settings shared/crossings.json, the home-page list and the sitemap. The crossing id is this file's name.",
   "presentation": {
     "listed": true,
-    "pageTitle": "Portslade Level Crossing",
-    "description": "Live barrier predictions for Portslade level crossing, Boundary Road.",
     "appName": "Portslade Crossing",
     "appShortName": "Crossing",
     "stationName": "Portslade",
