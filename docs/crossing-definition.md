@@ -97,7 +97,7 @@ Portslade with its slots renamed `up`/`down`.
 |---|---|---|---|
 | `schedule.stationTiploc` | The crossing's own station in timetable code. Used to tell stopping trains from fast ones | PSLDAWH | Live |
 | `schedule.tiplocsBefore.<d>` | Timing points a train going that way passes BEFORE the crossing — the side it comes from — so the two lists are the two sides; a train crosses if it passes points on both, in the direction whose list it meets first | east: 27 (the places west of the crossing); west: 12 | Live (keyed by slot since 2026-11-12; was `tiplocs_west`/`tiplocs_east`) |
-| `schedule.stationSide` | Which side the crossing's own station counts as. Without it, a train that starts or terminates at Portslade, crossing on its way, has no point on one side and **is missed** | — | Hard-coded (missing) |
+| `schedule.stationSide` | Which side the crossing's own station counts as, for a train that starts or terminates there and crosses on its way (without it, such a train has no point on one side and is missed). Named by the direction slot whose `tiplocsBefore` list the station joins. Only used when the lists alone find no crossing, so through trains can't change. The crossing time is the station's own time, which is right only where the road is at the platform end. Not handled yet: a train that reverses at the station | west (the station is on the side westbound trains come from) | Live (2026-11-12). No such train in the timetable then |
 | `schedule.timingPoints` | For each timing point next to the crossing, the seconds from it to the crossing. Today one fraction is used between *whichever* two points bracket the crossing, though it was set for Shoreham↔Hove | Shoreham → Hove, 0.7 eastbound / 0.3 westbound | Partial |
 | `directions.<d>.approachStops` | Stations inside the approach whose stop changes the timing (Southwick inside berth 0006 adds about 160 s) | east: Southwick (STHWICK) in 0006 → class "stoppingLocal"; west: none | Partial (one station, eastbound only) |
 | `schedule.outAndBack` | Which timing-point pairs mark a train crossing out and back | Shoreham ↔ Hove | Partial |
@@ -268,8 +268,8 @@ Timings: `backend/data/transits.json`, generated 2026-07-26; queued cells 2026-1
 
 | Variable | What it means | Portslade | Status |
 |---|---|---|---|
-| `classify.headcodes` | What the first digit of a train's code means. Today **4xxx and 8xxx freight and 0xxx light engines count as passenger trains**; Portslade rarely sees them, Southampton would | 6, 7 freight; 5 empty; 3 test | Hard-coded |
-| `td.<d>.classRule` | The ordered rules that put a train in a timing class. **approachStop**: freight → empty → fast → stopping, split on whether it also calls at the station inside the approach (stoppingLocal). **stopping** (the default): stopping → freight → empty → fast | east: approachStop; west: **stopping** | Live (2026-11-12). The west order checks "stopping" before "freight" by accident — bug 3 below |
+| `classify.headcodes` | What the first digit of a train's code means, one rule for the board and the timetable (`src/train-type.js`) | 0, 4, 6, 7, 8 freight (0 = light engine, timed as freight); 5 empty; 3 test; rest passenger | Hard-coded (fixed 2026-11-12: 4, 8 and 0 used to count as passenger. None crossed Portslade in 177 days) |
+| `td.<d>.classRule` | The ordered rules that put a train in a timing class. **approachStop**: freight → empty → fast → stopping, split on whether it also calls at the station inside the approach (stoppingLocal). **stopping** (the default): freight → empty → stopping → fast | east: approachStop; west: **stopping** | Live (2026-11-12; west order fixed the same day, bug 3 below) |
 | `directions.<d>.defaultClass` | Class used when a train's stopping pattern is unknown | east stoppingLocal, west stopping | Hard-coded |
 | `test` class | Test trains (3xxx, e.g. the autumn rail-head treatment train) run slowly but are timed as fast or stopping | none | New |
 
@@ -348,17 +348,22 @@ These stay in the shared code.
 
 ## Bugs found on the way
 
-These are wrong at Portslade today, not just at future crossings. Each would change Portslade slightly,
-so each needs your go-ahead.
+These were wrong at Portslade, not just at future crossings. Each was approved, measured by replay, and
+shipped or replaced on 2026-11-12 (backend-v2 `f166b90`..`94d3084`). 2 to 5 changed nothing visible at
+Portslade then; they matter for other crossings.
 
-1. **The "seen today" list resets at midnight UTC, not UK midnight.** During summer time, trains seen
-   between midnight and 1 am count towards the wrong day.
-2. **4xxx and 8xxx freight and 0xxx light engines are treated as passenger trains.**
-3. **Westbound checks "is it stopping" before "is it freight"**, the opposite of eastbound.
-4. **The Southwick stop is matched by headcode with no time limit**, so a later run with the same
-   headcode can borrow the wrong stopping pattern.
-5. **A train that starts or terminates at Portslade and crosses on its way is missed**, because Portslade
-   station is on neither side's timing-point list.
+1. **The "seen today" list resets at midnight UTC, not UK midnight.** *Not shipped as written.* Moving the
+   reset to UK midnight made summer worse: the last trains of the evening still step through the berths
+   after midnight, and that step marked the same headcode's next-evening run as already seen (344 cases
+   in 177 days, against 3 with the current reset). No reset time fixes it. The real flaw is that a
+   sighting counts for every timetable entry with that headcode, whatever the time. Being replaced by a
+   time window (a sighting counts only for the run it could belong to).
+2. **4xxx and 8xxx freight and 0xxx light engines were treated as passenger trains.** Fixed (`f166b90`).
+3. **Westbound checked "is it stopping" before "is it freight"**, the opposite of eastbound. Fixed (`a067121`).
+4. **The Southwick stop was matched by headcode with no time limit.** Fixed (`ecb6ef3`): nearest run
+   within 20 minutes, as the direction lookup does.
+5. **A train that starts or terminates at Portslade and crosses on its way was missed.** Fixed
+   (`94d3084`) with `schedule.stationSide`; see §5 for its limits.
 
 ## Decisions needed
 
