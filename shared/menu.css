@@ -1,0 +1,46 @@
+/* The burger menu on live-crossing pages (shared/menu.js). From the burger-menu prototype, Option A
+   side drawer (ticket 04). Palette = shared/crossing.css (slate on navy, blue accent). */
+:root{--pm-bg:#0F172A;--pm-panel:#111C33;--pm-raise:#1E293B;--pm-line:#273449;--pm-fg:#E2E8F0;--pm-dim:#94A3B8;--pm-faint:#64748B;--pm-accent:#3B82F6;--pm-warn:#F59E0B}
+body.pm-lock{overflow:hidden}
+.pm-burger{flex-shrink:0;width:38px;height:38px;border-radius:10px;border:1px solid var(--pm-line);background:var(--pm-raise);color:var(--pm-fg);display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
+.pm-burger:focus-visible,.pm-drawer a:focus-visible,.pm-drawer button:focus-visible{outline:2px solid var(--pm-accent);outline-offset:2px}
+
+/* rows: live = plain and bright with a chevron; coming soon = striped, dashed, italic, badge */
+.pm-row{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;text-decoration:none;color:var(--pm-fg);min-height:52px}
+.pm-row:active,.pm-row:hover{background:var(--pm-raise)}
+.pm-row-main{display:flex;flex-direction:column;min-width:0;flex:1}
+.pm-name{font-size:15px;font-weight:600;line-height:1.25;overflow-wrap:anywhere}
+.pm-sub{font-size:12px;color:var(--pm-dim);line-height:1.3;overflow-wrap:anywhere}
+.pm-dist{font-size:12px;color:var(--pm-dim);font-variant-numeric:tabular-nums;flex-shrink:0}
+.pm-chev{color:var(--pm-faint);font-size:20px;line-height:1}
+.pm-soon{background:repeating-linear-gradient(135deg,transparent 0 8px,rgba(148,163,184,.05) 8px 16px);border:1px dashed var(--pm-line);margin:4px 0}
+.pm-soon .pm-name,.pm-soon .pm-sub{font-style:italic;color:var(--pm-faint);font-weight:500}
+.pm-soon .pm-dist{color:var(--pm-faint)}
+.pm-req{font-size:11px;color:var(--pm-dim);margin-top:2px}
+.pm-tag{flex-shrink:0;display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;letter-spacing:.2px;color:#CBD5E1;background:#334155;border-radius:999px;padding:4px 9px}
+.pm-note{font-size:13px;color:var(--pm-dim);padding:10px 12px}
+.pm-warn{color:var(--pm-warn)}
+.pm-eyebrow{font-size:10px;text-transform:uppercase;letter-spacing:1.2px;color:var(--pm-dim);padding:10px 12px 4px}
+.pm-nearest-live{border-top:1px solid var(--pm-line);margin-top:4px}
+.pm-seemore,.pm-link{display:block;width:100%;text-align:center;padding:10px;font:inherit;font-size:13px;font-weight:600;color:var(--pm-accent);text-decoration:none;background:none;border:0;cursor:pointer}
+.pm-search{display:flex;align-items:center;gap:8px;margin:6px 4px;padding:0 12px;height:44px;border-radius:12px;background:var(--pm-bg);border:1px solid var(--pm-line);color:var(--pm-dim)}
+.pm-search:focus-within{border-color:var(--pm-accent)}
+.pm-search input{flex:1;min-width:0;border:0;background:transparent;color:var(--pm-fg);font:inherit;font-size:16px;outline:none}
+.pm-x{width:40px;height:40px;border:0;background:transparent;color:var(--pm-dim);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;border-radius:10px;flex-shrink:0}
+
+/* the drawer */
+.pm-backdrop{position:fixed;inset:0;background:rgba(2,6,23,.6);z-index:40;animation:pmFade .2s ease}
+.pm-backdrop[hidden],.pm-drawer[hidden],.pm-group[hidden]{display:none}
+@keyframes pmFade{from{opacity:0}}
+.pm-drawer{position:fixed;top:0;right:0;bottom:0;width:min(88vw,360px);background:var(--pm-panel);border-left:1px solid var(--pm-line);z-index:41;display:flex;flex-direction:column;animation:pmIn .22s cubic-bezier(.4,0,.2,1);padding-top:env(safe-area-inset-top,0px);padding-right:env(safe-area-inset-right,0px);color:var(--pm-fg);text-align:left}
+@keyframes pmIn{from{transform:translateX(100%)}}
+.pm-dbody{flex:1;overflow-y:auto;padding:8px}
+.pm-toprow{display:flex;align-items:center;gap:4px}.pm-toprow .pm-item{flex:1}
+.pm-item{display:flex;align-items:center;gap:12px;width:100%;padding:12px;border:0;border-radius:10px;background:transparent;color:var(--pm-fg);font:inherit;font-size:15px;font-weight:600;text-align:left;text-decoration:none;cursor:pointer;min-height:48px}
+.pm-item:hover,.pm-item:active{background:var(--pm-raise)}
+.pm-item svg{color:var(--pm-dim)}
+.pm-group{margin-top:6px}
+.pm-dfoot{padding:12px 16px calc(16px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--pm-line)}
+.pm-dfoot:has(.add-app-btn.hidden){display:none}
+.pm-app{margin:0}
+@media (prefers-reduced-motion:reduce){.pm-drawer,.pm-backdrop{animation:none}}

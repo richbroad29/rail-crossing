@@ -201,7 +201,7 @@ function page(id, d, r, template) {
     id, name: d.name, road: d.road, roadLabel: p.roadLabel || d.road.toUpperCase(),
     pageTitle: f.pageTitle, description: f.description, appShortName: p.appShortName,
     url: `${SITE}/${id}/`, where: f.where, stationName: p.stationName,
-    typeCode: f.typeCode, typeWords: f.typeWords, directoryUrl: `../${directoryUrl}`
+    typeCode: f.typeCode, typeWords: f.typeWords, directoryUrl: `../${directoryUrl}`, crossingNumber: d.crossingNumber
   };
   const raw = { jsonLd: jsonLd(id, d, r, f) };                   // {{{x}}}: inserted unescaped
   const body = template.replace(/^<!--[\s\S]*?-->\n/, '');     // drop the template's own header

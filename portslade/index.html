@@ -14,6 +14,7 @@
 <meta name="description" content="When will the barriers at Portslade Level Crossing (Boundary Road, Portslade by Sea, East Sussex) next go down? Live predictions from train times and railway signalling.">
 <link rel="canonical" href="https://railcrossing.uk/portslade/">
 <meta name="crossing-directory" content="../shared/directory.json?v=f9b64b7800">
+<meta name="crossing-number" content="1950">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="railcrossing.uk">
 <meta property="og:title" content="Portslade Level Crossing, Boundary Road: live barrier times">
@@ -21,8 +22,9 @@
 <meta property="og:url" content="https://railcrossing.uk/portslade/">
 <meta property="og:image" content="https://railcrossing.uk/shared/icon-512.png">
 <meta name="twitter:card" content="summary">
-<link rel="stylesheet" href="../shared/crossing.css?v=202611122120">
-<link rel="stylesheet" href="../shared/closure-card.css?v=202611122120">
+<link rel="stylesheet" href="../shared/crossing.css?v=202611122126">
+<link rel="stylesheet" href="../shared/closure-card.css?v=202611122126">
+<link rel="stylesheet" href="../shared/menu.css?v=202611122126">
 <script type="application/ld+json">
 {
  "@context": "https://schema.org",
@@ -84,7 +86,7 @@
       <h1 class="hdr-title" id="crossingName">Portslade Level Crossing</h1>
       <div class="hdr-road" id="crossingRoad">Boundary Road</div>
     </div>
-    <button class="add-app-btn hidden" id="addAppBtn" onclick="addAsApp()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M12 8v6M9.5 11.5 12 14l2.5-2.5"/></svg>Add as app</button>
+    <button class="pm-burger" id="menuBtn" type="button" aria-label="Menu" aria-controls="menuDrawer" aria-expanded="false"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
   </div>
 
   <div class="status-card" id="statusCard">
@@ -221,6 +223,27 @@
   <div class="footer">Estimates only · Not a safety system · Always obey signals & barriers</div>
 </div>
 
+<!-- The burger menu (burger-menu ticket 04, Option A side drawer). Static markup, so Home is a real
+     link crawlers can follow and the Add as app button exists for crossing.js from the start;
+     shared/menu.js fills Recent and the results from the crossing directory on first open
+     (ticket 08: the directory loads only then). -->
+<div class="pm-backdrop" id="menuBackdrop" hidden></div>
+<nav class="pm-drawer" id="menuDrawer" aria-label="Menu" hidden>
+  <div class="pm-dbody">
+    <div class="pm-toprow">
+      <a class="pm-item" href="/"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11 12 4l9 7"/><path d="M5 10v10h14V10"/></svg><span>Home</span></a>
+      <button class="pm-x" id="menuClose" type="button" aria-label="Close menu"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+    </div>
+    <div class="pm-group" id="menuRecent" hidden></div>
+    <button class="pm-item" id="menuFind" type="button"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.5" fill="currentColor"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg><span>Find closest crossings</span></button>
+    <label class="pm-search" for="menuSearch"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="menuSearch" type="search" autocomplete="off" placeholder="Town, road or crossing" aria-label="Search crossings"></label>
+    <div class="pm-results" id="menuResults" aria-live="polite"></div>
+  </div>
+  <div class="pm-dfoot">
+    <button class="add-app-btn hidden pm-app" id="addAppBtn" type="button" onclick="addAsApp()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M12 8v6M9.5 11.5 12 14l2.5-2.5"/></svg>Add as app</button>
+  </div>
+</nav>
+
 <div class="modal-overlay" id="modalOverlay" onclick="closeModal(event)">
   <div class="modal" onclick="event.stopPropagation()">
     <h3 id="modalTitle"></h3>
@@ -229,9 +252,11 @@
   </div>
 </div>
 
-<script src="../shared/predict.js?v=202611122120"></script>
-<script src="../shared/closure-card.js?v=202611122120"></script>
-<script src="../shared/crossing.js?v=202611122120"></script>
+<script src="../shared/predict.js?v=202611122126"></script>
+<script src="../shared/closure-card.js?v=202611122126"></script>
+<script src="../shared/crossing.js?v=202611122126"></script>
+<script src="../shared/finder.js?v=202611122126"></script>
+<script src="../shared/menu.js?v=202611122126"></script>
 <script>
 initCrossing('portslade');
 </script>
