@@ -1057,9 +1057,12 @@ class CrossingState {
   //   'approachStop' — five classes, splitting stopping trains on whether they also call at
   //                    the station inside the approach berth (_approachStopClass). Portslade
   //                    east, because Southwick sits inside 0006.
-  //   'stopping'     — four classes, asking first whether the train calls at the crossing
-  //                    station (so a stopping freight is 'stopping'). Portslade west, and the
-  //                    default when classRule is absent.
+  //   'stopping'     — four classes: freight and ecs first, exactly as 'approachStop' asks
+  //                    them, then whether the train calls at the crossing station. Portslade
+  //                    west, and the default when classRule is absent. Until 2026-11-12 this
+  //                    asked "stopping?" first, so a freight booked to stop was timed as a
+  //                    stopping passenger train — the opposite order to the other rule. Inert at
+  //                    Portslade when changed: no freight or ecs schedule in the CIF calls there.
   //
   // This used to be inlined in _transit while _closeAnchor called the east rule directly — two
   // copies that could drift, and nothing outside could ask "which class did you use?". It is
@@ -1074,8 +1077,9 @@ class CrossingState {
     if (t.forceClass) return t.forceClass;
     const rule = (this._tdFor(t.direction) || {}).classRule;
     if (rule === 'approachStop') return this._approachStopClass(t);
-    if (this._isStopping(t)) return 'stopping';
-    return t.trainType === 'freight' ? 'freight' : t.trainType === 'ecs' ? 'ecs' : 'fast';
+    if (t.trainType === 'freight') return 'freight';
+    if (t.trainType === 'ecs') return 'ecs';
+    return this._isStopping(t) ? 'stopping' : 'fast';
   }
 
   // The single approach berth for a direction (td.<dir>.approach.from). Used by the

@@ -1341,6 +1341,10 @@ console.log('  -- _classOf single source of truth --');
   check('west, calls Portslade => stopping',                  st._classOf(mk({dir:'west',hc:'1N02',station:true})), 'stopping');
   check('west, does not call => fast',                        st._classOf(mk({dir:'west',hc:'1A02',station:false})), 'fast');
   check('west freight => freight',                            st._classOf(mk({dir:'west',hc:'6V02',type:'freight'})), 'freight');
+  // Bug c (2026-11-12): both rules ask freight/ecs BEFORE stopping. West used to ask stopping first.
+  check('west freight booked to stop => freight (was stopping)', st._classOf(mk({dir:'west',hc:'6V03',type:'freight',station:true})), 'freight');
+  check('west ecs booked to stop => ecs (was stopping)',         st._classOf(mk({dir:'west',hc:'5E03',type:'ecs',station:true})), 'ecs');
+  check('east freight booked to stop => freight (unchanged)',    st._classOf(mk({dir:'east',hc:'6V04',type:'freight',station:true})), 'freight');
   // An unknown Southwick answer must fall to stoppingLocal — the one east anchor with field
   // calibration behind it — not to a bare 'stopping'.
   check('east, Southwick unknown => stoppingLocal (calibrated anchor)', st._classOf(mk({dir:'east',hc:'1H03',station:true,approach:null})), 'stoppingLocal');
