@@ -20,6 +20,8 @@ body.pm-lock{overflow:hidden}
 .pm-tag{flex-shrink:0;display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;letter-spacing:.2px;color:#CBD5E1;background:#334155;border-radius:999px;padding:4px 9px}
 .pm-note{font-size:13px;color:var(--pm-dim);padding:10px 12px}
 .pm-warn{color:var(--pm-warn)}
+.pm-note ol.loc-steps{margin:8px 0 8px 18px;padding:0;display:flex;flex-direction:column;gap:5px;color:var(--pm-fg)}
+.pm-note ol.loc-steps strong{color:#fff}
 .pm-eyebrow{font-size:10px;text-transform:uppercase;letter-spacing:1.2px;color:var(--pm-dim);padding:10px 12px 4px}
 .pm-nearest-live{border-top:1px solid var(--pm-line);margin-top:4px}
 .pm-seemore,.pm-link{display:block;width:100%;text-align:center;padding:10px;font:inherit;font-size:13px;font-weight:600;color:var(--pm-accent);text-decoration:none;background:none;border:0;cursor:pointer}

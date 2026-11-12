@@ -60,8 +60,9 @@
       results.innerHTML = h;
     }).catch(function (err) {
       if (err && err.message && /^directory/.test(err.message)) return loadFailed();
-      results.innerHTML = note('Location is off — allow it in your browser settings, or search instead.', 'pm-warn');
-      input.focus();
+      var help = F.locationHelp(err);
+      results.innerHTML = note(help.html, 'pm-warn') +
+        (help.kind === 'unavailable' ? '<button class="pm-link" type="button" data-nearby>Try again</button>' : '');
     });
   }
 

@@ -121,7 +121,8 @@
     }).catch(function (err) {
       stripIn.innerHTML = '<h2 class="hp-h2">Near you</h2>' + (err && /^directory/.test(err.message || '')
         ? note('Couldn’t load the list of crossings. Check your connection and try again.', 'pm-warn')
-        : note('Location is off — allow it in your browser settings, or search instead.', 'pm-warn'));
+        : note(F.locationHelp(err).html, 'pm-warn') +
+          (F.locationHelp(err).kind === 'unavailable' ? '<button class="hp-dditem" type="button" data-near>' + ICON.near + '<span>Try again</span></button>' : ''));
     });
   }
 

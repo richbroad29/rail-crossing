@@ -174,6 +174,42 @@
   }
   function knownLocation() { return known; }
 
+  // What to tell the visitor when locate() fails. A browser shows its "allow location?" popup only
+  // while the question is unanswered; once it has stored "no" (or location is off for the browser
+  // itself) it refuses at once, with no popup, and no website can ask again. So a blocked visitor
+  // needs the steps to unblock it on their phone, and a merely unlucky one needs "Try again".
+  // Returns { kind: 'blocked'|'unavailable'|'unsupported', html }.
+  function locationHelp(err) {
+    var ua = (root.navigator && root.navigator.userAgent) || '';
+    var ios = /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && root.navigator.maxTouchPoints > 1);
+    var app = /CriOS/.test(ua) ? 'Chrome' : /FxiOS/.test(ua) ? 'Firefox' : /EdgiOS/.test(ua) ? 'Edge' : 'Safari';
+    var code = err && err.code;
+    if (!root.navigator || !root.navigator.geolocation || (err && err.message === 'unavailable')) {
+      return { kind: 'unsupported', html: 'This browser can’t share your location. Search for a town or road instead.' };
+    }
+    if (code === 1) {
+      var steps;
+      if (ios && app === 'Safari') {
+        steps = '<li>Open <strong>Settings</strong> → <strong>Privacy &amp; Security</strong> → <strong>Location Services</strong>, and check it is <strong>On</strong>.</li>' +
+          '<li>In that list tap <strong>Safari Websites</strong> and choose <strong>While Using the App</strong> (or <strong>Ask Next Time</strong>).</li>' +
+          '<li>Back in Safari, tap <strong>aA</strong> in the address bar → <strong>Website Settings</strong> → <strong>Location</strong> → <strong>Allow</strong> (or <strong>Ask</strong>).</li>' +
+          '<li>Reload this page and tap again.</li>';
+      } else if (ios) {
+        steps = '<li>Open <strong>Settings</strong> → <strong>' + app + '</strong> → <strong>Location</strong> → <strong>While Using the App</strong>.</li>' +
+          '<li>Check <strong>Settings</strong> → <strong>Privacy &amp; Security</strong> → <strong>Location Services</strong> is <strong>On</strong>.</li>' +
+          '<li>Reload this page and tap again.</li>';
+      } else if (/Android/.test(ua)) {
+        steps = '<li>Tap the icon to the left of the web address → <strong>Permissions</strong> → <strong>Location</strong> → <strong>Allow</strong> (or <strong>Reset permission</strong>).</li>' +
+          '<li>Check your phone’s <strong>Location</strong> is on (swipe down from the top of the screen).</li>' +
+          '<li>Reload this page and tap again.</li>';
+      } else {
+        steps = '<li>Allow location for railcrossing.uk in your browser’s site settings (usually the icon to the left of the web address).</li><li>Reload this page and try again.</li>';
+      }
+      return { kind: 'blocked', html: '<strong>Location is blocked for this site</strong>, so your phone didn’t ask. To allow it:<ol class="loc-steps">' + steps + '</ol>Or search for a town or road instead.' };
+    }
+    return { kind: 'unavailable', html: 'Couldn’t find your location just now (weak signal, or it took too long).' };
+  }
+
   // ---- display ------------------------------------------------------------------------------
   // "Road, Town"; an unnamed road shows the town only (ticket 09).
   function place(e) { return e.road ? e.road + ', ' + e.town : e.town; }
@@ -210,7 +246,7 @@
   }
 
   var FINDER = { load: load, use: use, search: search, nearest: nearest, miles: miles, fmtMiles: fmtMiles,
-    locate: locate, quietLocation: quietLocation, knownLocation: knownLocation, place: place, href: href,
+    locate: locate, quietLocation: quietLocation, knownLocation: knownLocation, locationHelp: locationHelp, place: place, href: href,
     requestUrl: requestUrl, recordVisit: recordVisit, recent: recent, byNumber: byNumber,
     _norm: norm, _lev1: lev1 };
   if (typeof module !== 'undefined' && module.exports) module.exports = FINDER;
