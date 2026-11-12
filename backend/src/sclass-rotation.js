@@ -5,7 +5,8 @@
 // editing td-rotation) so the live C-Class log path is untouched. Handles the
 // raw `sclass-YYYY-MM-DD.jsonl`, decoded `barrier-YYYY-MM-DD.jsonl`, and area-
 // tagged `cclass-<AREA>-YYYY-MM-DD.jsonl` files in data/logs/sclass/: gzip after
-// 7 days, prune after 180 days.
+// 7 days, prune after 180 days. The all-area `survey-YYYY-MM-DD.jsonl` files (td-listener's
+// survey window) are much bigger and only feed one scan, so they are pruned after 60.
 
 const fs = require('fs');
 const path = require('path');
@@ -15,11 +16,16 @@ const { pipeline } = require('stream');
 const LOG_DIR = path.join(__dirname, '..', 'data', 'logs', 'sclass');
 const GZIP_AFTER_DAYS = 7;
 const PRUNE_AFTER_DAYS = 180;
+const SURVEY_PRUNE_AFTER_DAYS = 60;
 
 function parseDateFromName(name) {
-  const m = name.match(/^(?:sclass|barrier|cclass-[A-Za-z0-9]+)-(\d{4}-\d{2}-\d{2})\.jsonl(\.gz)?$/);
+  const m = name.match(/^(?:sclass|barrier|survey|cclass-[A-Za-z0-9]+)-(\d{4}-\d{2}-\d{2})\.jsonl(\.gz)?$/);
   if (!m) return null;
   return new Date(m[1] + 'T00:00:00Z');
+}
+
+function pruneAfterDays(name) {
+  return name.startsWith('survey-') ? SURVEY_PRUNE_AFTER_DAYS : PRUNE_AFTER_DAYS;
 }
 
 function gzipFile(src) {
@@ -47,7 +53,7 @@ async function runOnce() {
     if (!d) continue;
     const ageDays = (today - d) / 86400000;
     const full = path.join(LOG_DIR, f);
-    if (ageDays > PRUNE_AFTER_DAYS) {
+    if (ageDays > pruneAfterDays(f)) {
       console.log(`S-Class rotation: pruning ${f} (age ${Math.floor(ageDays)}d)`);
       try { fs.unlinkSync(full); pruned++; }
       catch (e) { console.error('S-Class rotation prune failed:', e.message); }
@@ -83,4 +89,4 @@ function start() {
   }, initial);
 }
 
-module.exports = { start, runOnce };
+module.exports = { start, runOnce, _parseDateFromName: parseDateFromName, _pruneAfterDays: pruneAfterDays };

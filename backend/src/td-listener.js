@@ -38,8 +38,9 @@ const S_CLASS_MSG_TYPES = new Set(['SF_MSG', 'SG_MSG', 'SH_MSG']);
 const SCLASS_LOG_DIR = path.join(__dirname, '..', 'data', 'logs', 'sclass');
 
 let decoder = null; // null => S-Class disabled (no/invalid config); LA path unaffected
+let sclassConfig = null;
 try {
-  const sclassConfig = require('../config/sclass.json');
+  sclassConfig = require('../config/sclass.json');
   const d = new SClassDecoder(sclassConfig);
   const areas = Object.keys(d.areas);
   if (areas.length) { decoder = d; console.log(`S-Class decode enabled for area(s): ${areas.join(', ')}`); }
@@ -47,6 +48,23 @@ try {
 } catch (e) {
   console.warn('S-Class decode disabled (config load failed):', e.message);
 }
+
+// ---- S-Class survey: every area, for a bounded window ----
+// The feed carries S-Class for EVERY describer in Britain; the decoder keeps only the areas in
+// sclass.json. A survey also banks the raw S-Class of every OTHER area, to survey-<date>.jsonl,
+// so the barrier-bit scan (crossing-directory-refresh skill) can find barrier data in areas we
+// don't collect yet. On only while sclass.json `survey.until` is in the future; it switches
+// itself off at that instant with no restart. Capped at SURVEY_MAX_DAYS from startup so a
+// forgotten date can't grow the disk without limit. Raw logging only: nothing is decoded,
+// emitted or fed to predictions, and configured areas are logged exactly as before.
+const SURVEY_MAX_DAYS = 14;
+function surveyUntilFrom(cfg, now) {
+  const until = cfg && cfg.survey && cfg.survey.until ? Date.parse(cfg.survey.until) : NaN;
+  if (!Number.isFinite(until) || until <= now) return null;
+  return Math.min(until, now + SURVEY_MAX_DAYS * 86400000);
+}
+let surveyUntil = surveyUntilFrom(sclassConfig, Date.now());
+if (surveyUntil) console.log(`S-Class survey: banking raw S-Class from every area until ${new Date(surveyUntil).toISOString()}`);
 
 // C-Class berth steps for the S-Class areas (BM) are captured too: we need the
 // BM berth chain to confirm YN and for the Phase 2 join, and the real-time feed
@@ -62,6 +80,7 @@ let eventsLogged = 0;
 let cclassExtraLogged = 0;
 let sclassRawLogged = 0;
 let sclassEventsLogged = 0;
+let surveyLogged = 0;
 let connectAttempts = 0;
 let lastSummaryAt = Date.now();
 
@@ -173,6 +192,7 @@ function writeEvent(evt) {
 function sclassRawFile() { return path.join(SCLASS_LOG_DIR, `sclass-${londonDateStamp()}.jsonl`); }
 function barrierFile() { return path.join(SCLASS_LOG_DIR, `barrier-${londonDateStamp()}.jsonl`); }
 let cclassFile = area => path.join(SCLASS_LOG_DIR, `cclass-${area}-${londonDateStamp()}.jsonl`);
+let surveyFile = () => path.join(SCLASS_LOG_DIR, `survey-${londonDateStamp()}.jsonl`);
 
 function appendJsonl(file, obj, label) {
   ensureDir(path.dirname(file));
@@ -186,9 +206,9 @@ function appendJsonl(file, obj, label) {
 // decoded CLOSE/OPEN events, and emit 'barrier' for downstream consumers.
 // Bounded to areas present in config (BM). Does not touch the C-Class path.
 function handleSClass(type, msg) {
-  if (!decoder) return;
   const area = msg && msg.area_id;
-  if (!area || !decoder.hasArea(area)) return;
+  if (!area) return;
+  if (!decoder || !decoder.hasArea(area)) { handleSurvey(type, msg, area); return; }
   const addrHex = msg.address;
   const dataHex = msg.data;
   if (addrHex == null || dataHex == null) return;
@@ -217,6 +237,20 @@ function handleSClass(type, msg) {
       console.log(`S-Class ${ev.area}/${ev.crossing} ${ev.kind} (${ev.phase})${ev.recovered ? ' [recovered]' : ''} @ ${ev.ts}`);
     }
   }
+}
+
+// Survey capture for an area NOT in sclass.json: the raw message only, in the same shape as the
+// sclass-<date> log so the scan reads both alike. A no-op outside a survey window.
+function handleSurvey(type, msg, area) {
+  if (!surveyUntil || Date.now() >= surveyUntil) return;
+  if (!isValidArea(area) || msg.address == null || msg.data == null) return;
+  const fms = Number(msg.time);
+  appendJsonl(surveyFile(), {
+    ts: new Date().toISOString(),
+    feedTime: Number.isFinite(fms) && fms > 0 ? new Date(fms).toISOString() : null,
+    area, msgType: msg.msg_type || type.replace('_MSG', ''), address: msg.address, data: msg.data
+  }, 'S-Class survey log');
+  surveyLogged++;
 }
 
 // Capture a C-Class berth step for an extra (S-Class) area — e.g. BM — to a
@@ -298,7 +332,9 @@ function processMessage(body) {
   if (now - lastSummaryAt > 300000) {
     console.log(`TD listener: ${messagesReceived} msgs received, ${eventsLogged} ${areasLabel()} events logged` +
       (decoder ? `, ${cclassExtraLogged} BM C-Class + ${sclassRawLogged} S-Class raw + ${sclassEventsLogged} barrier events` : '') +
+      (surveyUntil && now < surveyUntil + 300000 ? ` + ${surveyLogged} survey` : '') +
       ` (last 5 min)`);
+    surveyLogged = 0;
     messagesReceived = 0;
     eventsLogged = 0;
     cclassExtraLogged = 0;
@@ -484,5 +520,8 @@ module.exports = {
   _connectForTest() { connect(); },
   _setCrossingAreasForTest: setCrossingAreas,
   _processMessageForTest: processMessage,
-  _setLogFilesForTest({ td, cclass }) { if (td) tdFileFor = td; if (cclass) cclassFile = cclass; }
+  _setLogFilesForTest({ td, cclass, survey }) { if (td) tdFileFor = td; if (cclass) cclassFile = cclass; if (survey) surveyFile = survey; },
+  _setSurveyUntilForTest(ms) { surveyUntil = ms; },
+  _surveyUntilFrom: surveyUntilFrom,
+  _constantsForSurveyTest: { SURVEY_MAX_DAYS }
 };
