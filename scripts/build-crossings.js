@@ -4,8 +4,9 @@
 // Generates every crossing's public files from its definition.
 //
 // A crossing is defined ONCE, in backend/config/crossings/<id>.json on the backend-v2 branch
-// (docs/crossing-definition.md). Its `presentation` block plus a few backend fields are all
-// the website needs; this script writes, for every crossing:
+// (docs/crossing-definition.md). Its `presentation` block plus a few backend fields, joined by
+// its `crossingNumber` to its row in scripts/crossing-list.csv (position, town, council, county,
+// country, Network Rail type), are all the website needs; this script writes, for every crossing:
 //
 //   <id>/index.html           the crossing's page — scripts/templates/crossing-page.html with
 //                             its title, description and link-preview tags written into the page
@@ -38,6 +39,7 @@ const SITE = 'https://railcrossing.uk';
 const DEFS_REF = 'origin/backend-v2';
 const DEFS_PATH = 'backend/config/crossings';
 const ID_RE = /^[a-z0-9][a-z0-9-]*$/;
+const LIST_PATH = path.join(ROOT, 'scripts', 'crossing-list.csv');
 
 const args = process.argv.slice(2);
 const argVal = n => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : null; };
@@ -66,7 +68,7 @@ function loadDefinitions() {
   return defs;
 }
 
-const REQUIRED = ['pageTitle', 'description', 'appName', 'appShortName', 'confidenceWindows'];
+const REQUIRED = ['appName', 'appShortName', 'stationName', 'confidenceWindows'];
 function check(id, d) {
   const p = d.presentation;
   if (!p) throw new Error(`${id}: no presentation block`);
@@ -74,29 +76,148 @@ function check(id, d) {
   for (const k of ['name', 'road', 'feedbackUrl']) if (!d[k]) throw new Error(`${id}: ${k} missing`);
 }
 
+// ---- the crossing list -----------------------------------------------------------------
+// scripts/crossing-list.csv: one row per Network Rail crossing number, edited never regenerated
+// (.claude/skills/crossing-directory-refresh). RFC 4180: quoted fields may hold commas, quotes
+// ("" inside quotes) and newlines.
+function parseCsv(text) {
+  const rows = []; let row = [], field = '', q = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) {
+      if (c === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else q = false; }
+      else field += c;
+    } else if (c === '"') q = true;
+    else if (c === ',') { row.push(field); field = ''; }
+    else if (c === '\n' || c === '\r') {
+      if (c === '\r' && text[i + 1] === '\n') i++;
+      row.push(field); field = ''; rows.push(row); row = [];
+    } else field += c;
+  }
+  if (field || row.length) { row.push(field); rows.push(row); }
+  const [head, ...body] = rows.filter(r => r.length > 1 || r[0]);
+  return body.map(r => Object.fromEntries(head.map((h, i) => [h, r[i] == null ? '' : r[i]])));
+}
+function loadList() {
+  const byNumber = {};
+  for (const r of parseCsv(fs.readFileSync(LIST_PATH, 'utf8'))) byNumber[r.uid] = r;
+  return byNumber;
+}
+
+// Every live crossing's row, by its crossing number. The build stops here rather than publish a
+// crossing whose identity is missing, unknown, excluded or shared: that is the guard that keeps a
+// list refresh from silently dropping or renumbering a live crossing.
+function joinList(defs, list) {
+  const rows = {}, seen = {};
+  for (const [id, d] of Object.entries(defs)) {
+    const n = d.crossingNumber == null ? '' : String(d.crossingNumber);
+    if (!n) throw new Error(`${id}: crossingNumber missing (its Network Rail crossing number, e.g. Portslade 1950)`);
+    const r = list[n];
+    if (!r) throw new Error(`${id}: crossing number ${n} is not in scripts/crossing-list.csv`);
+    if (r.excluded === 'yes') throw new Error(`${id}: crossing number ${n} is marked excluded in the list (${r.exclude_reason})`);
+    if (seen[n]) throw new Error(`${id}: crossing number ${n} is also used by ${seen[n]}`);
+    for (const k of ['town', 'local_authority', 'ceremonial_county', 'country', 'lat', 'lon', 'type'])
+      if (!r[k]) throw new Error(`${id}: crossing ${n} has no ${k} in the list`);
+    seen[n] = id; rows[id] = r;
+  }
+  return rows;
+}
+
+// What locals call the county: the ceremonial county in England, the council in Wales and
+// Scotland, where the ceremonial names (Clwyd, Inverness) are legal but not everyday (ticket 09).
+const countyOf = r => r.country === 'England' ? r.ceremonial_county : r.local_authority;
+// "Boundary Road, Portslade by Sea, Brighton and Hove, East Sussex": the council is shown too when
+// it differs from the county, because it is often what people search ("Brighton").
+function whereLine(road, r) {
+  const parts = [road, r.town];
+  if (r.local_authority && r.local_authority !== countyOf(r) && r.local_authority !== r.town) parts.push(r.local_authority);
+  parts.push(countyOf(r));
+  return parts.filter(Boolean).join(', ');
+}
+
+// Network Rail's type codes in plain words. A live crossing of a type not listed here stops the
+// build, so the words are written (and checked) when such a crossing launches.
+const TYPE_WORDS = {
+  'CCTV':   ['MCB-CCTV', 'Barriers lowered by a signaller watching the crossing on CCTV'],
+  'MCB/MB': ['MCB', 'Barriers lowered by a signaller who can see the crossing'],
+  'MCBR':   ['MCB-R', 'Barriers lowered by a signaller who can see the crossing'],
+  'MCBOD':  ['MCB-OD', 'Barriers lowered by the signaller, with obstacle detection checking the crossing is clear'],
+  'AHB':    ['AHB', 'Automatic half barriers, lowered by approaching trains'],
+  'AHB-X':  ['AHB', 'Automatic half barriers, lowered by approaching trains'],
+  'ABCL':   ['ABCL', 'Automatic barriers, checked by the train driver'],
+  'ABCL-X': ['ABCL', 'Automatic barriers, checked by the train driver'],
+  'AFBCL':  ['AFBCL', 'Automatic full barriers, checked by the train driver']
+};
+function typeOf(id, r) {
+  const t = TYPE_WORDS[r.type];
+  if (!t) throw new Error(`${id}: no plain-words description for Network Rail type ${r.type}; add it to TYPE_WORDS`);
+  return t;
+}
+
+// The page's own values, generated from definition + list. A definition may override the title
+// or description (presentation.pageTitle / .description) when the pattern reads badly.
+function pageFacts(id, d, r) {
+  const p = d.presentation, county = countyOf(r);
+  const [typeCode, typeWords] = typeOf(id, r);
+  return {
+    pageTitle: p.pageTitle || `${d.name}, ${d.road}: live barrier times`,
+    description: p.description ||
+      `When will the barriers at ${d.name} (${d.road}, ${r.town}, ${county}) next go down? Live predictions from train times and railway signalling.`,
+    where: whereLine(d.road, r), county, typeCode, typeWords
+  };
+}
+
+// Structured data (burger-menu ticket 12): the page is about a Place that is a level crossing
+// (schema.org has no such type; Wikidata Q171448 says it), plus the Home > crossing trail. Every
+// value is also visible on the page. `<` is escaped so no value can close the script tag.
+function jsonLd(id, d, r, f) {
+  const url = `${SITE}/${id}/`;
+  return JSON.stringify({
+    '@context': 'https://schema.org',
+    '@graph': [
+      { '@type': 'WebPage', '@id': url, url, name: f.pageTitle, description: f.description,
+        isPartOf: { '@type': 'WebSite', name: 'railcrossing.uk', url: `${SITE}/` },
+        about: { '@type': 'Place', name: d.name, additionalType: 'https://www.wikidata.org/wiki/Q171448',
+          geo: { '@type': 'GeoCoordinates', latitude: Number(r.lat), longitude: Number(r.lon) },
+          address: { '@type': 'PostalAddress', streetAddress: d.road, addressLocality: r.town,
+            addressRegion: f.county, addressCountry: 'GB' } } },
+      { '@type': 'BreadcrumbList', itemListElement: [
+        { '@type': 'ListItem', position: 1, name: 'Home', item: `${SITE}/` },
+        { '@type': 'ListItem', position: 2, name: d.name, item: url }] }
+    ]
+  }, null, 1).replace(/</g, '\\u003c');
+}
+
 // ---- outputs ---------------------------------------------------------------------------
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
-function page(id, d, template) {
-  const p = d.presentation;
+function page(id, d, r, template) {
+  const p = d.presentation, f = pageFacts(id, d, r);
   const vals = {
     id, name: d.name, road: d.road, roadLabel: p.roadLabel || d.road.toUpperCase(),
-    pageTitle: p.pageTitle, description: p.description, appShortName: p.appShortName,
-    url: `${SITE}/${id}/`
+    pageTitle: f.pageTitle, description: f.description, appShortName: p.appShortName,
+    url: `${SITE}/${id}/`, where: f.where, stationName: p.stationName,
+    typeCode: f.typeCode, typeWords: f.typeWords
   };
+  const raw = { jsonLd: jsonLd(id, d, r, f) };                   // {{{x}}}: inserted unescaped
   const body = template.replace(/^<!--[\s\S]*?-->\n/, '');     // drop the template's own header
-  return body.replace(/\{\{(\w+)\}\}/g, (m, k) => {
-    if (!(k in vals)) throw new Error(`template value {{${k}}} has no source`);
-    return esc(vals[k]);
-  });
+  return body
+    .replace(/\{\{\{(\w+)\}\}\}/g, (m, k) => {
+      if (!(k in raw)) throw new Error(`template value {{{${k}}}} has no source`);
+      return raw[k];
+    })
+    .replace(/\{\{(\w+)\}\}/g, (m, k) => {
+      if (!(k in vals)) throw new Error(`template value {{${k}}} has no source`);
+      return esc(vals[k]);
+    });
 }
 
-function manifest(id, d) {
-  const p = d.presentation;
+function manifest(id, d, r) {
+  const p = d.presentation, f = pageFacts(id, d, r);
   return `{
   "name": ${JSON.stringify(p.appName)},
   "short_name": ${JSON.stringify(p.appShortName)},
-  "description": ${JSON.stringify(p.description)},
+  "description": ${JSON.stringify(f.description)},
   "id": ${JSON.stringify(`/${id}/`)},
   "start_url": "./",
   "scope": "./",
@@ -177,13 +298,14 @@ const LIST_END = '<!-- crossings:end -->';
 // ---- main ------------------------------------------------------------------------------
 const defs = loadDefinitions();
 for (const [id, d] of Object.entries(defs)) check(id, d);
+const rows = joinList(defs, loadList());
 const template = fs.readFileSync(path.join(__dirname, 'templates', 'crossing-page.html'), 'utf8');
 
 const token = (fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8').match(/shared\/[A-Za-z0-9._-]+\.css\?v=(\d+)/) || [])[1];
 const writes = {};
 for (const [id, d] of Object.entries(defs)) {
-  writes[`${id}/index.html`] = page(id, d, template);
-  writes[`${id}/manifest.webmanifest`] = manifest(id, d);
+  writes[`${id}/index.html`] = page(id, d, rows[id], template);
+  writes[`${id}/manifest.webmanifest`] = manifest(id, d, rows[id]);
 }
 writes['shared/crossings.json'] = websiteSettings(defs);
 const landing = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');

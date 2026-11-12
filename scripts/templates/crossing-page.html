@@ -28,12 +28,15 @@
 <meta name="twitter:card" content="summary">
 <link rel="stylesheet" href="../shared/crossing.css">
 <link rel="stylesheet" href="../shared/closure-card.css">
+<script type="application/ld+json">
+{{{jsonLd}}}
+</script>
 </head>
 <body>
 <div class="wrap">
   <div class="hdr">
     <div class="hdr-text">
-      <div class="hdr-title" id="crossingName">{{name}}</div>
+      <h1 class="hdr-title" id="crossingName">{{name}}</h1>
       <div class="hdr-road" id="crossingRoad">{{road}}</div>
     </div>
     <button class="add-app-btn hidden" id="addAppBtn" onclick="addAsApp()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M12 8v6M9.5 11.5 12 14l2.5-2.5"/></svg>Add as app</button>
@@ -139,6 +142,19 @@
     <button class="show-more-btn hidden" id="showMoreBtn" onclick="showMoreClosures()">Show More</button>
   </div>
 
+  <!-- About this crossing (burger-menu ticket 12): fixed facts, written in at build time from the
+       crossing list and the definition, so search and answer engines can read them without
+       running code. The live status above stays code-driven. -->
+  <section class="section about" aria-labelledby="aboutHdr">
+    <h2 class="about-hdr" id="aboutHdr">About this crossing</h2>
+    <dl class="about-list">
+      <dt>Where</dt><dd>{{where}}</dd>
+      <dt>Nearest station</dt><dd>{{stationName}}</dd>
+      <dt>Type</dt><dd>{{typeWords}} (Network Rail type <span class="nowrap">{{typeCode}}</span>)</dd>
+      <dt>This page shows</dt><dd>When the barriers will next go down and come up, for every train, including freight and empty trains. Estimates only, not a safety system.</dd>
+    </dl>
+  </section>
+
   <div class="section">
     <div style="font-size:12px;font-weight:600;margin-bottom:6px">How It Works</div>
     <div class="info-text">
@@ -151,11 +167,12 @@
     <div style="font-size:12px;font-weight:600;margin-bottom:8px">Quick Links</div>
     <div class="setup-row">
       <a class="setup-btn" href="https://forms.gle/Tv3UcPDVcLygoG1D9" target="_blank" style="text-decoration:none">Request Your Local Crossing</a>
-      <a class="setup-btn coffee-btn" href="https://buymeacoffee.com/richardbroad29" target="_blank" style="text-decoration:none">Buy Me a Coffee</a>
+      <a class="setup-btn coffee-btn" href="https://www.gofundme.com/f/predict-level-crossing-closures-across-britain" target="_blank" rel="noopener" style="text-decoration:none">Support on GoFundMe</a>
     </div>
   </div>
 
   <div class="error hidden" id="errorBox"></div>
+  <nav class="footer-nav" aria-label="Site"><a href="/">Home</a><a href="/map/">Map</a><a href="https://forms.gle/Tv3UcPDVcLygoG1D9" target="_blank" rel="noopener">Request a crossing</a></nav>
   <div class="footer">Estimates only · Not a safety system · Always obey signals & barriers</div>
 </div>
 

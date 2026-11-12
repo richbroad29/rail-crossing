@@ -34,11 +34,12 @@ method) or is labelled a guess; and derive rather than store wherever the engine
 | `id` | The short name in the web address, `railcrossing.uk/<id>/` | `portslade` | Live |
 | `name` | Full display name | Portslade Level Crossing | Live |
 | `road` | The road that crosses the railway | Boundary Road | Live |
+| `crossingNumber` | Network Rail's crossing number (Crossing UID). Joins the crossing to its row in `scripts/crossing-list.csv`, which supplies its position, town, council, county, country and Network Rail type: never typed into the definition. The website build stops if it is missing, not in the list, excluded there, or used by another crossing | 1950 | Live (2026-11-12) |
 | `roadLabel` | Short form for the drawing of the barrier (long names clip) | BOUNDARY ROAD (from `road`) | Hard-coded |
-| `stationName` | Nearby station in words; the landing page currently shows the code "PLD" | Portslade | New |
+| `stationName` | Nearby station in words, shown in the crossing page's "About this crossing" block | Portslade | Live (2026-11-12) |
 | `listed` | Whether the crossing appears on the home page. Lets a crossing be set up before it is public | true | New (every crossing is listed) |
-| `pageTitle` | Browser tab and search result title. Must be in the page itself, because link previews don't run code | Portslade Level Crossing | Hard-coded ("Loading..." until code runs) |
-| `description` | One line for search results and link previews | — (none today) | New |
+| `pageTitle` | **Optional override.** The build generates "<name>, <road>: live barrier times"; set this only when that reads badly | — (generated: "Portslade Level Crossing, Boundary Road: live barrier times") | Live (2026-11-12) |
+| `description` | **Optional override.** The build generates "When will the barriers at <name> (<road>, <town>, <county>) next go down? Live predictions from train times and railway signalling." | — (generated) | Live (2026-11-12) |
 | `appName` | Name when added to a phone's home screen | Portslade Crossing | Live (in the page's app file) |
 | `appShortName` | Short home-screen label. Two installed crossings would both say "Crossing" today | Crossing | Live |
 | `icon`, `socialImage` | Home-screen icon; picture shown when a link is shared | shared icon; none | Live; New |

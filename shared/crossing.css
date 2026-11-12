@@ -116,3 +116,14 @@ body{background:#0F172A;color:#E2E8F0;font-family:-apple-system,BlinkMacSystemFo
 .dbg-row{color:#475569;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dbg-muted{color:#334155}
 .dbg-divider{border-top:1px solid #1E293B;margin:6px 0}
+
+/* Crossing page: the name is the page's h1 (no browser margin); About this crossing; footer links */
+h1.hdr-title{margin:0}
+.about-hdr{font-size:12px;font-weight:600;margin:0 0 8px}
+.about-list{margin:0;display:grid;grid-template-columns:auto 1fr;gap:6px 12px;font-size:11px;line-height:1.5}
+.about-list dt{color:#64748B;font-weight:600;white-space:nowrap}
+.about-list dd{margin:0;color:#CBD5E1}
+.nowrap{white-space:nowrap}
+.footer-nav{display:flex;justify-content:center;gap:18px;font-size:11px;margin:4px 0 10px}
+.footer-nav a{color:#94A3B8;text-decoration:none}
+.footer-nav a:active{color:#E2E8F0}

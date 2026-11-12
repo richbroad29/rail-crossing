@@ -1,7 +1,7 @@
 {
   "name": "Portslade Crossing",
   "short_name": "Crossing",
-  "description": "Live barrier predictions for Portslade level crossing, Boundary Road.",
+  "description": "When will the barriers at Portslade Level Crossing (Boundary Road, Portslade by Sea, East Sussex) next go down? Live predictions from train times and railway signalling.",
   "id": "/portslade/",
   "start_url": "./",
   "scope": "./",
