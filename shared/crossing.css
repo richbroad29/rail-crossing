@@ -124,6 +124,8 @@ h1.hdr-title{margin:0}
 .about-list dt{color:#64748B;font-weight:600;white-space:nowrap}
 .about-list dd{margin:0;color:#CBD5E1}
 .nowrap{white-space:nowrap}
+.about-map{display:block;margin:0 0 10px}
+.about-map img{display:block;width:100%;height:auto;border-radius:10px;border:1px solid #273449}
 .footer-nav{display:flex;justify-content:center;gap:18px;font-size:11px;margin:4px 0 10px}
 .footer-nav a{color:#94A3B8;text-decoration:none}
 .footer-nav a:active{color:#E2E8F0}

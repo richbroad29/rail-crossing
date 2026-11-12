@@ -168,8 +168,22 @@ function pageFacts(id, d, r) {
     pageTitle: p.pageTitle || `${d.name}, ${d.road}: live barrier times`,
     description: p.description ||
       `When will the barriers at ${d.name} (${d.road}, ${r.town}, ${county}) next go down? Live predictions from train times and railway signalling.`,
-    where: whereLine(d.road, r), county, typeCode, typeWords
+    where: whereLine(d.road, r), county, typeCode, typeWords, figures: figuresLine(p.figures)
   };
+}
+
+// The measured figures line (ticket 12, Rich's rounding): the closure-length interquartile range
+// to the nearest 15 s ("between 2 and 3¾ minutes"), closures per day to the nearest 5, the busiest
+// hour as measured. Empty when the definition has no presentation.figures yet.
+function minutesWords(secs) {
+  const q = Math.round(secs / 15), whole = Math.floor(q / 4), frac = ['', '¼', '½', '¾'][q % 4];
+  return whole ? `${whole}${frac}` : (frac || '0');                 // "between ¾ and 2 minutes"
+}
+function figuresLine(f) {
+  if (!f) return '';
+  const a = minutesWords(f.downP25Secs), b = minutesWords(f.downP75Secs);
+  const perDay = Math.round(f.closuresPerDay / 5) * 5;
+  return `50% of closures last between ${a} and ${b} minutes. About ${perDay} closures a day, typically ${f.busiestHour} in the busiest hour. (Recorded by this app, ${f.asOf}.)`;
 }
 
 // Structured data (burger-menu ticket 12): the page is about a Place that is a level crossing
@@ -202,9 +216,25 @@ function page(id, d, r, template) {
     id, name: d.name, road: d.road, roadLabel: p.roadLabel || d.road.toUpperCase(),
     pageTitle: f.pageTitle, description: f.description, appShortName: p.appShortName,
     url: `${SITE}/${id}/`, where: f.where, stationName: p.stationName,
-    typeCode: f.typeCode, typeWords: f.typeWords, directoryUrl: `../${directoryUrl}`, crossingNumber: d.crossingNumber
+    typeCode: f.typeCode, typeWords: f.typeWords, figures: f.figures, directoryUrl: `../${directoryUrl}`, crossingNumber: d.crossingNumber
   };
-  const raw = { jsonLd: jsonLd(id, d, r, f) };                   // {{{x}}}: inserted unescaped
+  // The local map picture, when scripts/render-local-maps.mjs has made one (ticket 12). Lazy-loaded;
+  // tapping it opens the live train map at the crossing's station.
+  let localMap = '';
+  const lmPath = path.join(ROOT, id, 'local-map.json');
+  if (fs.existsSync(lmPath) && fs.existsSync(path.join(ROOT, id, 'local-map.webp'))) {
+    const lm = JSON.parse(fs.readFileSync(lmPath, 'utf8'));
+    const near = lm.businesses.map(b => b.name);
+    const alt = `Street map of about ${lm.widthMetres} metres around ${d.name} on ${d.road}, ${r.town}` +
+      (near.length ? `, with ${andList(near)} nearby.` : '.');
+    const station = d.ldb && d.ldb.station;
+    const img = `<img src="local-map.webp" width="360" height="240" loading="lazy" decoding="async" alt="${esc(alt)}">`;
+    localMap = station
+      ? `<a class="about-map" href="/map/#s=${esc(station)}" aria-label="Open the live train map at ${esc(p.stationName)}">${img}</a>`
+      : `<div class="about-map">${img}</div>`;
+  }
+  const raw = { jsonLd: jsonLd(id, d, r, f), localMap,
+    figuresRow: f.figures ? `<dt>Closures</dt><dd>${esc(f.figures)}</dd>` : '' };                   // {{{x}}}: inserted unescaped
   const body = template.replace(/^<!--[\s\S]*?-->\n/, '');     // drop the template's own header
   return body
     .replace(/\{\{\{(\w+)\}\}\}/g, (m, k) => {

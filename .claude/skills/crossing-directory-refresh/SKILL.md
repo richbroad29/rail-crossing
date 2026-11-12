@@ -5,13 +5,14 @@ description: Keep the crossing directory current - fold a new Network Rail level
 
 # Crossing directory refresh
 
-Two checks, run together **twice a year** and **before every crossing launch**. Start B's survey
+Three checks, run together **twice a year** and **before every crossing launch**. Start B's survey
 week first; do A while it runs:
 
 - **A. Network Rail list.** Has Network Rail published a new level-crossing file? If so, fold it
   into the master crossing list and rebuild the directory.
 - **B. Barrier data.** Which signalling areas, collected or not, carry barrier up/down data?
   More areas means cheaper launches (crossing-launch, Gate 4). Needs a survey week first.
+- **C. Live crossing pages.** Re-measure each live crossing's figures and remake its local map.
 
 Words: GLOSSARY.md (Crossing number, Crossing directory, Coming-soon crossing, Live crossing).
 
@@ -105,6 +106,17 @@ ones. So the check covers areas we don't collect, with nothing to look up by han
    collection-only area in `sclass.json` (`"logRaw": "all"`, `"crossings": {}`) so its data is
    banked for good. Any Parked candidate in crossing-launch's `CANDIDATES.md` whose area gained
    candidates is due a re-check (its "re-check if S-Class coverage expands" trigger).
+
+## C. Live crossing pages
+
+Each live crossing's About block carries figures and a map picture that go stale (ticket 12):
+1. **Figures:** on the VPS, `node backend/scripts/crossing-figures.js --crossing <id> --from <4 weeks
+   ago> --to <yesterday>` (copy it to /tmp first if backend-v2 isn't deployed yet); paste the block
+   into `presentation.figures` in the definition on backend-v2, commit, push (no restart needed: the
+   backend never reads it).
+2. **Map pictures:** on the Mac, after `git fetch`, `node scripts/render-local-maps.mjs` (all live
+   crossings; opens Chrome off-screen). Look at each `<id>/local-map.webp`.
+3. `node scripts/build-crossings.js`, `--check`, screenshot one page, and ask Rich before pushing.
 
 ## Done
 

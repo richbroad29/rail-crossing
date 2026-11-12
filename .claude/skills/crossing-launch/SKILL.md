@@ -174,9 +174,25 @@ Gate 5 is `crossing-audit`'s job; hand off to it.
 
 ## Stage 7 — Launch
 
+- **Before going live** (burger-menu ticket 12; the page is generated, nothing is typed):
+  1. The definition carries `crossingNumber` (its Network Rail number; the build stops without it).
+  2. **Check its position by eye**: compare its `lat`/`lon` in `scripts/crossing-list.csv` with
+     satellite imagery and OpenStreetMap's level-crossing node. Network Rail is sometimes 80-200 m off
+     (usually at the station); correct the list, note it in `position_check`, set `hand_checked=yes`.
+  3. `presentation.stationName` set, and a plain-words entry for its Network Rail type in
+     `TYPE_WORDS` (`scripts/build-crossings.js`) if it is a type no live crossing has yet.
+  4. Its measured figures, once it has logged a few weeks: on the VPS,
+     `node backend/scripts/crossing-figures.js --crossing <id> --from <date> --to <date>`, pasted
+     into `presentation.figures`.
+  5. Its local map picture: `node scripts/render-local-maps.mjs <id>` on the Mac (opens Chrome
+     off-screen; look at `<id>/local-map.webp` before committing).
 - **Do:** set `listed: true`, push and deploy the backend, rebuild on `main`, `--check`, commit, push.
   Verify the **running** code with `.claude/skills/crossing-audit/scripts/stale-check.js`, not with
   `curl`, which bypasses the service worker.
+- **Then check what crawlers see:** `curl -s -A OAI-SearchBot https://railcrossing.uk/<id>/` must
+  show the title, the `<h1>`, the meta description and the About block without running any code.
+  (IndexNow, to tell Bing about the new page, is decided but not yet set up: it needs a key file at
+  the site root, once.)
 - **Exit:** the crossing is on the home page and in `sitemap.xml`, and the live page shows predictions.
 
 ## Stage 8 — Watch

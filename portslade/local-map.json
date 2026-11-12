@@ -1,0 +1,22 @@
+{
+  "_generated": "scripts/render-local-maps.mjs; do not edit",
+  "made": "2026-11-12",
+  "widthMetres": 400,
+  "businesses": [
+    {
+      "name": "Al Medina",
+      "kind": "shop",
+      "metres": 50
+    },
+    {
+      "name": "Cherry News",
+      "kind": "newsagent",
+      "metres": 55
+    },
+    {
+      "name": "Little Bruce Coffee",
+      "kind": "café",
+      "metres": 60
+    }
+  ]
+}
