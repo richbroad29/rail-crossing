@@ -38,7 +38,8 @@ const SCHEDULE_PAST_GRACE_MS = 10 * 60 * 1000;
 // as a no-show; a sighted train switches to sighting-based projection.
 const TD_LOCK_LEAD_MS = 60 * 1000;
 // How far a timetable entry's crossing time may be from the board's station time and still be
-// the same train when matched by HEADCODE (timetableDirection). Headcodes repeat through the
+// the same train when matched by HEADCODE (timetableDirection, and since 2026-11-12
+// _callsAtApproachStop). Headcodes repeat through the
 // day, typically hourly. 20 min is the window the 2026-11-06 measurement used (34,031 matches
 // over 179 days). UID matches are not windowed — a UID is unique to the train.
 const TIMETABLE_DIRECTION_WINDOW_MS = 20 * 60 * 1000;
@@ -1025,11 +1026,21 @@ class CrossingState {
       if (s.callsAtApproach == null) continue;
       if (t.uid && s.uid && t.uid === s.uid) return s.callsAtApproach;
     }
+    // Headcode is the fallback, and headcodes are reused through the day: take the entry nearest
+    // this train's time, within TIMETABLE_DIRECTION_WINDOW_MS, as timetableDirection does. Until
+    // 2026-11-12 this took the FIRST entry with the headcode, whenever it ran, so a train could
+    // borrow another run's calling pattern — and with it the wrong eastbound class.
     if (t.headcode) {
-      for (const s of this.scheduleTrains) {
-        if (s.callsAtApproach == null) continue;
-        if (s.headcode === t.headcode) return s.callsAtApproach;
+      const ref = t.scheduledTime || t.bestTime;
+      const atMs = ref instanceof Date ? ref.getTime() : (ref ? Date.parse(ref) : NaN);
+      const cands = this.scheduleTrains.filter(s => s.callsAtApproach != null && s.headcode === t.headcode);
+      let best = null, bestD = Infinity;
+      for (const s of cands) {
+        const est = this._scheduleTimeToDate(s.estimatedCrossingMins);
+        const d = est && Number.isFinite(atMs) ? Math.abs(est.getTime() - atMs) : (cands.length === 1 ? 0 : Infinity);
+        if (d < bestD) { bestD = d; best = s; }
       }
+      if (best && bestD <= TIMETABLE_DIRECTION_WINDOW_MS) return best.callsAtApproach;
     }
     return null;
   }

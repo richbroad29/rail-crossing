@@ -823,6 +823,24 @@ const classCfg = slotted({
   check('LDB train inherits the Southwick answer from CIF by UID', st._approachStopClass(t), 'stopping');
 }
 
+// ...and by HEADCODE only within the timetable-match window (bug d, 2026-11-12). Headcodes are
+// reused through the day; the first entry with the headcode used to answer for every run.
+{
+  const st = new CrossingState('t', classCfg);
+  const MID = BASE - 10 * 3600000;                                   // "midnight": BASE is 10:00
+  st._scheduleTimeToDate = mins => new Date(MID + mins * 60000);
+  st.scheduleTrains = [
+    { uid: 'W1', headcode: '1N61', callsAtApproach: false, callsAtStation: true, estimatedCrossingMins: 7 * 60 },
+    { uid: 'W2', headcode: '1N61', callsAtApproach: true,  callsAtStation: true, estimatedCrossingMins: 10 * 60 + 2 }];
+  const board = (ms) => ({ ...mkT({ dir: 'east', headcode: '1N61', bestTimeMs: ms }), uid: 'NOT-IN-CIF' });
+  check('headcode match takes the run nearest in time (was: the first of the day)',
+    st._callsAtApproachStop(board(BASE)), true);
+  check('...the 07:00 run still answers for itself', st._callsAtApproachStop(board(MID + 7 * 3600000 + 60000)), false);
+  check('...and a run with no entry within 20 min is unknown, not borrowed',
+    st._callsAtApproachStop(board(MID + 13 * 3600000)), null);
+  check('...which falls to stoppingLocal, the calibrated anchor', st._approachStopClass(board(MID + 13 * 3600000)), 'stoppingLocal');
+}
+
 // each class anchors to its own berth + offset
 {
   const anchored = (o, strikes) => {
