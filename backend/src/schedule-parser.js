@@ -67,11 +67,38 @@ const MIDNIGHT_WRAP_THRESHOLD_MINS = 720;
 // length 1 — an out-and-back working gives more (see the interleaved branch below). The
 // single-traversal case also keeps direction/from/to at the top level, which is what callers
 // read when they know there is only one.
+//
+// A train that STARTS or TERMINATES at the crossing's own station has no timing point on that
+// side of the crossing, so on the lists alone it is not a traversal and was dropped. Portslade
+// is the case: the crossing is at the west end of the platform, so a train starting there and
+// going west, or arriving from the west to terminate, crosses the road. `schedule.stationSide`
+// names the direction slot whose tiplocsBefore list the station counts as one of (Portslade:
+// 'west' — the station is on the side a westbound train comes from). It is consulted ONLY for
+// such a schedule, after the lists alone have found no traversal, so no through train's legs or
+// times can change. The crossing is then put at the station's own time (the leg's `atStation`),
+// since it sits at the platform end — not interpolated across the next timing point.
 function analyseRoute(locations, crossingConfig) {
+  const route = analyseSides(locations, crossingConfig, null);
+  if (route.traverses || route.ambiguous) return route;
+  const station = crossingConfig.tiploc_station, side = crossingConfig.stationSide;
+  if (!station || !side || !locations.length) return route;
+  const ends = [locations[0].tiploc_code, locations[locations.length - 1].tiploc_code];
+  if (!ends.includes(station)) return route;
+  const viaStation = analyseSides(locations, crossingConfig, { side, tiploc: station });
+  if (!viaStation.traverses) return route;
+  for (const leg of viaStation.legs) {
+    leg.atStation = leg.from.tiploc === station ? leg.from : leg.to.tiploc === station ? leg.to : null;
+  }
+  return viaStation;
+}
+
+// analyseRoute on the two lists, plus `extra` = { side, tiploc } counted on list `side`.
+function analyseSides(locations, crossingConfig, extra) {
   const before = crossingConfig.tiplocsBefore || {};
   const [dirA, dirB] = Object.keys(before);
   const setA = new Set(before[dirA] || []);    // the side a dirA train comes from
   const setB = new Set(before[dirB] || []);
+  if (extra) (extra.side === dirA ? setA : setB).add(extra.tiploc);
 
   let firstA = null, lastA = null;
   let firstB = null, lastB = null;
@@ -189,6 +216,7 @@ function analyseRoute(locations, crossingConfig) {
 // `fraction` of the way from the leg's `from` timing point to its `to`, per direction
 // (interpolation.<dir>).
 function estimateCrossingTime(leg, interpolation) {
+  if (leg.atStation) return leg.atStation.time;    // starts/terminates at the station: see analyseRoute
   const interpConfig = interpolation[leg.direction];
   if (!interpConfig) return null;
 

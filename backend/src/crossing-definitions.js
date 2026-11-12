@@ -57,6 +57,9 @@ function definitionProblems(def) {
       for (const t of before[slots[0]] || []) if (other.has(t)) problems.push(`schedule.tiplocsBefore: ${t} is on both sides`);
     }
   }
+  if (sched.stationSide !== undefined && !isSlot(sched.stationSide)) {
+    problems.push(`schedule.stationSide must be a direction slot (${slots.join(', ')}), is ${JSON.stringify(sched.stationSide)}`);
+  }
   // Every other block keyed by direction.
   const timing = def.timing || {}, pres = def.presentation || {};
   const keyed = {
