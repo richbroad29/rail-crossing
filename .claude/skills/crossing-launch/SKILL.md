@@ -191,8 +191,8 @@ Gate 5 is `crossing-audit`'s job; hand off to it.
   `curl`, which bypasses the service worker.
 - **Then check what crawlers see:** `curl -s -A OAI-SearchBot https://railcrossing.uk/<id>/` must
   show the title, the `<h1>`, the meta description and the About block without running any code.
-  (IndexNow, to tell Bing about the new page, is decided but not yet set up: it needs a key file at
-  the site root, once.)
+  Then `node scripts/indexnow.mjs /<id>/ /` tells Bing and the other IndexNow engines about the new
+  page and the homepage (Google finds it through the sitemap).
 - **Exit:** the crossing is on the home page and in `sitemap.xml`, and the live page shows predictions.
 
 ## Stage 8 — Watch

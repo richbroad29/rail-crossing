@@ -4,7 +4,7 @@ This is **Rich's** project. Rich is tech-competent but not a developer. Read thi
 
 ## What this project is
 
-A web app that predicts when UK level crossing barriers will be closed, using real-time and scheduled train data. Currently focused on the **Boundary Road** crossing in Portslade, West Sussex (an MCB-CCTV crossing on the West Coastway line). Architecture is designed to scale to additional crossings.
+A web app that predicts when UK level crossing barriers will be closed, using real-time and scheduled train data. Currently focused on the **Boundary Road** crossing in Portslade, Brighton and Hove (ceremonial county East Sussex; not West Sussex) (an MCB-CCTV crossing on the West Coastway line). Architecture is designed to scale to additional crossings.
 
 Live at: https://railcrossing.uk/
 
@@ -16,8 +16,10 @@ Goals, in order of priority:
 ## Repository layout (current `main`)
 
 ```
-index.html                       Landing page
-portslade/index.html             The actual app (Boundary Road)
+index.html                       Homepage: the crossing finder (GENERATED, see below)
+manifest.webmanifest             Homepage app file (generated)
+portslade/index.html             The actual app (Boundary Road) (GENERATED from the template)
+portslade/local-map.webp/.json   Its About-block street map (scripts/render-local-maps.mjs)
 shared/predict.js                PREDICTION CORE — shared by BOTH apps (see below)
 shared/closure-card.js           Closure card markup — shared by BOTH apps (see below)
 shared/closure-card.css          Styles for the above; loaded by both apps
@@ -26,6 +28,15 @@ shared/crossings.json            Per-crossing config (timing params, IDs, feedba
 shared/crossing.css              Styles
 shared/apps-script-feedback.gs   Copy of the Google Apps Script behind the feedback Sheet
 shared/icon-180.png, icon.svg    Icons
+shared/finder.js                 FINDING CORE — search / nearest / recents / request links, shared by menu + homepage
+shared/menu.js, menu.css         The burger menu on crossing pages
+shared/home.js, home.css         The homepage: search, Nearby, map (MapLibre, loaded after the text)
+shared/directory.json            The crossing directory: every GB road crossing (generated)
+scripts/crossing-list.csv        MASTER crossing list (Network Rail + road/town/county); edited, never regenerated
+scripts/build-crossings.js       Generates every page/file marked generated, from definitions + the list
+scripts/templates/               crossing-page.html, home-page.html
+scripts/render-local-maps.mjs    Makes each live crossing's local map picture (Mac + Chrome)
+scripts/finder-test.js           Tests for shared/finder.js against the search rules
 README.md                        Almost empty
 portslade/observe/               Barrier-observation PWA — field data-collection tool (separate app, /portslade/observe/)
 ```
@@ -119,6 +130,26 @@ side. The token makes the pairing impossible: old HTML asks for the old URL, new
 The observer PWA is deliberately **not** stamped — its service worker already fetches code with
 `cache: 'reload'` and matches its precached shell on the exact URL, so a token would miss that
 cache and break the offline launch it exists for.
+
+### Finding crossings — the directory, the menu and the homepage (live 2026-11-12)
+
+Built from the burger-menu wayfinder map (`.scratch/burger-menu/`, local only; decisions in its
+`map.md`). Words in `GLOSSARY.md` (Crossing number, Crossing directory, Coming-soon crossing).
+
+- **The master crossing list** `scripts/crossing-list.csv` is every GB road crossing from Network
+  Rail's level-crossing file, keyed by **crossing number** (Network Rail's Crossing UID; Portslade
+  1950). It is **edited, never regenerated** (the scripts that first filled road/town/county are
+  lost, and it carries hand-checked fixes). Refresh it with the `crossing-directory-refresh` skill.
+- A live crossing's definition carries its `crossingNumber`; `build-crossings.js` stops if it is
+  missing, unknown, excluded or shared. Position, town, council, county and type come from the list,
+  never the definition.
+- `shared/directory.json` (generated) feeds the menu and the homepage through **`shared/finder.js`,
+  the one implementation of search and nearest** — like predict.js, never add a second copy.
+  `node scripts/finder-test.js` checks it.
+- **`index.html` is generated whole** from `scripts/templates/home-page.html`. Edit the template.
+- **MapLibre will not draw in headless Chrome on this Mac, nor in a hidden/background tab** (2026-11-12:
+  cost an hour). To see a map: a real Chrome window off-screen driven over DevTools (as
+  `render-local-maps.mjs` does), or ask Rich to bring the Claude Chrome window to the front.
 
 ## Working from the phone or the web (cloud sessions)
 
@@ -344,7 +375,7 @@ The authoritative copy is `backend/config/crossings.json` → `td.eastbound/west
 - **NWR CORPUS** — downloaded from `https://publicdatafeeds.networkrail.co.uk/ntrod/SupportingFileAuthenticate?type=CORPUS` using the same `NR_FEED_USER`/`NR_FEED_PASS` credentials. ~770 KB gzipped, ~12.3k usable TIPLOC entries after build; stored at `~/rail-crossing/backend/data/corpus/corpus-latest.json.gz`. Used only for resolving CIF train origin/destination names — see "CIF origin/destination resolution via CORPUS" above.
 - **Google Apps Script + Sheets** — feedback collection. URL is in `crossings.json`.
 - **GoatCounter** — analytics
-- **Buy Me a Coffee** — donations
+- **GoFundMe** — donations (https://www.gofundme.com/f/predict-level-crossing-closures-across-britain; in the crossing-page and homepage templates). Replaced Buy Me a Coffee 2026-11-12.
 
 **Never commit secrets** to this repo (PATs, Cloudflare API tokens, RDM API keys, SSH keys). They go in environment files that are gitignored, or in Cloudflare/Oracle secret stores.
 
@@ -426,7 +457,7 @@ planted answer first; that is how two of its bugs were caught.
 - **Change direction detection**: it's backend-side now — `analyseRoute()` in `backend/src/schedule-parser.js` (CIF) and the LDB poller. The frontend just reads `t.direction`.
 - **Change rendering / status**: `renderClosures()`, `updateStatus()` in `shared/crossing.js` — but the values themselves come from `PREDICT.derive` in `shared/predict.js`, and the observer renders the same ones. Change the numbers in the core, the presentation in the app.
 - **Add a feedback field**: append it to the payload in `PREDICT.feedbackPayload` (or the app's `extra`), then append the same name to `FIELDS` in `shared/apps-script-feedback.gs` and paste that file over the spreadsheet's Apps Script. The header row and column count migrate themselves on the next post.
-- **Add a new crossing**: write its definition, `backend/config/crossings/<id>.json` on `backend-v2` (copy `portslade.json`; every variable is in `docs/crossing-definition.md`), then on `main` run `node scripts/build-crossings.js` (after `git fetch`). It generates `<id>/index.html` from `scripts/templates/crossing-page.html`, `<id>/manifest.webmanifest`, `shared/crossings.json`, the home-page list, `sitemap.xml` and `robots.txt`. **Never hand-edit those generated files** — edit the definition or the template and rebuild; `node scripts/build-crossings.js --check` fails if anything is out of date.
+- **Add a new crossing**: follow the `crossing-launch` skill (Stage 7 lists the page steps: crossing number, position check, figures, local map, crawler check). Write its definition, `backend/config/crossings/<id>.json` on `backend-v2` (copy `portslade.json`; every variable is in `docs/crossing-definition.md`), then on `main` run `node scripts/build-crossings.js` (after `git fetch`). It generates `<id>/index.html` from `scripts/templates/crossing-page.html`, `<id>/manifest.webmanifest`, `shared/crossings.json`, `shared/directory.json`, the homepage (`index.html`), `sitemap.xml` and `robots.txt`. **Never hand-edit those generated files** — edit the definition or the template and rebuild; `node scripts/build-crossings.js --check` fails if anything is out of date.
 - **Test changes**: open `portslade/index.html` directly in a browser (`open portslade/index.html` on macOS) — the VPS API URL is hard-coded (`API_BASE` in `shared/crossing.js`) so it works against live data.
 
 ## Recently shipped (2026-10-25 — backend `114bbe3` live 20:42 UTC, frontend `3f8cfb3`)
