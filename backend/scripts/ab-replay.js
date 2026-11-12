@@ -72,6 +72,18 @@ const toB = o => renamed(JSON.parse(JSON.stringify(o)), RENAME);
 const fromB = o => renamed(JSON.parse(JSON.stringify(o)), BACK);     // via JSON: Dates become strings first
 const silence = fn => { const w = console.warn, l = console.log; console.warn = console.log = () => {}; try { return fn(); } finally { console.warn = w; console.log = l; } };
 
+// Each engine's own headcode-class rule (src/train-type.js since 2026-11-12; before that the
+// board and timetable readers each inlined "6/7 freight, 5 ecs"), so a change to the rule is
+// replayed as the code that ships rather than as this script's copy of it.
+const typeRule = root => {
+  const f = path.join(root, 'backend/src/train-type.js');
+  if (fs.existsSync(f)) return require(f).trainTypeOf;
+  return (hc, cat) => cat === 'EE' ? 'ecs'                       // the rule as it was inlined
+    : ({ 6: 'freight', 7: 'freight', 5: 'ecs', 3: 'test' })[(hc || '').charAt(0)] || 'passenger';
+};
+const typeA = typeRule(rootA), typeB = typeRule(rootB);
+const retype = (list, rule, cat) => list.map(t => ({ ...t, trainType: rule(t.headcode, cat ? t.category : undefined) }));
+
 // ---- inputs ----
 const td = fs.readFileSync(path.join(dataDir, `td-${day}.jsonl`), 'utf8').split('\n').filter(Boolean).map(JSON.parse)
   .filter(r => r.desc && (r.event === 'CA' || r.event === 'CB'))
@@ -86,7 +98,7 @@ for (const line of fs.readFileSync(path.join(dataDir, `${day}.jsonl`), 'utf8').s
     origin: t.origin, destination: t.dest, operator: '?', scheduledTime: t.sch, bestTime: t.best,
     direction: t.dir, delayMins: t.delay || 0, isUncertain: false, timeSource: t.src || 'forecast',
     etaText: '', headcode: t.headcode, uid: null,
-    trainType: /^[67]/.test(t.headcode || '') ? 'freight' : /^5/.test(t.headcode || '') ? 'ecs' : 'passenger',
+    trainType: typeA(t.headcode),
     source: 'ldbsv', schedArr: '', schedDep: '', liveArr: '', liveDep: '', dedupKey: `${t.sch}|${t.dest}`
   })) });
 }
@@ -101,7 +113,7 @@ else {
   }
   sched = (last ? last.trains : []).map(t => { const [h, m] = t.estTime.split(':').map(Number); return {
     uid: t.uid, headcode: t.headcode, category: t.category, operator: t.operator,
-    trainType: t.category === 'EE' ? 'ecs' : /^[67]/.test(t.headcode || '') ? 'freight' : 'passenger',
+    trainType: typeA(t.headcode, t.category),
     direction: t.dir, estimatedCrossingMins: h * 60 + m, source: 'cif', legIndex: 0, legCount: 1,
     callsAtStation: null, callsAtApproach: null, runsAsRequired: false, origin: null, destination: null }; });
 }
@@ -112,7 +124,9 @@ const end = Math.min(td.length ? td[td.length - 1].ms : 0, ldb.length ? ldb[ldb.
 NOW = start;
 const a = new A('portslade', JSON.parse(JSON.stringify(def)));
 const b = new B('portslade', JSON.parse(JSON.stringify(defB)));
-silence(() => { a.updateScheduleTrains(JSON.parse(JSON.stringify(sched))); b.updateScheduleTrains(toB(sched)); });
+// A sched-<day>.json carries production's parse; a rebuilt one is retyped for B by B's rule.
+const schedB = fs.existsSync(schedFile) ? sched : retype(sched, typeB, true);
+silence(() => { a.updateScheduleTrains(JSON.parse(JSON.stringify(sched))); b.updateScheduleTrains(toB(schedB)); });
 
 let ti = 0, li = -1, ticks = 0, diffs = 0, closures = 0, held = 0, trainsCompared = 0;
 const examples = [];
@@ -122,7 +136,7 @@ for (let t = start; t <= end; t += TICK) {
   while (ti < td.length && td[ti].ms <= t) { const e = td[ti++]; a.recordTdEvent(e); b.recordTdEvent(e); }
   let changed = false;
   while (li + 1 < ldb.length && ldb[li + 1].ms <= t) { li++; changed = true; }
-  if (changed) { const tr = ldb[li].trains; silence(() => { a.updateLdbTrains(JSON.parse(JSON.stringify(tr))); b.updateLdbTrains(toB(tr)); }); }
+  if (changed) { const tr = ldb[li].trains; silence(() => { a.updateLdbTrains(JSON.parse(JSON.stringify(tr))); b.updateLdbTrains(toB(retype(tr, typeB))); }); }
   silence(() => { a._recompute(); b._recompute(); });
   const sa = norm(a.getApiState(6)), sb = norm(fromB(b.getApiState(6)));
   ticks++;

@@ -135,6 +135,14 @@ console.log('\nLDB time resolution — actual / forecast / timetable\n');
   check('  ...but the destination+time heuristic still fires with no identifiers', noIds.length, 1);
 }
 
+// ---- Train type from the headcode class (src/train-type.js; bug b, 2026-11-12) ----
+{
+  const types = board(...['4O27', '8Y91', '0Z12', '6M40', '5H97', '3S93', '1H42'].map((hc, i) =>
+    svc({ trainid: hc, uid: `W0000${i}` }))).map(t => `${t.headcode}:${t.trainType}`).join(' ');
+  check('board: 4/8/0 are freight like 6/7; 5 ecs, 3 test, 1 passenger', types,
+    '4O27:freight 8Y91:freight 0Z12:freight 6M40:freight 5H97:ecs 3S93:test 1H42:passenger');
+}
+
 console.log();
 if (fail > 0) { console.error(`${fail} FAILED, ${pass} passed`); process.exit(1); }
 else { console.log(`All ${pass} tests passed.`); }

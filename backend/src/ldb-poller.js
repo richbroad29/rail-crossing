@@ -1,6 +1,7 @@
 const https = require('https');
 const logger = require('./logger');
 const { parseLondonWallClock, londonDateStamp } = require('./time-utils');
+const { trainTypeOf } = require('./train-type');
 const { makeDirectionResolver } = require('./direction');
 const { isNonRailService } = require('./service-kind');
 
@@ -180,13 +181,7 @@ function extractTrain(svc, resolveDirection) {
     if (b2 && s2) delayMins = Math.round((b2 - s2) / 60000);
   }
 
-  let trainType = 'passenger';
-  if (trainid) {
-    const fc = trainid.charAt(0);
-    if ('67'.includes(fc)) trainType = 'freight';
-    else if (fc === '5') trainType = 'ecs';
-    else if (fc === '3') trainType = 'test';
-  }
+  const trainType = trainTypeOf(trainid);
 
   const train = {
     origin, destination: dest, operator,

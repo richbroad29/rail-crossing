@@ -5,6 +5,7 @@ const readline = require('readline');
 const path = require('path');
 const logger = require('./logger');
 const { londonMinsToDate, londonDateStamp } = require('./time-utils');
+const { trainTypeOf } = require('./train-type');
 const { resolveTiploc } = require('./corpus-fetcher');
 
 // Parse CIF time "HHMM" or "HHMMH" (H = half-minute) into minutes since midnight
@@ -216,12 +217,7 @@ function extractTrainFields(sched) {
   // flows. Significant false-positive source unless we filter or downgrade.
   const runsAsRequired = opChars.includes('Q');
 
-  // Determine train type from headcode and category
-  let trainType = 'passenger';
-  if (category === 'EE') trainType = 'ecs';
-  else if (headcode && '67'.includes(headcode.charAt(0))) trainType = 'freight';
-  else if (headcode && headcode.charAt(0) === '3') trainType = 'test';
-  else if (headcode && headcode.charAt(0) === '5') trainType = 'ecs';
+  const trainType = trainTypeOf(headcode, category);
 
   return {
     uid: sched.CIF_train_uid,
