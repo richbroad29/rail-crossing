@@ -4,7 +4,7 @@
   "_collection_note": "Areas other than BM are collection-only: logRaw:'all' with no crossings yet. They bank raw S-Class + C-Class so each barrier byte can be hunted offline (as BM/byte09/Yapton was), and emit ZERO barrier events until a crossing's byte:bit is added. Once a byte is confirmed, add its crossing block and flip that area to logRaw:'watched' to cut volume. The 12 areas are the LXG-positive describers from the Open Rail Data describer list (10 Apr 2026 snapshot): BM, X7, RT, EN, EH, HG, EK, B3, BU, Q3, Q5, EA.",
 
   "survey": {
-    "until": null,
+    "until": "2026-11-20T00:00:00Z",
     "_note": "Set until to an ISO time (e.g. \"2026-11-21T00:00:00Z\") and restart to bank raw S-Class from EVERY area in the feed, not only those below, to data/logs/sclass/survey-<date>.jsonl. Switches itself off at that time; capped at 14 days after the restart. Used by the crossing-directory-refresh skill's barrier scan to find barrier data in areas we don't collect. Leave null otherwise."
   },
 

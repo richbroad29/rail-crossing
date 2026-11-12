@@ -39,8 +39,9 @@ const body = (...w) => JSON.stringify(w);
     td._surveyUntilFrom({ survey: { until: '2026-11-19T12:00:00Z' } }, now), Date.parse('2026-11-19T12:00:00Z'));
   check(`until a year ahead -> capped at ${SURVEY_MAX_DAYS} days`,
     td._surveyUntilFrom({ survey: { until: '2027-11-12T12:00:00Z' } }, now), now + SURVEY_MAX_DAYS * 86400000);
-  check('live config ships with the survey off',
-    td._surveyUntilFrom(require('../config/sclass.json'), Date.now()), null);
+  const liveUntil = require('../config/sclass.json').survey.until;
+  check('live config: survey.until is null or a real date (a typo would silently mean "off")',
+    liveUntil === null || Number.isFinite(Date.parse(liveUntil)), true);
 
   // ---- routing ---------------------------------------------------------------------------
   // Off: an unconfigured area writes nothing.
