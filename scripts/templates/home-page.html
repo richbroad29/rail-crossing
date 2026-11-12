@@ -1,0 +1,128 @@
+<!--
+  TEMPLATE for the homepage. scripts/build-crossings.js fills the {{...}} values (HTML-escaped) and
+  {{{...}}} blocks (already HTML) and writes /index.html. Edit THIS file, never index.html.
+  Decisions: burger-menu map tickets 05 (layout), 08 (loading), 11 (copy), 06 (search).
+  Text first, map second: everything a search engine or a slow phone needs is plain HTML here;
+  shared/home.js adds search, Nearby and the map (loading MapLibre itself, after the text).
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#0F172A">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Crossings">
+<link rel="icon" type="image/svg+xml" href="shared/icon.svg">
+<link rel="apple-touch-icon" href="shared/icon-180.png">
+<link rel="manifest" href="manifest.webmanifest">
+<title>Live level crossing barrier times | railcrossing.uk</title>
+<meta name="description" content="{{description}}">
+<link rel="canonical" href="https://railcrossing.uk/">
+<meta name="crossing-directory" content="{{directoryUrl}}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="railcrossing.uk">
+<meta property="og:title" content="Live level crossing barrier times | railcrossing.uk">
+<meta property="og:description" content="{{description}}">
+<meta property="og:url" content="https://railcrossing.uk/">
+<meta property="og:image" content="https://railcrossing.uk/shared/icon-512.png">
+<meta name="twitter:card" content="summary">
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css"
+      integrity="sha384-uTttxo/aOKbdE5RlD/SPzSDoDmNvGlUYPjONi2MN/b7c9HPSvW07OIuyP7uL6jxK" crossorigin="anonymous">
+<link rel="stylesheet" href="shared/menu.css">
+<link rel="stylesheet" href="shared/home.css">
+<script type="application/ld+json">
+{{{jsonLd}}}
+</script>
+</head>
+<body>
+<div class="hp">
+  <div class="hp-mapwrap">
+    <div id="map" class="hp-map" role="region" aria-label="Map of road level crossings in Great Britain"></div>
+    <div class="hp-mapstatus" id="mapStatus">Loading map…</div>
+    <button class="add-app-btn hidden hp-app js-add-app" type="button"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M12 8v6M9.5 11.5 12 14l2.5-2.5"/></svg>Add as app</button>
+    <div class="hp-float">
+      <div class="hp-search" id="hpSearch">
+        <label class="hp-sbox" for="hpQ"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="hpQ" type="search" autocomplete="off" enterkeyhint="search" placeholder="Search crossings" aria-label="Search crossings" aria-controls="hpDD"><button class="hp-clear" id="hpClear" type="button" aria-label="Clear search" hidden><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></label>
+        <div class="hp-dd" id="hpDD" hidden></div>
+      </div>
+      <button class="hp-nearbtn" id="nearBtn" type="button"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.5" fill="currentColor"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>Show nearby crossings</button>
+    </div>
+    <div class="hp-legend"><span><i class="lg-live"></i>Live ({{liveCount}})</span><span><i class="lg-soon"></i>Coming soon ({{soonCountText}})</span></div>
+    <div id="placeCard" class="hp-place" hidden></div>
+  </div>
+
+  <div class="hp-strip" id="nearStrip" hidden><div class="hp-stripin" id="nearStripIn"></div></div>
+
+  <main class="hp-col">
+    <section class="hp-sec" id="liveList" aria-labelledby="liveHdr">
+{{{liveList}}}
+    </section>
+
+    <section class="hp-copy">
+      <h1 class="hp-h1">Know when the barriers will come down</h1>
+      <p>railcrossing.uk predicts when the barriers at a level crossing will close, and when they'll open again, for every train: passenger, freight and empty trains. It's free, works on any phone, and you can add it to your home screen like an app.</p>
+      <button class="add-app-btn hidden hp-app-inline js-add-app" type="button"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M12 8v6M9.5 11.5 12 14l2.5-2.5"/></svg>Add as app</button>
+
+      <div class="hp-qa">
+        <h2>What is railcrossing.uk?</h2>
+        <p>A free website that predicts when level crossing barriers will be down, so you can avoid waiting or plan a different route.</p>
+
+        <h2>How does it know when the barriers will close?</h2>
+        <p>It combines the train timetable, live running times from National Rail, and Network Rail's signalling data, which shows where each train is on the line. Predictions firm up as a train gets closer: from the timetable hours ahead, live times in the last two hours, then the signalling in the final few minutes.</p>
+
+        <h2>Does it include freight trains?</h2>
+        <p>Yes. Freight and empty trains aren't on station departure boards, but they still close the barriers, so they come from the timetable and are confirmed by the signalling when they're seen. Some freight trains only run when needed; those are marked "may not run" until one is seen.</p>
+
+        <h2>How accurate is it?</h2>
+        <p>The times are estimates: least certain hours ahead, most accurate in the last few minutes. If a train is held at a signal the barriers can stay down longer, and the app shows "held" rather than guessing.</p>
+
+        <h2>Which crossings are covered?</h2>
+        <p>{{liveSentence}} Every other road level crossing in Great Britain, {{soonCountText}} more, is on the map as coming soon.</p>
+
+        <h2>Can I request my crossing?</h2>
+        <p>Yes. Tap its grey dot on the map, or <a href="{{requestUrl}}" target="_blank" rel="noopener">request a crossing here</a>. Crossings with the most requests, and those where the railway publishes barrier data, are the quickest to add.</p>
+
+        <h2>Is this an official Network Rail service?</h2>
+        <p>No. railcrossing.uk is independent. It uses open data from Network Rail and National Rail, but neither runs or checks it.</p>
+
+        <h2>Is it safe to rely on?</h2>
+        <p>No. It's for planning your journey, not for safety: always obey the lights and barriers at the crossing.</p>
+
+        <h2>Is it free?</h2>
+        <p>Yes: no ads and no sign-up. If you want to contribute to the development of the project, you can contribute via our <a href="https://www.gofundme.com/f/predict-level-crossing-closures-across-britain" target="_blank" rel="noopener">GoFundMe here</a>.</p>
+
+        <h2>Can I add it as an app?</h2>
+        <p>Not yet, but you can do something just as good by adding it to your home screen: tap "Add as app" at the top of the map, or on iPhone use Share → Add to Home Screen.</p>
+      </div>
+
+      <div class="hp-request">
+        <a class="hp-btn hp-btn-primary" href="{{requestUrl}}" target="_blank" rel="noopener">Request your local crossing</a>
+        <p>Tell us which crossing you'd like next: requests help decide which crossings go live first.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="hp-foot">
+    <a href="/">Home</a><a href="/map/">Map</a><a href="{{requestUrl}}" target="_blank" rel="noopener">Request a crossing</a><a href="https://www.gofundme.com/f/predict-level-crossing-closures-across-britain" target="_blank" rel="noopener">Support on GoFundMe</a>
+    <small>Estimates only · Not a safety system · Always obey signals &amp; barriers</small>
+    <small>Crossing list: Network Rail, Open Government Licence. Road and town names © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a>; the <a href="shared/directory.json">crossing list</a> is offered under the ODbL. Contains OS data © Crown copyright and database right 2026. Built-up areas: Office for National Statistics; © Crown copyright, National Records of Scotland. Map: <a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> © OpenMapTiles.</small>
+  </footer>
+</div>
+
+<div class="hp-modal" id="appModal" hidden>
+  <div class="hp-modal-box" role="dialog" aria-modal="true" aria-labelledby="appModalTitle">
+    <h2 id="appModalTitle"></h2>
+    <div id="appModalBody"></div>
+    <button class="hp-btn hp-btn-primary" type="button" id="appModalClose">Got it</button>
+  </div>
+</div>
+
+<script src="shared/finder.js"></script>
+<script src="map/style.js"></script>
+<script src="shared/home.js"></script>
+<script data-goatcounter="https://richbroad29.goatcounter.com/count"
+        async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>

@@ -19,7 +19,8 @@
 //   shared/directory.json     the crossing directory: every road crossing in Great Britain from
 //                             scripts/crossing-list.csv (excluded rows left out), the listed live
 //                             ones carrying their page id. Read by the homepage and the menu.
-//   index.html                the home page's list of crossings, between its markers
+//   index.html                the homepage, whole, from scripts/templates/home-page.html
+//   manifest.webmanifest      the homepage's app file
 //   sitemap.xml, robots.txt   so search engines can find every listed crossing
 //
 // Asset links in generated pages carry the token already in use (read from index.html), so a
@@ -280,14 +281,74 @@ function websiteSettings(defs) {
     .replace(/\{\n\s+("q1": \d+),\n\s+("med": \d+),\n\s+("q3": \d+)\n\s+\}/g, '{$1, $2, $3}') + '\n';
 }
 
-// The home page's list, exactly as its old script built it at load time (now written into
-// the page, so it shows without code and search engines can follow the links).
-function landingList(defs) {
-  return Object.entries(defs)
-    .filter(([, d]) => d.presentation.listed !== false)
-    .map(([id, d]) => `<li><a class="crossing-link" href="${esc(id)}/"><h3>${esc(d.name)}</h3><span>${esc(d.road)} · Station: ${esc(d.ldb && d.ldb.station ? d.ldb.station : '—')}</span></a></li>`)
-    .join('');
+// ---- the homepage (burger-menu tickets 05, 08, 11) ----------------------------------------
+// Written whole from scripts/templates/home-page.html. Everything that changes with a launch or a
+// list refresh (counts, the live crossings, the sentence naming them) is filled in here, never
+// typed, so the page can't go stale.
+const REQUEST_URL = 'https://docs.google.com/forms/d/e/1FAIpQLSdlD0Bm0jzDolWCKgJ4S3d8Bu9Pa8FCF6VmENbRcHAYHqzEXQ/viewform';
+const shortName = d => d.name.replace(/\s+level crossing$/i, '');
+function inPlace(r) {           // "in Brighton and Hove (East Sussex)" / "in Gwynedd"
+  const c = countyOf(r);
+  return r.local_authority && r.local_authority !== c ? `in ${r.local_authority} (${c})` : `in ${c}`;
 }
+const andList = xs => xs.length < 2 ? xs.join('') : xs.slice(0, -1).join(', ') + ' and ' + xs[xs.length - 1];
+function homePage(defs, rows, dirText, dirUrl, template) {
+  const crossings = JSON.parse(dirText).crossings;
+  const live = Object.entries(defs).filter(([, d]) => d.presentation.listed !== false);
+  const soon = crossings.filter(e => !e.id).length;
+  const soonText = soon.toLocaleString('en-GB');
+  const liveSentence = live.length === 1
+    ? `One so far: ${live[0][1].name}, on ${live[0][1].road} ${inPlace(rows[live[0][0]])}.`
+    : `${live.length} so far: ${andList(live.map(([id, d]) => `${d.name} (${rows[id].town})`))}.`;
+  const liveAt = live.length <= 3 ? `Live at ${andList(live.map(([, d]) => shortName(d)))}` : `Live at ${live.length} crossings`;
+  const description = `See when level crossing barriers will next go down, and for how long. Free live predictions from train times and Network Rail signalling. ${liveAt}, with ${soonText} more crossings across Great Britain coming soon.`;
+  // The Live crossings list: real links in the page (crawlable; the screen-reader route), grouped by
+  // county past 20 (ticket 05). data-n lets shared/home.js filter it by the search box.
+  const rowsLive = live.map(([id, d]) => ({ id, d, r: rows[id], county: countyOf(rows[id]) }))
+    .sort((a, b) => a.county.localeCompare(b.county) || a.d.name.localeCompare(b.d.name));
+  const rowHtml = x => `<a class="pm-row pm-live" data-n="${esc(x.d.crossingNumber)}" href="/${esc(x.id)}/"><span class="pm-row-main"><span class="pm-name">${esc(x.d.name)}</span><span class="pm-sub">${esc(x.d.road)}, ${esc(x.r.town)}</span></span><span class="pm-chev" aria-hidden="true">›</span></a>`;
+  let body = '', last = null;
+  for (const x of rowsLive) {
+    if (rowsLive.length > 20 && x.county !== last) { body += `<div class="hp-county">${esc(x.county)}</div>`; last = x.county; }
+    body += rowHtml(x);
+  }
+  const liveList = `      <h2 class="hp-h2" id="liveHdr">Live crossings <span class="hp-count" id="liveCount">${live.length}</span></h2>\n` +
+    `      <div id="liveRows">${body}</div>\n      <div class="pm-note" id="liveNone" hidden></div>`;
+  const jsonLd = JSON.stringify({
+    '@context': 'https://schema.org',
+    '@graph': [
+      { '@type': 'WebSite', name: 'railcrossing.uk', url: `${SITE}/` },
+      { '@type': 'WebApplication', name: 'railcrossing.uk', url: `${SITE}/`, applicationCategory: 'TravelApplication',
+        operatingSystem: 'Any', description, areaServed: { '@type': 'Country', name: 'United Kingdom' },
+        offers: { '@type': 'Offer', price: '0', priceCurrency: 'GBP' } }
+    ]
+  }, null, 1).replace(/</g, '\\u003c');
+  const vals = { description, directoryUrl: dirUrl, liveCount: String(live.length), soonCountText: soonText,
+    liveSentence, requestUrl: REQUEST_URL };
+  const raw = { liveList, jsonLd };
+  return template.replace(/^<!--[\s\S]*?-->\n/, '')
+    .replace(/\{\{\{(\w+)\}\}\}/g, (m, k) => { if (!(k in raw)) throw new Error(`home template {{{${k}}}} has no source`); return raw[k]; })
+    .replace(/\{\{(\w+)\}\}/g, (m, k) => { if (!(k in vals)) throw new Error(`home template {{${k}}} has no source`); return esc(vals[k]); });
+}
+// The homepage's own app file, so "Add as app" can install it on Android as well as iPhone.
+const HOME_MANIFEST = `{
+  "name": "railcrossing.uk: level crossing barrier times",
+  "short_name": "Crossings",
+  "description": "When level crossing barriers will next go down, for every train.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0F172A",
+  "theme_color": "#0F172A",
+  "icons": [
+    { "src": "shared/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "shared/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "shared/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
+`;
 
 function sitemap(defs) {
   const urls = [`${SITE}/`].concat(Object.entries(defs).filter(([, d]) => d.presentation.listed !== false).map(([id]) => `${SITE}/${id}/`));
@@ -329,8 +390,6 @@ function directory(defs, rows, list) {
 const directoryVersion = text => crypto.createHash('sha1').update(text).digest('hex').slice(0, 10);
 
 const ROBOTS = `User-agent: *\nAllow: /\nSitemap: ${SITE}/sitemap.xml\n`;
-const LIST_START = '<!-- crossings:start (generated by scripts/build-crossings.js) -->';
-const LIST_END = '<!-- crossings:end -->';
 
 // ---- main ------------------------------------------------------------------------------
 const defs = loadDefinitions();
@@ -349,15 +408,14 @@ for (const [id, d] of Object.entries(defs)) {
 }
 writes['shared/crossings.json'] = websiteSettings(defs);
 writes['shared/directory.json'] = directoryText;
-const landing = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
-const a = landing.indexOf(LIST_START), b = landing.indexOf(LIST_END);
-if (a < 0 || b < a) throw new Error(`index.html: list markers not found`);
-writes['index.html'] = landing.slice(0, a + LIST_START.length) + landingList(defs) + landing.slice(b);
+const homeTemplate = fs.readFileSync(path.join(__dirname, 'templates', 'home-page.html'), 'utf8');
+writes['index.html'] = homePage(defs, rows, directoryText, directoryUrl, homeTemplate);
+writes['manifest.webmanifest'] = HOME_MANIFEST;
 writes['sitemap.xml'] = sitemap(defs);
 writes['robots.txt'] = ROBOTS;
 
 // Asset stamps: generated pages come out unstamped; give them the token already in use.
-const stamp = text => token ? text.replace(/((?:src|href)=")((?:\.\.\/)*shared\/[A-Za-z0-9._-]+\.(?:js|css))(?:\?v=[^"]*)?"/g, `$1$2?v=${token}"`) : text;
+const stamp = text => token ? text.replace(/((?:src|href)=")((?:\.\.\/)*(?:shared|map)\/[A-Za-z0-9._-]+\.(?:js|css))(?:\?v=[^"]*)?"/g, `$1$2?v=${token}"`) : text;
 for (const k of Object.keys(writes)) if (k.endsWith('.html')) writes[k] = stamp(writes[k]);
 
 let changed = 0;

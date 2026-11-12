@@ -1,0 +1,101 @@
+/* The homepage (burger-menu ticket 05, layout B "map first", v5). Rows, tags and notes come from
+   shared/menu.css, so a crossing looks the same here as in the burger menu. Dark only, like the app. */
+:root{color-scheme:dark;--bg:#0F172A;--panel:#111C33;--raise:#1E293B;--line:#273449;--fg:#E2E8F0;--dim:#94A3B8;--faint:#64748B;
+  --accent:#3B82F6;--accent-d:#2563EB;--warn:#F59E0B;--sea:#0A1222;
+  --font:-apple-system,BlinkMacSystemFont,'SF Pro',system-ui,'Segoe UI',Roboto,sans-serif}
+*{margin:0;padding:0;box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{background:var(--bg);color:var(--fg);font-family:var(--font);-webkit-font-smoothing:antialiased}
+a{color:inherit}
+button{font-family:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* the map and what floats on it */
+.hp-mapwrap{position:relative;height:clamp(420px,74svh,820px)}
+.hp-map{position:absolute;inset:0;background:var(--sea);overflow:hidden}
+.maplibregl-ctrl-attrib{background:rgba(15,23,42,.75)!important;color:var(--faint)!important;font-size:10px}
+.maplibregl-ctrl-attrib a{color:var(--dim)!important}
+.maplibregl-ctrl-attrib-button{filter:invert(1)}
+.hp-mapstatus{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:120px 24px 40px;text-align:center;color:var(--dim);font-size:14px;pointer-events:none}
+.hp-mapstatus.is-error{color:var(--warn)}
+.hp-float{position:absolute;z-index:5;top:10px;left:max(12px,env(safe-area-inset-left,0px));right:max(12px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:8px;align-items:flex-start;max-width:560px;pointer-events:none}
+.hp-float>*{pointer-events:auto}
+.hp-search{position:relative;width:100%}
+.hp-sbox{display:flex;align-items:center;gap:8px;padding:0 6px 0 14px;height:48px;border-radius:12px;background:var(--panel);border:1px solid var(--line);color:var(--dim);box-shadow:0 6px 20px rgba(0,0,0,.45)}
+.hp-sbox:focus-within{border-color:var(--accent)}
+.hp-sbox input{flex:1;min-width:0;border:0;background:transparent;color:var(--fg);font:inherit;font-size:16px;outline:none}
+.hp-sbox input::placeholder{color:var(--faint)}
+.hp-sbox input::-webkit-search-cancel-button{display:none}
+.hp-clear{width:36px;height:36px;border:0;border-radius:9px;background:transparent;color:var(--dim);cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
+.hp-dd{position:absolute;left:0;right:0;top:calc(100% + 6px);z-index:30;background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:0 18px 40px rgba(0,0,0,.5);max-height:min(62vh,520px);overflow-y:auto;padding:6px}
+.hp-ddhead{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 8px 8px 10px;font-size:12px;color:var(--dim);border-bottom:1px solid var(--line);margin-bottom:4px;position:sticky;top:-6px;background:var(--panel);z-index:1}
+.hp-linkbtn{border:0;background:transparent;color:var(--accent);font-size:12px;font-weight:700;cursor:pointer;padding:6px 4px}
+.hp-dditem{display:flex;align-items:center;gap:12px;width:100%;padding:12px;border:0;border-radius:10px;background:transparent;color:var(--fg);font-size:15px;font-weight:650;text-align:left;cursor:pointer;min-height:48px}
+.hp-dditem svg{color:var(--accent)}
+.hp-dditem:hover,.hp-dditem:active{background:var(--raise)}
+.hp-nearbtn{height:38px;padding:0 14px 0 11px;border-radius:999px;border:1px solid var(--line);background:var(--panel);color:var(--fg);font-size:13px;font-weight:650;display:inline-flex;align-items:center;gap:7px;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.4)}
+.hp-nearbtn svg{color:var(--accent)}
+/* Add as app = the map's top-right corner: level with "Show nearby crossings" on a phone, with the
+   search bar on a wide screen. Under the float, so an open dropdown covers it. */
+.add-app-btn{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;border:0;background:var(--accent);color:#fff;font-weight:650;cursor:pointer}
+.add-app-btn:active{background:var(--accent-d)}
+.add-app-btn.hidden{display:none}
+.hp-app{position:absolute;z-index:4;top:66px;right:max(12px,env(safe-area-inset-right,0px));height:34px;border-radius:17px;padding:0 14px 0 11px;font-size:12px;box-shadow:0 4px 14px rgba(0,0,0,.45)}
+@media (min-width:760px){.hp-app{top:17px}}
+.hp-app-inline{align-self:flex-start;height:40px;border-radius:20px;padding:0 16px 0 13px;font-size:14px}
+.hp-legend{position:absolute;z-index:3;left:max(12px,env(safe-area-inset-left,0px));bottom:30px;background:rgba(15,23,42,.82);border-radius:10px;padding:7px 10px;display:flex;flex-direction:column;align-items:flex-start;gap:4px;font-size:12px;color:var(--dim);pointer-events:none}
+.hp-legend i{display:inline-block;vertical-align:-1px;margin-right:6px}
+.hp-legend .lg-live{width:11px;height:11px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 2px #fff}
+.hp-legend .lg-soon{width:9px;height:9px;border-radius:50%;background:#7B8BA3;box-shadow:0 0 0 1.5px #0F172A}
+.hp-place{position:absolute;z-index:6;left:max(10px,env(safe-area-inset-left,0px));right:max(10px,env(safe-area-inset-right,0px));bottom:10px;max-width:440px;margin:0 auto;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:14px 14px 14px 16px;box-shadow:0 -6px 30px rgba(0,0,0,.55);display:flex;flex-direction:column;gap:8px;animation:hpUp .2s ease}
+@keyframes hpUp{from{transform:translateY(20px);opacity:0}}
+.hp-place-top{display:flex;align-items:flex-start;gap:10px}
+.hp-place-top div{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.hp-place-top .pm-tag{align-self:flex-start}
+.hp-place b{font-size:17px;font-style:italic;color:#CBD5E1}
+.hp-place span.s{font-size:13px;color:var(--dim);font-style:italic}
+.hp-place p{font-size:13px;color:var(--dim)}
+.hp-x{width:36px;height:36px;border:0;border-radius:9px;background:transparent;color:var(--dim);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0}
+.pin-you{width:16px;height:16px;border-radius:50%;background:#22D3EE;box-shadow:0 0 0 3px #fff,0 0 0 12px rgba(34,211,238,.22)}
+.pin-num{transform:translate(9px,-15px);width:20px;height:20px;border-radius:50%;background:#fff;color:#0F172A;font:800 11px/20px var(--font);text-align:center;box-shadow:0 2px 6px rgba(0,0,0,.6)}
+.pm-num{flex-shrink:0;width:22px;height:22px;border-radius:50%;background:#fff;color:#0F172A;font-size:12px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;font-variant-numeric:tabular-nums}
+.pm-soon .pm-num{background:#CBD5E1}
+
+/* Nearby: a swipeable strip of numbered cards under the map */
+.hp-strip{border-bottom:1px solid var(--line)}
+.hp-stripin{max-width:720px;margin:0 auto;padding:14px max(16px,env(safe-area-inset-right,0px)) 16px max(16px,env(safe-area-inset-left,0px));display:flex;flex-direction:column;gap:10px}
+.hp-cards{display:flex;gap:10px;overflow-x:auto;scroll-snap-type:x mandatory;padding-bottom:4px}
+.hp-card{flex:0 0 min(78vw,250px);scroll-snap-align:start;display:flex;flex-direction:column;gap:4px;padding:12px;border-radius:12px;background:var(--raise);border:1px solid var(--line);text-decoration:none;color:var(--fg)}
+.hp-card .row1{display:flex;align-items:center;justify-content:space-between;margin-bottom:2px}
+.hp-card .pm-tag{align-self:flex-start;margin-top:4px}
+.hp-card-live{font-size:12px;color:var(--accent);font-weight:650;margin-top:4px}
+
+/* below the map */
+.hp-col{max-width:720px;margin:0 auto;padding:22px max(16px,env(safe-area-inset-right,0px)) 0 max(16px,env(safe-area-inset-left,0px));display:flex;flex-direction:column;gap:32px}
+.hp-sec{display:flex;flex-direction:column;gap:8px}
+.hp-h2{font-size:12px;text-transform:uppercase;letter-spacing:1.2px;color:var(--dim);font-weight:650}
+.hp-count{color:var(--faint);font-weight:500;margin-left:4px;text-transform:none;letter-spacing:0}
+.hp-county{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--faint);padding:14px 12px 4px;font-weight:650}
+.hp-copy{display:flex;flex-direction:column;gap:14px;font-size:15px;line-height:1.6;color:#CBD5E1}
+.hp-h1{font-size:24px;line-height:1.25;color:var(--fg);text-wrap:balance}
+.hp-copy p{max-width:62ch}
+.hp-copy a{color:#93C5FD}
+.hp-qa{display:flex;flex-direction:column;gap:6px;border-top:1px solid var(--line);padding-top:10px}
+.hp-qa h2{font-size:16px;line-height:1.35;color:var(--fg);margin-top:14px}
+.hp-request{display:flex;flex-direction:column;gap:8px;align-items:flex-start;border-top:1px solid var(--line);padding-top:18px}
+.hp-request p{font-size:13px;color:var(--dim)}
+.hp-btn{display:inline-flex;align-items:center;justify-content:center;gap:9px;height:48px;padding:0 18px;border-radius:12px;border:1px solid var(--line);background:var(--raise);color:var(--fg);font-size:15px;font-weight:650;cursor:pointer;text-decoration:none}
+.hp-btn-wide{width:100%}
+.hp-btn-primary{background:var(--accent);border-color:var(--accent);color:#fff!important}
+.hp-btn-primary:active{background:var(--accent-d)}
+.hp-foot{border-top:1px solid var(--line);margin-top:36px;padding:18px 16px calc(28px + env(safe-area-inset-bottom,0px));display:flex;flex-wrap:wrap;justify-content:center;gap:6px 22px;font-size:13px}
+.hp-foot a{color:var(--dim);text-decoration:none}
+.hp-foot small{flex-basis:100%;text-align:center;color:var(--faint);font-size:11px;line-height:1.5;margin-top:6px;max-width:640px}
+.hp-foot small a{text-decoration:underline}
+
+/* the Add as app instructions */
+.hp-modal{position:fixed;inset:0;z-index:50;background:rgba(2,6,23,.7);display:flex;align-items:center;justify-content:center;padding:20px}
+.hp-modal-box{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:20px;max-width:380px;width:100%;display:flex;flex-direction:column;gap:12px;font-size:14px;line-height:1.5;color:#CBD5E1}
+.hp-modal-box h2{font-size:17px;color:var(--fg)}
+.hp-modal-box ol{padding-left:20px;display:flex;flex-direction:column;gap:6px}
+@media (prefers-reduced-motion:reduce){.hp-place{animation:none}}

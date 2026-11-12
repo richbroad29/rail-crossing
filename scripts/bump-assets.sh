@@ -31,7 +31,8 @@ TOKEN=${1:-$(date -u +%Y%m%d%H%M)}
 # calls initCrossing). Found rather than listed, so a new crossing can't be left unstamped.
 FILES="index.html $(grep -l 'initCrossing(' */index.html | tr '\n' ' ')"
 
-perl -pi -e "s{((?:src|href)=\")((?:\.\./)*shared/[A-Za-z0-9._-]+\.(?:js|css))(?:\?v=[^\"]*)?\"}{\$1\$2?v=$TOKEN\"}g" $FILES
+# shared/… plus map/… : the homepage also loads map/style.js (the map's look, shared with /map).
+perl -pi -e "s{((?:src|href)=\")((?:\.\./)*(?:shared|map)/[A-Za-z0-9._-]+\.(?:js|css))(?:\?v=[^\"]*)?\"}{\$1\$2?v=$TOKEN\"}g" $FILES
 
 # The live train map (map/) keeps its code beside its page, so its tags name a bare file
 # (geo.js, api.js, map.css), not shared/…. Same-directory names only: anything with a slash
@@ -40,5 +41,5 @@ MAP_FILES="map/index.html"
 perl -pi -e "s{((?:src|href)=\")([A-Za-z0-9_-]+\.(?:js|css))(?:\?v=[^\"]*)?\"}{\$1\$2?v=$TOKEN\"}g" $MAP_FILES
 
 echo "asset token -> $TOKEN"
-grep -hoE '(src|href)="(\.\./)*shared/[A-Za-z0-9._-]+\.(js|css)\?v=[0-9]+"' $FILES | sort -u
+grep -hoE '(src|href)="(\.\./)*(shared|map)/[A-Za-z0-9._-]+\.(js|css)\?v=[0-9]+"' $FILES | sort -u
 grep -hoE '(src|href)="[A-Za-z0-9_-]+\.(js|css)\?v=[0-9]+"' $MAP_FILES | sort -u
