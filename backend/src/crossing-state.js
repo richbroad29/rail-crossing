@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const logger = require('./logger');
-const { londonMinsToDate } = require('./time-utils');
+const { londonMinsToDate, serviceDayStamp } = require('./time-utils');
 
 // Measured berth→berth transits (scripts/derive-transits.js). Purely empirical: no close
 // or open offsets are baked in, so recalibrating an offset or re-anchoring a class needs
@@ -194,7 +194,7 @@ class CrossingState {
     // a sighting is a definitive "this train is actually running today" signal
     // — used to upgrade Q-freight predictions from "may not run" to confirmed.
     this.tdSeenToday = new Map();
-    this.tdSeenDay = null; // ISO date string for which tdSeenToday applies
+    this.tdSeenDay = null; // railway day (time-utils serviceDayStamp) for which tdSeenToday applies
 
     // headcode → { ts(ms), direction } of the train's most recent CROSSING CLEAR
     // step (config td.<dir>.clear). Drives TD-triggered open: a period's end is
@@ -319,7 +319,11 @@ class CrossingState {
     if (!headcode) return;
     const ts = when instanceof Date ? when : new Date(when);
     if (!Number.isFinite(ts.getTime())) return;
-    const day = ts.toISOString().slice(0, 10);
+    // The railway day (time-utils serviceDayStamp: London, turning over at 03:00). Was the UTC
+    // date until 2026-11-12 — a 00:00 turnover in winter, which let the last trains of the
+    // evening, still stepping after midnight, mark their own headcode's run the next evening
+    // as already seen (and in summer a 01:00 turnover, by accident of BST).
+    const day = serviceDayStamp(ts);
     if (this.tdSeenDay !== day) {
       this.tdSeenToday.clear();
       this.tdSeenDay = day;
@@ -357,7 +361,7 @@ class CrossingState {
         const dir = this._matchClearStep(e.from, e.to);
         if (dir) this._noteCrossingMade(e.headcode, dir, ts.getTime());
       }
-      const day = ts.toISOString().slice(0, 10);
+      const day = serviceDayStamp(ts);                 // the railway day, as recordTdSighting
       if (this.tdSeenDay !== day) { this.tdSeenToday.clear(); this.tdSeenDay = day; }
       if (this.tdSeenToday.has(e.headcode)) continue;
       this.tdSeenToday.set(e.headcode, ts);

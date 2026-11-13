@@ -1340,6 +1340,32 @@ console.log('  -- restart: seeded sightings --');
   check('seeding is idempotent', seeded.seedSightings([{ headcode: '1H90', ts: new Date(T).toISOString() }]), 0);
 }
 
+// ---- "Seen today" is the railway day: London, turning over at 03:00 (bug a, 2026-11-12) ------
+// Was the UTC date: a midnight turnover in winter, 01:00 in summer. At midnight the last trains of
+// the evening are still stepping through the berths, and their step became the new day's "first
+// sighting" of a headcode that runs again that evening (2T92: crosses 23:49, steps until 00:13).
+console.log('  -- seen today: railway day --');
+{
+  for (const [season, evening, after, early, morning] of [
+    ['BST', '2026-10-07T22:49:00Z', '2026-10-07T23:13:00Z', '2026-10-08T01:30:00Z', '2026-10-08T02:10:00Z'],
+    ['GMT', '2026-11-04T23:49:00Z', '2026-11-05T00:13:00Z', '2026-11-05T02:30:00Z', '2026-11-05T03:10:00Z']]) {
+    const st = new CrossingState('t', cfg);
+    st.recordTdSighting('2T92', new Date(evening));   // 23:49 London, crossing
+    st.recordTdSighting('2T92', new Date(after));     // 00:13 London, still stepping
+    check(`${season}: a step after midnight is still the evening's run`,
+      st.tdSeenToday.get('2T92').toISOString(), new Date(evening).toISOString());
+    st.recordTdSighting('5T97', new Date(early));     // 02:30 London
+    check(`${season}: ...and so is anything before 03:00`, st.tdSeenToday.has('2T92'), true);
+    st.recordTdSighting('1N02', new Date(morning));   // 03:10 London: the new day
+    check(`${season}: 03:00 London starts the new day`, st.tdSeenToday.has('2T92'), false);
+    check(`${season}: ...stamped with its London date`, st.tdSeenDay, morning.slice(0, 10));
+
+    const seed = new CrossingState('t', cfg);          // the boot path, same rule
+    seed.seedSightings([after, early, morning].map((ts, i) => ({ headcode: ['2T92', '5T97', '1N02'][i], ts })));
+    check(`${season} seed: keeps only the railway day`, [...seed.tdSeenToday.keys()].join(','), '1N02');
+  }
+}
+
 // ---- _classOf: one definition of the class discriminator -------------------------------
 // It used to be inlined in _transit while _closeAnchor called _eastClass — two copies that
 // could drift. These assert they agree, and that the live feed reports the same label the

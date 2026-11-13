@@ -93,12 +93,31 @@ function londonMinsToDate(mins) {
 }
 
 /**
- * Return today's date as "YYYY-MM-DD" in Europe/London (not UTC).
- * Differs from new Date().toISOString().slice(0,10) during BST 00:00–01:00.
+ * The London calendar date ("YYYY-MM-DD") of `d` (default now), not UTC.
+ * Differs from d.toISOString().slice(0,10) during BST 00:00–01:00.
  */
-function londonDateStamp() {
-  const p = londonParts(new Date());
+function londonDateStamp(d = new Date()) {
+  const p = londonParts(d);
   return `${p.year}-${p.month}-${p.day}`;
 }
 
-module.exports = { parseLondonWallClock, londonMinsToDate, londonDateStamp, shiftDateStamp };
+// The railway day a moment belongs to, as "YYYY-MM-DD": the London date, except that the hours
+// before SERVICE_DAY_START_HOUR London still count as the previous day. Used for "which trains
+// has the signalling feed seen today" (crossing-state tdSeenToday).
+//
+// Why not midnight: the last trains of the evening are still stepping through the berths after
+// midnight. Counted as the NEW day's first sighting, that step marks the same headcode's run later
+// in the new day as already seen hours ago, and the timetable entry for it is then dropped as
+// long gone. Measured over 177 days of Portslade TD (2026-05-16..11-12), counting the previous
+// evening's trains that step after the boundary and are timetabled again the next day:
+// 344 with the boundary at 00:00 London, 3 at 01:00, 2 from 02:30 to 04:00 (both a freight that
+// genuinely ran at 04:30). 03:00 sits in the quiet hours, after the last of them and before the
+// 04:00 timetable refresh.
+const SERVICE_DAY_START_HOUR = 3;
+function serviceDayStamp(d = new Date()) {
+  const p = londonParts(d);
+  const date = `${p.year}-${p.month}-${p.day}`;
+  return +p.hour < SERVICE_DAY_START_HOUR ? shiftDateStamp(date, -1) : date;
+}
+
+module.exports = { parseLondonWallClock, londonMinsToDate, londonDateStamp, shiftDateStamp, serviceDayStamp, SERVICE_DAY_START_HOUR };

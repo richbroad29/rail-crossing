@@ -6,7 +6,7 @@
 //
 // All assertions must pass under each. The suite exits 1 on any failure.
 
-const { parseLondonWallClock, londonMinsToDate, londonDateStamp } = require('../src/time-utils');
+const { parseLondonWallClock, londonMinsToDate, londonDateStamp, serviceDayStamp } = require('../src/time-utils');
 
 let pass = 0, fail = 0;
 
@@ -137,6 +137,25 @@ console.log('\nlondonDateStamp\n');
   // Must match what Intl says today is in London
   const expected = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/London' }).format(new Date());
   check('londonDateStamp matches Intl en-CA Europe/London', stamp, expected);
+}
+
+// ---- serviceDayStamp: London, turning over at 03:00 ----
+console.log('\nserviceDayStamp\n');
+{
+  const sd = iso => serviceDayStamp(new Date(iso));
+  check('BST 23:59 London is that day', sd('2026-10-07T22:59:00Z'), '2026-10-07');
+  check('BST 00:13 London is still the previous day', sd('2026-10-07T23:13:00Z'), '2026-10-07');
+  check('BST 02:59 London is still the previous day', sd('2026-10-08T01:59:00Z'), '2026-10-07');
+  check('BST 03:00 London is the new day', sd('2026-10-08T02:00:00Z'), '2026-10-08');
+  check('GMT 02:59 London is still the previous day', sd('2026-11-05T02:59:00Z'), '2026-11-04');
+  check('GMT 03:00 London is the new day', sd('2026-11-05T03:00:00Z'), '2026-11-05');
+  check('month/year rollover', sd('2027-01-01T01:00:00Z'), '2026-12-31');
+  // Clock-change nights (2026-10-25 back, 2027-03-28 forward): 03:00 London is a single instant
+  check('autumn change: 02:59 GMT still the previous day', sd('2026-10-25T02:59:00Z'), '2026-10-24');
+  check('autumn change: 03:00 GMT the new day', sd('2026-10-25T03:00:00Z'), '2026-10-25');
+  check('spring change: 01:59 UTC = 02:59 BST still the previous day', sd('2027-03-28T01:59:00Z'), '2027-03-27');
+  check('spring change: 02:00 UTC = 03:00 BST the new day', sd('2027-03-28T02:00:00Z'), '2027-03-28');
+  check('spring change: 00:59 UTC = 00:59 GMT the previous day', sd('2027-03-28T00:59:00Z'), '2027-03-27');
 }
 
 // ---- Summary ----
