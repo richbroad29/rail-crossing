@@ -248,7 +248,7 @@ spends ~100 KB. If that ever needs fixing, the train objects are the place — t
 `etaText`, `confidence`, `recentRunSeen` and `recentRunApplicable`, none of which either
 front-end reads.
 
-The frontend polls `GET /crossing/portslade` and renders the backend's **pre-computed** closure periods verbatim (`buildClosuresFromVps()` in `shared/crossing.js` — maps `start`/`end` to Dates and attaches only the client-side confidence window). This is deliberate: the backend owns the authoritative timing, including the TD **clear-step-anchored OPEN** and **hold-until-cleared** behaviour, which the client can't reproduce (it has only each train's `bestTime`, not the berth-step feed). There is no client-side fallback — the frontend always renders the backend's periods (`buildClosuresFromVps([])` is a no-op when the backend sends none). **Consequence:** `closeBefore`/`openAfter`/`openLagSecs` are tuned **backend-side** now (`backend/config/crossings.json` on `backend-v2` + a deploy); the `shared/crossings.json` copies feed only the client-side confidence-window / debug-panel display. Renders a state (`OPEN`, `CLOSING_SOON`, `CLOSED`).
+The frontend polls `GET /crossing/portslade` and renders the backend's **pre-computed** closure periods verbatim (`buildClosuresFromVps()` in `shared/crossing.js` — maps `start`/`end` to Dates and attaches only the client-side confidence window). This is deliberate: the backend owns the authoritative timing, including the TD **clear-step-anchored OPEN** and **hold-until-cleared** behaviour, which the client can't reproduce (it has only each train's `bestTime`, not the berth-step feed). There is no client-side fallback — the frontend always renders the backend's periods (`buildClosuresFromVps([])` is a no-op when the backend sends none). **Consequence:** `closeBefore`/`openAfter`/`openLagSecs` are tuned **backend-side** now (`backend/config/crossings/<id>.json` on `backend-v2` + a deploy); the `shared/crossings.json` copies feed only the client-side confidence-window / debug-panel display. Renders a state (`OPEN`, `CLOSING_SOON`, `CLOSED`).
 
 **TLS** is auto-provisioned by Caddy via Let's Encrypt (HTTP-01 challenge). The DuckDNS subdomain (`railcrossing.duckdns.org`) is kept alive by a cron on the VPS that hits the DuckDNS update endpoint every 5 minutes. The DuckDNS token lives in that crontab.
 
@@ -360,7 +360,7 @@ Verified from SMART data. Berths are stored in TD events **without** the area pr
 - Eastbound: approach `0006` → protecting `0004` → clear `0002`
 - Westbound: approach `0003` → protecting `0005` → clear `0007`
 
-The authoritative copy is `backend/config/crossings.json` → `td.eastbound/westbound` (`approach`, `clear`) on `backend-v2`. The frontend `shared/crossings.json` used to carry a `berths` duplicate that nothing read; it was deleted 2026-11-06 (multi-crossing Phase A step 3) so it can't drift.
+The authoritative copy is `backend/config/crossings/portslade.json` → `td.east` / `td.west` (`approach`, `clear`) on `backend-v2`. The frontend `shared/crossings.json` used to carry a `berths` duplicate that nothing read; it was deleted 2026-11-06 (multi-crossing Phase A step 3) so it can't drift.
 
 ## External services and credentials
 
@@ -452,7 +452,7 @@ planted answer first; that is how two of its bugs were caught.
 
 ## Common tasks — quick reference
 
-- **Tweak timing parameters**: edit `backend/config/crossings.json` on `backend-v2` (`closeBefore` / `openAfter` / `openLagSecs` / `closeTrigger`) and deploy — the frontend renders the backend's closures. (`shared/crossings.json` feeds only the client-side confidence-window / debug-panel display.)
+- **Tweak timing parameters**: edit `backend/config/crossings/<id>.json` on `backend-v2` (`closeBefore` / `openAfter` / `openLagSecs` / `closeTrigger`) and deploy — the frontend renders the backend's closures. (`shared/crossings.json` feeds only the client-side confidence-window / debug-panel display.)
 - **Change closure logic**: backend `_computeClosures()` / `_anchorEndToClearStep()` in `backend/src/crossing-state.js` (authoritative); frontend just maps them via `buildClosuresFromVps()` in `shared/crossing.js`.
 - **Change direction detection**: it's backend-side now — `analyseRoute()` in `backend/src/schedule-parser.js` (CIF) and the LDB poller. The frontend just reads `t.direction`.
 - **Change rendering / status**: `renderClosures()`, `updateStatus()` in `shared/crossing.js` — but the values themselves come from `PREDICT.derive` in `shared/predict.js`, and the observer renders the same ones. Change the numbers in the core, the presentation in the app.

@@ -1,7 +1,10 @@
 # The crossing definition — every variable a crossing has
 
-**Status:** 2026-11-06. The layout below is built (one definition file per crossing, generated pages);
-most variables in the tables are not yet wired up — see the Status column.
+**Status:** re-checked against the code 2026-11-13 (backend-v2 `f6f1788`, main `73d8a31`). The layout
+below is built (one definition file per crossing, generated pages), the close algorithm is one for both
+directions, and the direction slots are named by the definition. About 30 variables are still
+Hard-coded to Portslade's value — see the Status column. Each one is work only if a new crossing needs a
+different value; the crossing-launch skill's "Code readiness" step lists them per candidate.
 **Worked example:** Portslade (Boundary Road). Every row gives Portslade's value.
 
 This is the complete list of what makes one level crossing different from another, as far as this app
@@ -276,23 +279,24 @@ Timings: `backend/data/transits.json`, generated 2026-07-26; queued cells 2026-1
 
 ## 8. When the barriers come down
 
-Per direction. At Portslade the two directions run **different code**, for historical reasons rather
-than geography (decision 2).
+Per direction. One close algorithm serves both directions since 2026-11-06 (backend-v2 `b50eb87`,
+decision 2): where Portslade's two directions differ, it is because their settings differ, not their
+code. Proven by replay: 4 days, 2.78M per-train predictions, 0 differences.
 
 | Variable | What it means | Portslade east | Portslade west | Status |
 |---|---|---|---|---|
-| `close.crossingLeadSecs` | Barriers down → train on the road. The one number to calibrate; the per-class settings follow from it | (stored per class instead) | 92 | Partial (west only) |
+| `close.crossingLeadSecs` | Barriers down → train on the road. The one number to calibrate; each class's offset is then worked out from the measured berth timings. A direction may instead give each class its own offset | (offsets stored per class instead) | 92 | Live (either style, per direction) |
 | `close.classes.<c>.berth` | The berth whose step triggers the countdown for that class | stopping 0008, stoppingLocal 0006, fast 0008, empty 0008, freight 0006 | stopping 0003, freight 0003, empty 0001, fast 0001 | Live |
 | `close.classes.<c>.offsetSecs` | Seconds after that step that the barriers come down (west works this out from the lead) | 55, 100, 20, 85, 20 | worked out | Live |
-| `close.preStrikeLeadSecs` | Before the train reaches the berths: how far ahead of the timetable time to predict the close, separately for board times and timetable times | 180 for both | 46 (board departure), 92 (timetable) | Partial (east doesn't split) |
-| `close.minAfterStrikeSecs` | Never predict a close sooner than this after the step that triggered it | — (not applied) | 10 | Partial (west only) |
+| `close.preStrikeLeadSecs` | Before the train reaches the berths: how far ahead of the board or timetable time to predict the close. Either one lead for both (`predictedLeadSecs`), or a board lead (`predictedDepartureLeadSecs`) and a timetable lead (`crossingLeadSecs`) | 180 for both | 46 (board departure), 92 (timetable) | Live (either style, per direction) |
+| `close.minAfterStrikeSecs` | Never predict a close sooner than this after the step that triggered it | — (not set) | 10 | Live (per direction) |
 | `close.safetyNetSecs` | Fallback when no berth step is seen | 145 | 90 | Live |
 | `close.confirmedMayFollowPredicted` | Let the confirmed BARRIERS DOWN come after the predicted moment | true | — | Live |
 | `close.unseenFloorSecs` | Last-resort close for a train never seen and with no fallback | 60 | 60 | Hard-coded |
 | `queue.maxAhead` | How near a train ahead must be to count as queuing this one (in berths) | 2 | 2 | Live |
 | `queue.exemptClasses` | Classes a train ahead doesn't delay | stoppingLocal | — | Live |
 | `queue.estimate` | Count down a queued train from its own measured times | on | off | Live |
-| `queue.hold` | Show "Train held" while the train ahead hasn't cleared | on | **off (by code, not setting)** | Hard-coded |
+| `queue.hold` | Show "Train held" while the train ahead hasn't cleared (`td.<d>.queueHold`) | on | off (not set) | Live |
 | `queue.gate` | Don't confirm BARRIERS DOWN for a queued train early | on | on | Hard-coded |
 | `queue.protectingLagSecs` | Delay after a queued train reaches the last berth | 0 (uncalibrated) | 0 | Hard-coded |
 | `transits` | Measured berth → crossing times per class, from the logs (`backend/data/transits.json`) | generated | generated | Live |
@@ -337,15 +341,29 @@ than geography (decision 2).
 | `confidenceWindows` | The ± shown on a countdown at each stage | timetable 120, board 90, approach berth 60, last berth 30 | Live |
 | `confidenceWindows.boardHorizonSecs` | How far out the board's ± applies | 300 | Hard-coded |
 | `closingSoonSecs` | How early the amber "closing soon" starts. Set separately in the backend and the website today | 90 | Hard-coded (two copies) |
-| `chain` | Berths drawn on position labels, with typical times to the crossing | 11 east, 12 west | Live (moved to settings 2026-11-06) |
+| `chain` | Berths drawn on position labels, with typical times to the crossing | 11 east, 12 west | Live (moved to settings 2026-11-06) — see note below |
+
+**Note on `chain` (2026-11-13).** Only two things read it: the "Help improve accuracy" train picker,
+hidden on the public page since 2026-11-06, and the internal observer app. Nothing the public sees
+depends on it; every countdown and closure on the page comes from the backend. Its times are one pooled
+median per berth, copied by hand from a July derivation, while the backend uses per-class times from
+the measured file (e.g. eastbound 0006: chain 206 s; backend fast 96 s, stopping 111 s, Southwick
+callers 246 s). Even in the picker, a train matched to a closure is timed by the backend; the chain
+time is only the fallback for an unmatched train. So for a new crossing the chain can be left out
+unless the picker is turned back on, and replacing it with the backend's numbers waits until then.
 
 ---
 
 ## Not per crossing (site-wide)
 
-Website address, API address, the "request a crossing" and "share feedback" forms, the Buy Me a
-Coffee link, analytics, how often the page refreshes, time formatting, and the feed-health thresholds.
+Website address, API address, the "request a crossing" and "share feedback" forms, the GoFundMe
+link, analytics, how often the page refreshes, time formatting, and the feed-health thresholds.
 These stay in the shared code.
+
+Also site-wide, because they are facts about a train rather than a crossing: replacement buses and
+ships are never closures (`src/service-kind.js`, 2026-11-11), and which version of a train runs today
+(normal, replacement, cancelled) is to be decided once per train before any crossing looks at it — see
+"Found since" below.
 
 ## Bugs found on the way
 
@@ -368,15 +386,26 @@ Portslade then; they matter for other crossings. 1 shipped the next day in a dif
 5. **A train that starts or terminates at Portslade and crosses on its way was missed.** Fixed
    (`94d3084`) with `schedule.stationSide`; see §5 for its limits.
 
+### Found since (not in the approved five)
+
+- **Replacement buses shown as closures.** Fixed (`30c8a8a`, 2026-11-11): buses and ships are dropped
+  at every crossing, after the timetable versions are merged so a bus still cancels the train it replaces.
+- **A train that ran early lost its closure** (the early-leg strike bug). Fixed (`6730262`, 2026-11-13).
+- **Planned cancellations are ignored.** A cancellation record lists no stations, and a replacement
+  timetable that doesn't pass the crossing is dropped the same way, both before the reader picks which
+  version of the train runs. So the cancelled train's normal timetable survives as a phantom closure
+  (28 a night in the week of 9 Nov, 211 on Saturday 7 Nov). Built and unit-tested 2026-11-13, being
+  measured by replay; **not live**.
+
 ## Decisions needed
 
 1. **Direction names.** DECIDED 2026-11-07, DONE 2026-11-12: neither. The definition names its own two
    slots and the code reads them from there (section 3), so Portslade keeps `east`/`west` and its API
    and logs are unchanged, while a new crossing can use `up`/`down` or anything else.
-2. **One close algorithm.** East and west run different code paths at Portslade (queue hold, minimum
-   after the step, board-vs-timetable leads). Merge them into one, driven by the settings above, with
-   Portslade's current behaviour as its settings — provable by replay as before.
-3. **Where the definition lives.** See below.
+2. **One close algorithm.** DONE 2026-11-06 (`b50eb87`): east and west now run one algorithm, and
+   their differences (queue hold, minimum after the step, board-vs-timetable leads) are settings in §8.
+   Replay over 4 days: 0 differences at Portslade.
+3. **Where the definition lives.** DONE 2026-11-06, as laid out below.
 
 ## Proposed layout
 

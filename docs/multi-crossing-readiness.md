@@ -5,17 +5,41 @@ change before a second crossing can be added, and how much of the code can be sh
 
 This is an assessment, not a change.
 
-**Status (2026-11-06): Phase A is done.** Step 1 = backend-v2 `3dbfef0` (each crossing takes TD events only
-from its own `td.area`); step 2 = `f2e9e10` (C-Class areas from config, `src/td-paths.js`: LA keeps
-`data/logs/td/`, other areas write `data/logs/td/<AREA>/`); step 3 = `berths` deleted from
-`shared/crossings.json`. Each was proven to make no change at Portslade.
+## Where it stands (2026-11-13)
 
-**Phase B, 2026-11-06:** item 6 done on `main` — the berth chain (and the observer's off-chain ETAs) moved verbatim
-from `predict.js`/`observe.js` into `shared/crossings.json` (`chain`, `offChainEta`), loaded via `PREDICT.setChain`.
-The values were moved, not recomputed from `transits.json`, so Portslade is unchanged; serving them from the backend
-is still open. Item 4 done on `backend-v2` `77cfe8c` (direction from timetable, then per-crossing place lists, Up/Down
-recorded per direction). Item 5 deprioritised: berth strikes drive close/open once a train is on the chain, so the
-arrival/departure anchor only affects far-out predictions.
+Everything below the line is the 2026-09-19 assessment, kept as written; its file and line references
+are out of date. Item numbers are from *Recommended sequence*. Every step that was meant to leave
+Portslade unchanged was proven so by replaying real logs through old and new code.
+
+| # | Item | State |
+|---|---|---|
+| 1 | Each crossing takes TD events only from its own area | **Done** — backend-v2 `3dbfef0` |
+| 2 | TD areas from config; logs partitioned by area | **Done** — `f2e9e10` (`src/td-paths.js`: LA keeps `data/logs/td/`, other areas `data/logs/td/<AREA>/`) |
+| 3 | Delete `berths` from the website settings | **Done** — main, 2026-11-06 |
+| 4 | Berth chain out of `predict.js` | **Done differently** — the chain and the observer's off-chain times moved verbatim into the crossing's definition (`presentation.chain`, `offChainEta`), generated into `shared/crossings.json`. Not derived from the measured timings, and that is now **parked**: only the hidden feedback picker and the observer read it (see the note under §13 of `crossing-definition.md`) |
+| 5 | Arrival/departure anchor as a setting | **Done** — `directions.<d>.boardTime` (2026-11-12) plus one close algorithm whose leads are per-direction settings (`b50eb87`, 2026-11-06) |
+| 6 | Replace the Sussex place-name list | **Done** — `77cfe8c`: timetable first, then per-crossing `placesBeyond`, else unknown, never a default |
+| 7 | Repeatable barrier-episode derivation (generalise Yapton) | **Not started.** Rich, 2026-11-06: the calibration tools (`derive-transits.js`, `lib/td-runs.js`, `derive-ttc.js`, all still Portslade-only) are to be **rewritten from scratch**. This blocks calibrating crossing #2 |
+| 8 | Byte-hunt tooling | **Built** — `barrier-bit-scan.js` in the `crossing-directory-refresh` skill (2026-11-12); finds Yapton's known byte. An all-area survey runs to 2026-11-20; the scan over it is due from 2026-11-21, and its shortlist is unproven until checked |
+| 9 | One app shell | **Done differently** — every crossing page is generated from one template by `scripts/build-crossings.js` (2026-11-06) |
+| 10 | Observer `CROSSING_ID` from the URL | **Dropped** — Rich: the observer stays a Portslade-only internal tool |
+
+Also done since the assessment, not in its list: one definition file per crossing
+(`backend/config/crossings/<id>.json`); the direction slots named by the definition rather than the code
+(2026-11-12); the five Portslade bugs found while listing the definition's variables (2026-11-12/13);
+replacement buses never shown as closures at any crossing (`30c8a8a`).
+
+**Still to do before crossing #2:**
+
+1. **Pick the crossing.** It waits on the post-survey barrier scan (item 8), because only sites with
+   barrier data are being considered.
+2. **Rebuild the calibration tools** (item 7). Without them there is no way to produce a new
+   crossing's timings.
+3. **Code readiness for that crossing.** About 30 variables in `crossing-definition.md` are still
+   Hard-coded to Portslade's value. Each is work only if the chosen crossing differs; the
+   crossing-launch skill's "Code readiness" step turns them into a list for the candidate.
+4. **Planned cancellations.** Not a readiness item but affects every crossing: cancelled trains survive
+   as phantom closures. Fix built 2026-11-13, being measured, not live.
 
 ---
 
