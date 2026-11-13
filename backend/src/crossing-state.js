@@ -65,6 +65,18 @@ const DEFAULT_AREA_ENTRY_LEAD_SECS = { east: 150, west: 112 };
 // this TTL (checked on both write and read) so a headcode reused later in the day
 // can never match a stale crossing from earlier on.
 const CLEAR_STEP_TTL_MS = 20 * 60 * 1000;
+// --- A crossing ends the timetable entry it belongs to (crossingsMade) ---
+// A clear step is matched to a timetable entry of the same headcode and direction whose booked
+// crossing is no more than CROSSED_EARLY_MS after it, nor CROSSED_LATE_MS before it. Wide on
+// purpose: the bound only has to stop a crossing being handed to a DIFFERENT run of the same
+// headcode. Measured over 43 days (2026-10-01..11-12, 8,075 crossings paired): 98.9% within
+// 30 min of booked; every one over 2 h is railhead treatment, up to 5 h 50 min early (3S97,
+// 2026-10-22) and 2 h 51 min late (3S93). Same-headcode same-direction repeats in a day are
+// rare (1Q75 2.5 h apart, 1S70/1S74 7 h) and the in-order pairing keeps them apart. Kept for
+// CROSSINGS_MADE_KEEP_MS, past the point where any entry it could match is dropped anyway.
+const CROSSED_EARLY_MS = 8 * 60 * 60 * 1000;
+const CROSSED_LATE_MS = 4 * 60 * 60 * 1000;
+const CROSSINGS_MADE_KEEP_MS = 24 * 60 * 60 * 1000;
 // --- TD-triggered close (approach strike-in anchor) ---
 // When TD shows a train stepping INTO the approach-side berth (config
 // td.<dir>.approach.from — 0006 east / 0003 west), the barrier's CLOSE start can
@@ -189,6 +201,12 @@ class CrossingState {
     // anchored to its FINAL train's clear step + openLagSecs. Pruned by TTL so a
     // reused headcode can't match a stale crossing from earlier in the day.
     this.clearStepSeen = new Map();
+
+    // `${headcode}|${direction}` → [ms, ...]: every crossing clear step in the last
+    // CROSSINGS_MADE_KEEP_MS, oldest first. Unlike clearStepSeen this is NOT a 20-minute
+    // memory: it is the record that a timetable entry's train has already crossed, which has
+    // to outlive the entry's own booked time however early the train ran. See _crossedAtByEntry.
+    this.crossingsMade = new Map();
 
     // headcode → { ts(ms), direction } of the train's most recent APPROACH
     // strike-in (stepping into config td.<dir>.approach.from — 0006 east / 0003
@@ -333,6 +351,12 @@ class CrossingState {
       if (!e || !e.headcode || !e.ts) continue;
       const ts = e.ts instanceof Date ? e.ts : new Date(e.ts);
       if (!Number.isFinite(ts.getTime())) continue;
+      // The day's crossings too, so a restart does not bring back an entry whose train has
+      // already crossed (see _crossedAtByEntry). Only when the log line carries the berths.
+      if (e.from && e.to) {
+        const dir = this._matchClearStep(e.from, e.to);
+        if (dir) this._noteCrossingMade(e.headcode, dir, ts.getTime());
+      }
       const day = ts.toISOString().slice(0, 10);
       if (this.tdSeenDay !== day) { this.tdSeenToday.clear(); this.tdSeenDay = day; }
       if (this.tdSeenToday.has(e.headcode)) continue;
@@ -412,7 +436,65 @@ class CrossingState {
     // barrier-up BEFORE its close, which is register #12's open-before-close all over again.
     this.clearStepSeen.set(`${evt.headcode}|${direction}`, { ts: ms, direction, headcode: evt.headcode });
     this._pruneClearSteps(ms);
+    this._noteCrossingMade(evt.headcode, direction, ms);
     this._markDirty();
+  }
+
+  // Add one crossing to the crossingsMade record (idempotent for a repeated event).
+  _noteCrossingMade(headcode, direction, ms) {
+    const key = `${headcode}|${direction}`;
+    const list = this.crossingsMade.get(key) || [];
+    if (!list.includes(ms)) {
+      list.push(ms);
+      list.sort((a, b) => a - b);
+      this.crossingsMade.set(key, list);
+    }
+    for (const [k, l] of this.crossingsMade) {
+      const kept = l.filter(x => ms - x <= CROSSINGS_MADE_KEEP_MS);
+      if (kept.length) this.crossingsMade.set(k, kept); else this.crossingsMade.delete(k);
+    }
+  }
+
+  // Which timetable entries have already been crossed: Map(entry → clear-step ms).
+  //
+  // Found 2026-11-12. 3S93 is an out-and-back working booked west at 12:40 that usually runs
+  // 1–4 h early. Its real crossing was a fresh clear step for only 20 minutes
+  // (CLEAR_STEP_TTL_MS); nothing else retired the 12:40 entry, because a later leg never gets
+  // a sighting and its booked time was still hours ahead. So for 20 minutes the entry closed
+  // at its real approach strike but opened at ~12:36, and every train in between was merged
+  // into one closure — production showed CLOSED for 19–24 min on 10 of the 18 days
+  // 2026-10-26..11-12 — and then it came back at 12:40 as a train "about to cross", for
+  // another ~13 min of CLOSED. 3S97 did the same at night (booked 24:41/24:56, crossing
+  // ~23:30). A train that has crossed has crossed: the entry it belongs to is done.
+  // Replayed over 42 days: 485 min of CLOSED removed, 0.8 min added; spans of 10+ min 85 → 33.
+  //
+  // Matching: per headcode and direction, entries in booked order take crossings in time
+  // order, each only within [booked - CROSSED_EARLY_MS, booked + CROSSED_LATE_MS]. In order,
+  // so the two runs of one headcode the same way (an entry per traversal) each take their own.
+  _crossedAtByEntry(now) {
+    const out = new Map();
+    if (!this.crossingsMade.size) return out;
+    const nowMs = now.getTime();
+    const groups = new Map();
+    for (const t of this.scheduleTrains) {
+      if (!t.headcode) continue;
+      const key = `${t.headcode}|${t.direction}`;
+      if (!this.crossingsMade.has(key)) continue;
+      const est = this._scheduleTimeToDate(t.estimatedCrossingMins);
+      if (!est) continue;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push({ t, ms: est.getTime() });
+    }
+    for (const [key, entries] of groups) {
+      const crossings = this.crossingsMade.get(key).filter(ms => ms <= nowMs);
+      entries.sort((a, b) => a.ms - b.ms);
+      let ci = 0;
+      for (const e of entries) {
+        while (ci < crossings.length && crossings[ci] < e.ms - CROSSED_EARLY_MS) ci++;
+        if (ci < crossings.length && crossings[ci] <= e.ms + CROSSED_LATE_MS) out.set(e.t, crossings[ci++]);
+      }
+    }
+    return out;
   }
 
   // A direction's TD settings (td.<slot>), or undefined for a direction that is not one of
@@ -797,9 +879,18 @@ class CrossingState {
       }
     }
 
+    const crossedAt = this._crossedAtByEntry(now);
     for (const t of this.scheduleTrains) {
       const estTime = this._scheduleTimeToDate(t.estimatedCrossingMins);
       if (!estTime) continue;
+
+      // Already crossed, and the barrier is back up after it: this entry is finished, whatever
+      // its booked time says. Until the barrier is up the rules below keep it (it is the reason
+      // the barrier is down — see barrierStillDown). See _crossedAtByEntry.
+      if (crossedAt.has(t)) {
+        const lagSecs = this._getOpenLagSecs(t.direction, t.trainType);
+        if (now.getTime() >= crossedAt.get(t) + (lagSecs || 0) * 1000) continue;
+      }
 
       // The day's FIRST sighting, and only the first leg of a working may use it. A train
       // that crosses twice (schedule-parser legIndex) is sighted once, hours before its

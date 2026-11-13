@@ -355,6 +355,73 @@ const portsladeCfg = crossingsConfig.portslade.schedule;
       s2._freshClearStep({ direction: 'west', trainType: 'passenger', headcode: '1A01' }, at));
   }
 
+  // --- a crossing ends its own timetable entry, however early the train ran ----------
+  console.log('\nOut-and-back workings — a leg that ran hours early\n');
+  {
+    // 2026-11-05: 3S93 booked west at 12:40, crossed west at 08:39:44. The entry kept its
+    // real approach strike for 20 minutes while its time fell back to 12:40, so one "train"
+    // closed at 08:37 and opened ~12:36 and the app read CLOSED 08:34–08:58; then the entry
+    // came back at 12:40 as a train about to cross.
+    const clearCfg = {
+      ...stateCfg,
+      td: {
+        east: { clear: { from: '0004', to: '0002' } },
+        west: { clear: { from: '0005', to: '0007' } }
+      },
+      timing: {
+        ...stateCfg.timing,
+        openLagSecs: { east: { passenger: 40, freight: 70 }, west: { passenger: 18, freight: 30 } }
+      }
+    };
+    const common = {
+      uid: 'Q11111', headcode: '3S93', trainType: 'test',
+      origin: 'LITTLEHAMPTON', destination: 'LITTLEHAMPTON', operator: 'ZZ',
+      callsAtStation: false, legCount: 2
+    };
+    // mins is only a key: 427 = east leg (2 h ago), 760 = west leg (4 h ahead),
+    // 1300 = a different west run of the same headcode, 7 h ahead.
+    const at = { 427: -2 * 3600000, 760: 4 * 3600000, 1300: 7 * 3600000 };
+    const mk = () => {
+      const s = new CrossingState('t', clearCfg);
+      s._scheduleTimeToDate = (mins) => new Date(BASE_MS + at[mins]);
+      s.scheduleTrains = [
+        { ...common, direction: 'east', estimatedCrossingMins: 427, legIndex: 0 },
+        { ...common, direction: 'west', estimatedCrossingMins: 760, legIndex: 1 },
+        // legIndex 1 so the day's first sighting (bug (a), headcode-wide) does not drop it.
+        { ...common, uid: 'Q22222', direction: 'west', estimatedCrossingMins: 1300, legIndex: 1 }
+      ];
+      s.recordTdSighting('3S93', new Date(BASE_MS - 2 * 3600000));
+      return s;
+    };
+    const westAt = (s, ms) => s._mergeTrains(new Date(ms))
+      .filter(m => m.direction === 'west').map(m => m.scheduledTime.getTime() - BASE_MS);
+
+    const control = mk();
+    check('control: before it crosses, both west entries are listed',
+      westAt(control, BASE_MS).join(','), [4 * 3600000, 7 * 3600000].join(','));
+
+    const s = mk();
+    s.recordTdClearStep({ headcode: '3S93', ts: new Date(BASE_MS), from: '0005', to: '0007' });
+    check('barrier still down (10s after the clear step): the leg is kept',
+      westAt(s, BASE_MS + 10000).includes(4 * 3600000), true);
+    check('barrier up (60s after): the crossed leg is gone',
+      westAt(s, BASE_MS + 60000).includes(4 * 3600000), false);
+    check('  ...and stays gone once the 20-min clear-step memory has expired',
+      westAt(s, BASE_MS + 30 * 60000).includes(4 * 3600000), false);
+    check('  ...including at its booked time',
+      westAt(s, BASE_MS + 4 * 3600000 - 60000).includes(4 * 3600000), false);
+    check('the same headcode\'s run 7 h later is NOT taken by that crossing',
+      westAt(s, BASE_MS + 60000).includes(7 * 3600000), true);
+    check('the east leg is not retired by a west crossing',
+      s._crossedAtByEntry(new Date(BASE_MS + 60000)).size, 1);
+
+    // A restart: the day's crossings are rebuilt from the TD log with the sightings.
+    const r = mk();
+    r.seedSightings([{ headcode: '3S93', ts: new Date(BASE_MS).toISOString(), from: '0005', to: '0007' }]);
+    check('after a restart the crossed leg is still gone',
+      westAt(r, BASE_MS + 30 * 60000).includes(4 * 3600000), false);
+  }
+
   console.log();
   if (fail > 0) { console.error(`${fail} FAILED, ${pass} passed`); process.exit(1); }
   console.log(`All ${pass} checks passed.`);

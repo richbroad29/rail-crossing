@@ -248,7 +248,7 @@ function readTodaysTdEntries(area) {
     if (!line) continue;
     let r; try { r = JSON.parse(line); } catch (err) { continue; }
     if (!r.area || !r.desc || !r.ts) continue;
-    entries.push({ area: r.area, headcode: r.desc, ts: r.ts });
+    entries.push({ area: r.area, headcode: r.desc, ts: r.ts, from: r.from, to: r.to });
   }
   return { entries };
 }
