@@ -351,14 +351,16 @@ These stay in the shared code.
 
 These were wrong at Portslade, not just at future crossings. Each was approved, measured by replay, and
 shipped or replaced on 2026-11-12 (backend-v2 `f166b90`..`94d3084`). 2 to 5 changed nothing visible at
-Portslade then; they matter for other crossings.
+Portslade then; they matter for other crossings. 1 shipped the next day in a different form.
 
-1. **The "seen today" list resets at midnight UTC, not UK midnight.** *Not shipped as written.* Moving the
-   reset to UK midnight made summer worse: the last trains of the evening still step through the berths
-   after midnight, and that step marked the same headcode's next-evening run as already seen (344 cases
-   in 177 days, against 3 with the current reset). No reset time fixes it. The real flaw is that a
-   sighting counts for every timetable entry with that headcode, whatever the time. Being replaced by a
-   time window (a sighting counts only for the run it could belong to).
+1. **The "seen today" list reset at midnight UTC.** Fixed (`f6f1788`, 2026-11-13): it now turns over
+   at **03:00 London**. A UK-midnight reset (as first proposed) made it worse: the last trains of the
+   evening still step through the berths after midnight, and that step marked the same headcode's
+   run the next evening as already seen (344 cases in 177 days at 00:00, 3 at 01:00, 2 at 03:00).
+   Trade-off accepted: between midnight and 03:00, the first morning runs that reuse yesterday's
+   headcodes are missing from the list. A per-run time window was tried and measured worse. The
+   proper cure is to identify the run from Network Rail's train-running feed (TRUST activations), which
+   the signalling feed alone cannot do.
 2. **4xxx and 8xxx freight and 0xxx light engines were treated as passenger trains.** Fixed (`f166b90`).
 3. **Westbound checked "is it stopping" before "is it freight"**, the opposite of eastbound. Fixed (`a067121`).
 4. **The Southwick stop was matched by headcode with no time limit.** Fixed (`ecb6ef3`): nearest run
