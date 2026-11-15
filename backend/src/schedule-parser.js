@@ -234,6 +234,64 @@ function stpRank(stp) {
   return STP_PRIORITY[stp] || 0;
 }
 
+// WHICH VERSION OF A TRAIN RUNS TODAY is a fact about the train, not about any crossing, so
+// it is decided per uid over EVERY record active today — whatever its route, and before any
+// crossing is consulted. Only then does a crossing get the winning version's traversals.
+//
+// The order matters. Asking "does this record cross?" first threw away exactly the records
+// that should overrule everything: a cancellation carries no locations, and a replacement on
+// another route (1S74 Littlehampton 23:18 → Havant, 9–12 Nov 2026) crosses nothing. Either
+// way the permanent schedule through the crossing won by default, and the app counted down
+// to trains Network Rail had withdrawn — 28 a night that week, 211 of 215 on Sat 7 Nov.
+//
+// Needs no crossing settings, so every crossing inherits it. Same rule as the bus case
+// (extractTrainFields): a replacement suppresses what it replaces. A record only withdraws
+// LOWER-ranked versions — two of equal rank both stay, the catch-every-closure choice.
+function noteRank(rankByUid, uid, stp) {
+  const r = stpRank(stp);
+  if (!rankByUid.has(uid) || r > rankByUid.get(uid)) rankByUid.set(uid, r);
+}
+
+// The rank map travels with a full parse's results so the update extract (applyUpdateExtract)
+// starts from the same winners — a lower-ranked update record must not resurrect a train the
+// base already withdrew. A Symbol key, so it is invisible to Object.keys/entries over results.
+const STP_RANKS = Symbol('stpRankByUid');
+
+// Collect a uid-keyed map into per-crossing results, keeping only each train's winning version.
+// `withdrawn` receives one item per dropped traversal. Cancellations and buses/ships are dropped
+// here too, after the merge, so a bus overlay still suppresses the train it replaces.
+function collectWinners(schedulesByUid, rankByUid, results, withdrawn) {
+  let nonRail = 0;
+  for (const [key, entries] of schedulesByUid) {
+    const crossingId = key.split('|')[0];
+    if (!results[crossingId]) continue;
+    const best = rankByUid.get(entries[0].uid);
+    if (best !== undefined && stpRank(entries[0].stp) < best) {
+      for (const e of entries) {
+        withdrawn.push({
+          crossingId, uid: e.uid, headcode: e.headcode || null,
+          direction: e.direction, estimatedCrossingTime: e.estimatedCrossingTime || null,
+          by: best === STP_PRIORITY.C ? 'cancelled' : 'replaced'
+        });
+      }
+      continue;
+    }
+    const kept = entries.filter(e => e.stp !== 'C' && !e.nonRail);
+    nonRail += entries.filter(e => e.stp !== 'C' && e.nonRail).length;
+    for (const entry of kept) results[crossingId].push(entry);
+  }
+  return { nonRail };
+}
+
+// One greppable line naming what was withdrawn. Capped: a weekend blockade withdraws ~200.
+function describeWithdrawn(withdrawn) {
+  const CAP = 40;
+  const parts = withdrawn.slice(0, CAP).map(w =>
+    `${w.headcode || w.uid} (${w.crossingId} ${w.direction || '?'} ~${w.estimatedCrossingTime || '?'}, ${w.by})`);
+  if (withdrawn.length > CAP) parts.push(`+${withdrawn.length - CAP} more`);
+  return parts.join(', ');
+}
+
 // Pull the common train-level fields out of a JsonScheduleV1 record.
 function extractTrainFields(sched) {
   const segment = sched.schedule_segment || {};
@@ -401,6 +459,8 @@ async function parseScheduleFile(filePath, crossingsConfig) {
 
   // STP overlay tracking: crossingId|uid → highest-priority schedule
   const schedulesByUid = new Map();
+  // uid → rank of the version that runs today, over every record whatever its route.
+  const stpRankByUid = new Map();
 
   let scheduleCount = 0;
 
@@ -447,11 +507,13 @@ async function parseScheduleFile(filePath, crossingsConfig) {
     }
     scheduleCount++;
 
-    // The full snapshot carries Create records only (overlays are Create with a
-    // non-P stp). Delete/cancellation transactions arrive via the daily UPDATE
-    // extract — see applyUpdateExtract.
+    // The full snapshot carries Create records only. Overlays AND cancellations are Create
+    // records with a non-P stp; a cancellation has a segment but no locations.
     if (sched.transaction_type !== 'Create') return;
     if (!isActiveToday(sched)) return;
+
+    // Before the location checks below, which a cancellation never passes (see noteRank).
+    noteRank(stpRankByUid, sched.CIF_train_uid, sched.CIF_stp_indicator || 'P');
 
     const segment = sched.schedule_segment;
     if (!segment) return;
@@ -477,18 +539,21 @@ async function parseScheduleFile(filePath, crossingsConfig) {
     if (traversed && crHere) skipped.crOnTraversing += crHere;
   });
 
-  // Collect final results, excluding cancellations. Multi-leg groups are tallied HERE,
-  // off the surviving entries, not where they were built: a uid can appear as several
-  // schedule versions and only the STP winner reaches the results, so counting at build
-  // time over-reported the expansion.
-  for (const [key, entries] of schedulesByUid) {
-    const crossingId = key.split('|')[0];
-    // Cancellations and buses/ships (nonRail) never reach a crossing. Both are decided AFTER the
-    // STP merge, so a bus overlay still suppresses the train it replaces.
-    const kept = entries.filter(e => e.stp !== 'C' && !e.nonRail);
-    skipped.nonRail += entries.filter(e => e.stp !== 'C' && e.nonRail).length;
-    for (const entry of kept) results[crossingId].push(entry);
-    if (kept.length > 1) {
+  // Collect final results: only each train's winning version, no cancellations, no buses.
+  const withdrawn = [];
+  skipped.nonRail += collectWinners(schedulesByUid, stpRankByUid, results, withdrawn).nonRail;
+
+  // Multi-leg groups are tallied HERE, off the surviving entries, not where they were
+  // built: a uid can appear as several schedule versions and only the STP winner reaches
+  // the results, so counting at build time over-reported the expansion.
+  for (const [crossingId, trains] of Object.entries(results)) {
+    const byUid = new Map();
+    for (const t of trains) {
+      if (!byUid.has(t.uid)) byUid.set(t.uid, []);
+      byUid.get(t.uid).push(t);
+    }
+    for (const kept of byUid.values()) {
+      if (kept.length < 2) continue;
       multiLeg.push({
         crossingId, uid: kept[0].uid, headcode: kept[0].headcode || '----',
         runsAsRequired: !!kept[0].runsAsRequired,
@@ -512,6 +577,14 @@ async function parseScheduleFile(filePath, crossingsConfig) {
 
   // Buses and ships that crossed a crossing's timing points and were dropped (service-kind.js).
   if (skipped.nonRail) console.log(`Schedule: dropped ${skipped.nonRail} bus/ship service(s) — not trains, never a closure`);
+
+  // Timetabled traversals outranked by a cancellation or a replacement that does not cross.
+  if (withdrawn.length) {
+    console.log(
+      `Schedule: withdrew ${withdrawn.length} traversal(s) — cancelled, or replaced by a ` +
+      `version that does not cross — ${describeWithdrawn(withdrawn)}`
+    );
+  }
 
   // Visibility for the deliberately-unapplied CR/TI/TA records (see FINDING).
   console.log(
@@ -548,8 +621,10 @@ async function parseScheduleFile(filePath, crossingsConfig) {
   lastParseStats = {
     ...skipped, lineCount, scheduleCount,
     ambiguousDropped: ambiguous.length, ambiguous,
-    multiLegKept: multiLeg.length, multiLeg
+    multiLegKept: multiLeg.length, multiLeg,
+    withdrawnCount: withdrawn.length, withdrawn
   };
+  Object.defineProperty(results, STP_RANKS, { value: stpRankByUid });
   return results;
 }
 
@@ -565,12 +640,15 @@ function getLastParseStats() {
 // train within the hour instead of waiting for the next 04:00 full reparse.
 //
 // Start from the full-parse result (`baseByCrossing`) and overlay the update's
-// transactions, preserving STP priority (C > N > O > P):
-//   - STP=C cancellation → remove the uid from predictions (the headline fix).
-//       CIF cancellations usually carry no schedule_location, so we cancel by
-//       uid against every crossing where the base predicted that uid.
+// transactions, preserving STP priority (C > N > O > P) by the same rule as the
+// full parse (noteRank / collectWinners — the version that runs is decided per train,
+// before any crossing):
+//   - STP=C cancellation → remove the uid from predictions at every crossing.
+//       CIF cancellations carry no schedule_location, so this works by uid.
 //   - N/O/P overlay that traverses → add or replace under STP priority,
 //       extending same-day coverage (a new short-term path appears within the hour).
+//   - N/O overlay that does NOT traverse a crossing → withdraws that train there,
+//       when it outranks the version the base predicted.
 //   - Delete transaction → counted and logged, but the train is NOT removed.
 //       A bare Delete withdraws a specific prior schedule version; dropping a
 //       train on it risks a false negative (a missed closure). Full schedule-
@@ -580,22 +658,29 @@ function getLastParseStats() {
 // The base is never mutated and a fresh result is returned, so re-applying the
 // (latest) update each hour is idempotent from a clean baseline.
 async function applyUpdateExtract(updateFilePath, crossingsConfig, baseByCrossing) {
-  const stats = { records: 0, cancelled: 0, overlays: 0, deletes: 0, deleteUids: [], cancelledIds: [] };
+  const stats = {
+    records: 0, cancelled: 0, overlays: 0, deletes: 0, deleteUids: [], cancelledIds: [],
+    replaced: 0, replacedIds: []
+  };
   const crossingIds = Object.keys(crossingsConfig);
 
-  // Rebuild the uid-keyed map from the base predictions (these already exclude
-  // any C the full snapshot carried, so their stp is P/O/N). Clone so the
-  // caller's base array is never mutated.
+  // Rebuild the uid-keyed map from the base predictions (these are already only
+  // each train's winning version). Clone so the caller's base array is never mutated.
   // Grouped by uid, because a uid can carry more than one traversal (an out-and-back
   // working — see analyseRoute). The base array is already in time order, so each group
   // keeps its legs in order too.
   const schedulesByUid = new Map();
+  // Start from the full parse's winners (STP_RANKS), so a lower-ranked update record cannot
+  // bring back a train the base withdrew. A base without them (a hand-built one) falls back
+  // to the ranks of the entries it holds.
+  const rankByUid = new Map((baseByCrossing && baseByCrossing[STP_RANKS]) || []);
   for (const [crossingId, trains] of Object.entries(baseByCrossing || {})) {
     for (const t of trains) {
       if (!t || !t.uid) continue;
       const key = `${crossingId}|${t.uid}`;
       if (!schedulesByUid.has(key)) schedulesByUid.set(key, []);
       schedulesByUid.get(key).push({ ...t });
+      noteRank(rankByUid, t.uid, t.stp || 'P');
     }
   }
 
@@ -615,27 +700,10 @@ async function applyUpdateExtract(updateFilePath, crossingsConfig, baseByCrossin
       return; // conservative: never remove a train on a bare Delete
     }
 
-    if (stp === 'C') {
-      let didCancel = false;
-      for (const crossingId of crossingIds) {
-        const key = `${crossingId}|${uid}`;
-        const existing = schedulesByUid.get(key);
-        if (existing && stpRank('C') >= stpRank(existing[0].stp)) {
-          // Cancels the whole uid: a cancelled train makes none of its traversals.
-          schedulesByUid.set(key, existing.map(e => ({ ...e, stp: 'C' })));
-          for (const e of existing) {
-            stats.cancelledIds.push({
-              uid, crossingId,
-              headcode: e.headcode || null,
-              estimatedCrossingTime: e.estimatedCrossingTime || null
-            });
-          }
-          didCancel = true;
-        }
-      }
-      if (didCancel) stats.cancelled++;
-      return;
-    }
+    // Every active record competes for "the version that runs", whatever its route.
+    // A cancellation has nothing more to contribute: collectWinners does the removal.
+    noteRank(rankByUid, uid, stp);
+    if (stp === 'C') return;
 
     // N/O/P overlay carrying locations → add or replace under STP priority.
     const segment = sched.schedule_segment;
@@ -652,35 +720,43 @@ async function applyUpdateExtract(updateFilePath, crossingsConfig, baseByCrossin
     if (didOverlay) stats.overlays++;
   });
 
-  // Rebuild per-crossing results, excluding cancellations, sorted by time.
+  // Rebuild per-crossing results by the full parse's rule, sorted by time.
   const results = {};
   for (const id of crossingIds) results[id] = [];
-  for (const [key, entries] of schedulesByUid) {
-    const crossingId = key.split('|')[0];
-    for (const entry of entries) {
-      // Same rule as the full parse: cancellations and buses/ships are dropped after the merge.
-      if (entry.stp !== 'C' && !entry.nonRail && results[crossingId]) results[crossingId].push(entry);
-    }
-  }
+  const withdrawn = [];
+  collectWinners(schedulesByUid, rankByUid, results, withdrawn);
   for (const id of crossingIds) {
     results[id].sort((a, b) => a.estimatedCrossingMins - b.estimatedCrossingMins);
   }
 
-  // Passive confirmation: one greppable line whenever real cancellations from
-  // the update extract are applied, naming the suppressed services so the live
-  // behaviour can be eyeballed in the logs (no need to catch one happening).
-  if (stats.cancelled > 0) {
-    const detail = stats.cancelledIds
-      .map(c => `${c.headcode || c.uid} (${c.crossingId} ~${c.estimatedCrossingTime || '?'})`)
-      .join(', ');
-    console.log(`CIF update: suppressed ${stats.cancelled} service(s) from update extract — ${detail}`);
+  // Report only what the BASE predicted and the update took away. A lower-ranked update record
+  // that lost to the base's winner was never shown, so dropping it again withdraws nothing.
+  // `cancelled` / `replaced` count trains (uids); the *Ids lists have one item per traversal.
+  const inBase = new Set();
+  for (const [crossingId, trains] of Object.entries(baseByCrossing || {})) {
+    for (const t of trains) if (t && t.uid) inBase.add(`${crossingId}|${t.uid}`);
   }
-  console.log(`CIF update applied: ${stats.cancelled} cancellation(s), ${stats.overlays} overlay(s), ${stats.deletes} delete(s) over ${stats.records} update record(s)`);
+  withdrawn.splice(0, withdrawn.length, ...withdrawn.filter(w => inBase.has(`${w.crossingId}|${w.uid}`)));
+  const cancelledUids = new Set(), replacedUids = new Set();
+  for (const w of withdrawn) {
+    const item = { uid: w.uid, crossingId: w.crossingId, headcode: w.headcode, estimatedCrossingTime: w.estimatedCrossingTime };
+    if (w.by === 'cancelled') { stats.cancelledIds.push(item); cancelledUids.add(w.uid); }
+    else { stats.replacedIds.push(item); replacedUids.add(w.uid); }
+  }
+  stats.cancelled = cancelledUids.size;
+  stats.replaced = replacedUids.size;
+
+  // Passive confirmation: one greppable line whenever the update withdraws a train,
+  // naming them so the live behaviour can be eyeballed in the logs.
+  if (withdrawn.length) {
+    console.log(`CIF update: withdrew ${withdrawn.length} traversal(s) from update extract — ${describeWithdrawn(withdrawn)}`);
+  }
+  console.log(`CIF update applied: ${stats.cancelled} cancellation(s), ${stats.replaced} replaced by a non-crossing version, ${stats.overlays} overlay(s), ${stats.deletes} delete(s) over ${stats.records} update record(s)`);
   return { trains: results, stats };
 }
 
 module.exports = {
   parseScheduleFile, applyUpdateExtract, getLastParseStats,
   cifTimeToMins, minsToTimeStr,
-  analyseRoute, estimateCrossingTime
+  analyseRoute, estimateCrossingTime, STP_RANKS
 };
