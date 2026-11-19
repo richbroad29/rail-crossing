@@ -36,6 +36,7 @@ const RELEVANT_MSG_TYPES = new Set(['CA_MSG', 'CB_MSG', 'CC_MSG']);
 // path. S-Class types are disjoint from C-Class, so the two never interfere.
 const S_CLASS_MSG_TYPES = new Set(['SF_MSG', 'SG_MSG', 'SH_MSG']);
 const SCLASS_LOG_DIR = path.join(__dirname, '..', 'data', 'logs', 'sclass');
+const LOG_ROOT_DIR = path.join(__dirname, '..', 'data', 'logs');
 
 let decoder = null; // null => S-Class disabled (no/invalid config); LA path unaffected
 let sclassConfig = null;
@@ -188,6 +189,27 @@ function writeEvent(evt) {
   });
 }
 
+// ---- National C-Class log (berth-first Phase 0, docs/berth-first-design.md §7 on main) ----
+// Every area's berth steps (CA/CB/CC) and heartbeats (CT), raw, one line per message, to
+// data/logs/td-all/td-all-<London date>.jsonl. LOG ONLY: nothing reads it at run time, and the
+// per-crossing logs above are untouched. Why every area rather than a chosen few: berth-first
+// needs 25 minutes of approach per crossing, often across several areas, and "record first"
+// (crossing-launch skill) means a day not recorded cannot be recovered. Measured 2026-11-19:
+// 191 areas, ~276 MB/day raw at an evening rate; gzipped daily by feed-logger.rotate().
+// One append per STOMP frame, not per message (a frame carries ~30).
+const TD_ALL_TYPES = new Set(['CA_MSG', 'CB_MSG', 'CC_MSG', 'CT_MSG']);
+let tdAllFile = () => path.join(LOG_ROOT_DIR, 'td-all', `td-all-${londonDateStamp()}.jsonl`);
+let tdAllLogged = 0;
+function writeTdAll(lines) {
+  if (!lines.length) return;
+  const file = tdAllFile();
+  ensureDir(path.dirname(file));
+  fs.appendFile(file, lines.join('\n') + '\n', err => {
+    if (err) console.error('TD national log write failed:', err.message);
+  });
+  tdAllLogged += lines.length;
+}
+
 // ---- S-Class capture (additive) ----
 function sclassRawFile() { return path.join(SCLASS_LOG_DIR, `sclass-${londonDateStamp()}.jsonl`); }
 function barrierFile() { return path.join(SCLASS_LOG_DIR, `barrier-${londonDateStamp()}.jsonl`); }
@@ -282,8 +304,11 @@ function processMessage(body) {
 
   messagesReceived++;
   lastMessageAt = Date.now();     // feed liveness — see STALE_MS (register #21)
+  const rx = new Date(lastMessageAt).toISOString();
+  const tdAllLines = [];
   for (const wrapper of parsed) {
     for (const [type, msg] of Object.entries(wrapper)) {
+      if (TD_ALL_TYPES.has(type) && msg) tdAllLines.push(JSON.stringify({ rx, type, ...msg }));
       // S-Class (additive; configured areas only). Handled independently of the
       // C-Class path below — SF/SG/SH never overlap CA/CB/CC, so this leaves the
       // LA C-Class capture/sighting flow exactly as it was.
@@ -328,12 +353,15 @@ function processMessage(body) {
     }
   }
 
+  writeTdAll(tdAllLines);
+
   const now = Date.now();
   if (now - lastSummaryAt > 300000) {
     console.log(`TD listener: ${messagesReceived} msgs received, ${eventsLogged} ${areasLabel()} events logged` +
       (decoder ? `, ${cclassExtraLogged} BM C-Class + ${sclassRawLogged} S-Class raw + ${sclassEventsLogged} barrier events` : '') +
       (surveyUntil && now < surveyUntil + 300000 ? ` + ${surveyLogged} survey` : '') +
-      ` (last 5 min)`);
+      ` + ${tdAllLogged} national C-Class (last 5 min)`);
+    tdAllLogged = 0;
     surveyLogged = 0;
     messagesReceived = 0;
     eventsLogged = 0;
@@ -494,6 +522,8 @@ function start(opts = {}) {
 
 module.exports = {
   start,
+  // Shared with feed-logger.js, whose STOMP connections need the same ERROR-frame fix.
+  hardenClient,
   on: emitter.on.bind(emitter),
   // Feed liveness, for GET /health. Register #21: the outage was invisible because nothing
   // published how long it had been since the last message.
@@ -520,7 +550,7 @@ module.exports = {
   _connectForTest() { connect(); },
   _setCrossingAreasForTest: setCrossingAreas,
   _processMessageForTest: processMessage,
-  _setLogFilesForTest({ td, cclass, survey }) { if (td) tdFileFor = td; if (cclass) cclassFile = cclass; if (survey) surveyFile = survey; },
+  _setLogFilesForTest({ td, cclass, survey, tdAll }) { if (td) tdFileFor = td; if (cclass) cclassFile = cclass; if (survey) surveyFile = survey; if (tdAll) tdAllFile = tdAll; },
   _setSurveyUntilForTest(ms) { surveyUntil = ms; },
   _surveyUntilFrom: surveyUntilFrom,
   _constantsForSurveyTest: { SURVEY_MAX_DAYS }

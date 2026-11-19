@@ -51,6 +51,12 @@ function logLdb(crossingId, trains) {
   });
 }
 
+// Cancelled services on the board (RDM path), one line per poll that had any. Logged only:
+// the poller still drops them from predictions. See ldb-poller.js cancelledRecord.
+function logLdbCancelled(crossingId, station, services) {
+  log('ldbCancelled', { crossing: crossingId, station, count: services.length, services });
+}
+
 // Log a schedule-derived expected train
 function logSchedule(crossingId, trains) {
   log('schedule', {
@@ -98,4 +104,4 @@ function logStartup(crossingIds, config) {
   });
 }
 
-module.exports = { log, logLdb, logSchedule, logState, logStartup, logHeld };
+module.exports = { log, logLdb, logLdbCancelled, logSchedule, logState, logStartup, logHeld };

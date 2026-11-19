@@ -56,7 +56,8 @@ const readLines = f => (fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split('\n'
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'td-multi-area-'));
   const tdFile = area => path.join(tmp, 'td', area, 'td.jsonl');
   const ccFile = area => path.join(tmp, 'cclass', area, 'cc.jsonl');
-  td._setLogFilesForTest({ td: tdFile, cclass: ccFile });
+  const allFile = path.join(tmp, 'td-all', 'all.jsonl');
+  td._setLogFilesForTest({ td: tdFile, cclass: ccFile, tdAll: () => allFile });
 
   const sightings = [];
   td.on('sighting', s => sightings.push(`${s.area}:${s.headcode}:${s.to}`));
@@ -85,7 +86,11 @@ const readLines = f => (fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split('\n'
   // S-Class C-Class capture runs whatever the crossing areas are: one BM line per frame so far.
   check('LA only: BM step kept in its S-Class C-Class log (every frame)', readLines(ccFile('BM')).map(e => e.desc).join(','), '2N77,2N77');
   check('LA only: BM step NOT in any td log', fs.existsSync(tdFile('BM')), false);
-  check('LA only: unrequested area written nowhere', fs.existsSync(tdFile('Q9')) || fs.existsSync(ccFile('Q9')), false);
+  check('LA only: unrequested area in no crossing or S-Class log', fs.existsSync(tdFile('Q9')) || fs.existsSync(ccFile('Q9')), false);
+  // National log (berth-first Phase 0): every area, raw, whatever is configured. Two frames so far.
+  check('national log: every area from every frame, raw', readLines(allFile).map(e => `${e.area_id}:${e.descr}`).join(','),
+    'LA:1H23,BM:2N77,Q9:9Z99,LA:1H23,BM:2N77,Q9:9Z99');
+  check('national log: receive time and message type kept', ['rx', 'type', 'area_id', 'from', 'to'].every(k => k in readLines(allFile)[0]), true);
   check('LA td line has the same shape as before',
     Object.keys(readLines(tdFile('LA'))[0]).join(','), 'ts,area,event,desc,from,to,trust_uid');
 

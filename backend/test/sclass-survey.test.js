@@ -26,7 +26,7 @@ const body = (...w) => JSON.stringify(w);
   console.log('\nS-Class survey window\n');
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sclass-survey-'));
   const survey = path.join(tmp, 'survey.jsonl');
-  td._setLogFilesForTest({ survey: () => survey, td: a => path.join(tmp, 'td', a + '.jsonl'), cclass: a => path.join(tmp, 'cc', a + '.jsonl') });
+  td._setLogFilesForTest({ survey: () => survey, td: a => path.join(tmp, 'td', a + '.jsonl'), cclass: a => path.join(tmp, 'cc', a + '.jsonl'), tdAll: () => path.join(tmp, 'td-all.jsonl') });
 
   // ---- the window ------------------------------------------------------------------------
   const now = Date.parse('2026-11-12T12:00:00Z');
@@ -80,7 +80,8 @@ const body = (...w) => JSON.stringify(w);
   td._setSurveyUntilForTest(Date.now() + 60000);
   td._processMessageForTest(body({ CA_MSG: { area_id: 'ZZ', msg_type: 'CA', from: '0001', to: '0002', descr: '1A01', time: String(Date.now()) } }));
   await wait(50);
-  check('C-Class of an unconfigured area is not logged anywhere', fs.existsSync(path.join(tmp, 'td', 'ZZ.jsonl')) || fs.existsSync(path.join(tmp, 'cc', 'ZZ.jsonl')), false);
+  check('C-Class of an unconfigured area is in no crossing or collection log', fs.existsSync(path.join(tmp, 'td', 'ZZ.jsonl')) || fs.existsSync(path.join(tmp, 'cc', 'ZZ.jsonl')), false);
+  check('  ...only in the national log (berth-first Phase 0)', readLines(path.join(tmp, 'td-all.jsonl')).map(e => e.area_id + ':' + e.descr).join(','), 'ZZ:1A01');
   td._setSurveyUntilForTest(null);
 
   // ---- rotation --------------------------------------------------------------------------

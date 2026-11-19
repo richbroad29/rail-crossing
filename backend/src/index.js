@@ -8,6 +8,7 @@ const logger = require('./logger');
 const tdListener = require('./td-listener');
 const tdRotation = require('./td-rotation');
 const sclassRotation = require('./sclass-rotation');
+const feedLogger = require('./feed-logger');
 const cifFetcher = require('./cif-fetcher');
 const corpusFetcher = require('./corpus-fetcher');
 const { computeRunRates } = require('./run-rate');
@@ -316,6 +317,8 @@ async function main() {
   tdListener.start({ areas: crossingTdAreas(crossingsConfig) });
   tdRotation.start();
   sclassRotation.start(); // bound + rotate the new S-Class logs alongside the TD logs
+  // VSTP + TRUST, logged for berth-first replay (docs/berth-first-design.md §7). Log only.
+  feedLogger.start();
 
   // Initial LDB poll
   await pollAll();

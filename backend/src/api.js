@@ -1,5 +1,6 @@
 const http = require('http');
 const tdListener = require('./td-listener');
+const feedLogger = require('./feed-logger');
 
 function createApi(crossingStates, port = 3000) {
   const server = http.createServer((req, res) => {
@@ -42,7 +43,9 @@ function createApi(crossingStates, port = 3000) {
           crossings: Object.keys(crossingStates).length,
           memory: Math.round(process.memoryUsage().rss / 1024 / 1024) + 'MB',
           time: new Date().toISOString(),
-          td
+          td,
+          // Log-only feeds (VSTP, TRUST): reported, never part of `status` — nothing predicts from them.
+          feeds: feedLogger.feedHealth()
         }));
         return;
       }

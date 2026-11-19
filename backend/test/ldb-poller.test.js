@@ -143,6 +143,19 @@ console.log('\nLDB time resolution — actual / forecast / timetable\n');
     '4O27:freight 8Y91:freight 0Z12:freight 6M40:freight 5H97:ecs 3S93:test 1H42:passenger');
 }
 
+// ---- Cancelled services are logged, never predicted (berth-first Phase 0, 2026-11-19) ----
+{
+  const out = [];
+  const trains = parseRdmJson({ trainServices: [
+    svc({ trainid: '1H03', uid: 'W11111', isCancelled: true, cancelReason: { value: 'test reason' } }),
+    svc({ trainid: '1H05', uid: 'W22222' })
+  ] }, makeDirectionResolver(PLD_DIRECTIONS), out);
+  check('a cancelled service is still left out of the trains', trains.map(t => t.headcode).join(','), '1H05');
+  check('  ...but is handed to the cancelled list', out.map(c => c.trainid + '/' + c.uid).join(','), '1H03/W11111');
+  check('  ...with its reason and destination kept', !!(out[0].cancelReason && out[0].dest), true);
+  check('no list passed: behaves exactly as before', board(svc({ trainid: '1H03', isCancelled: true })).length, 0);
+}
+
 console.log();
 if (fail > 0) { console.error(`${fail} FAILED, ${pass} passed`); process.exit(1); }
 else { console.log(`All ${pass} tests passed.`); }

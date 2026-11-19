@@ -286,7 +286,26 @@ function applyEstimateMemory(trains, memory, nowMs = Date.now()) {
 
 // ---- RDM REST JSON parsing ----
 
-function parseRdmJson(body, resolveDirection) {
+// The fields of a cancelled service worth keeping. Berth-first (docs/berth-first-design.md §5.5,
+// on main): a booked stopper whose stop here is cancelled runs THROUGH, so it closes the
+// crossing earlier — 36 of 37 westbound run-throughs over 44 days had their Portslade stop
+// cancelled first. Until now those services were dropped here and never logged, so the rule
+// could only be inferred from absence (which is what sank Fix B). Logged, never predicted from.
+const CANCELLED_FIELDS = ['uid', 'rid', 'trainid', 'serviceID', 'sta', 'eta', 'ata', 'std', 'etd', 'atd',
+  'isCancelled', 'cancelReason', 'delayReason', 'arrivalType', 'departureType', 'operatorCode',
+  'category', 'serviceType', 'isPassengerService'];
+
+function cancelledRecord(svc) {
+  const out = {};
+  for (const k of CANCELLED_FIELDS) if (svc[k] !== undefined) out[k] = svc[k];
+  out.origin = svc.origin?.location?.[0]?.locationName || svc.origin?.[0]?.locationName || undefined;
+  out.dest = svc.destination?.location?.[0]?.locationName || svc.destination?.[0]?.locationName || undefined;
+  return out;
+}
+
+// cancelledOut (optional array): cancelled services are appended to it for logging. They are
+// still excluded from the returned trains, exactly as before.
+function parseRdmJson(body, resolveDirection, cancelledOut) {
   const results = [];
   let data;
   try {
@@ -305,7 +324,7 @@ function parseRdmJson(body, resolveDirection) {
 
   for (const svc of serviceList) {
     if (!svc) continue;
-    if (svc.isCancelled) continue;
+    if (svc.isCancelled) { if (Array.isArray(cancelledOut)) cancelledOut.push(cancelledRecord(svc)); continue; }
     // Buses and ships never cross: the same rule as the timetable (src/service-kind.js).
     if (isNonRailService({ category: svc.category, serviceType: svc.serviceType })) continue;
 
@@ -428,7 +447,7 @@ function deduplicateTrains(trains) {
 
 // ---- Station polling ----
 
-async function pollStationRdm(station, apiKey, resolveDirection) {
+async function pollStationRdm(station, apiKey, resolveDirection, cancelledOut) {
   const now = new Date();
   const p = Object.fromEntries(
     new Intl.DateTimeFormat('en-GB', {
@@ -446,7 +465,7 @@ async function pollStationRdm(station, apiKey, resolveDirection) {
     throw new Error(`RDM HTTP ${resp.status}: ${resp.body.slice(0, 300)}`);
   }
 
-  return parseRdmJson(resp.body, resolveDirection);
+  return parseRdmJson(resp.body, resolveDirection, cancelledOut);
 }
 
 async function pollStationSoap(station, token, staffVersion = false, resolveDirection) {
@@ -479,11 +498,12 @@ async function pollCrossing(crossingId, config, auth, opts = {}) {
   const station = config.ldb.station;
   const allTrains = [];
   const resolveDirection = makeDirectionResolver(config.directions, opts.timetableDirection);
+  const cancelled = [];
 
   try {
     let trains;
     if (auth.mode === 'rdm') {
-      trains = await pollStationRdm(station, auth.apiKey, resolveDirection);
+      trains = await pollStationRdm(station, auth.apiKey, resolveDirection, cancelled);
       console.log(`  ${station}: ${trains.length} trains (RDM Staff Version)`);
     } else {
       // SOAP mode
@@ -508,6 +528,7 @@ async function pollCrossing(crossingId, config, auth, opts = {}) {
 
   const deduped = deduplicateTrains(allTrains);
   logger.logLdb(crossingId, deduped);
+  if (cancelled.length) logger.logLdbCancelled(crossingId, station, cancelled);
   return deduped;
 }
 
