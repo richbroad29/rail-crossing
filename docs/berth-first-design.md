@@ -1,7 +1,9 @@
 # Berth-first closure prediction — design
 
 **Date:** 2026-11-19 · **Status:** design agreed in discussion 16–19 Nov 2026. **Phase 0 (logging) live**
-since 2026-11-19 21:52 UTC (backend-v2 `a049364`); nothing else built. Every phase in *Rollout* needs Rich's explicit go-ahead before it starts.
+since 2026-11-19 21:52 UTC (backend-v2 `a049364`); nothing else built. **Plan (§10): the next crossing
+launches first on berth-first, ~18 Dec; Portslade follows in January.** Every phase needs Rich's
+explicit go-ahead before it starts.
 **Scope:** `backend-v2` (prediction core, feeds, logging), `main` (what the page shows), the
 `crossing-launch` skill and `docs/crossing-definition.md`.
 
@@ -64,6 +66,10 @@ the berths confirm each one and take over the timing.
 | D17 | Lines with no signalling berths are **rejected, in plain words** (§9.2) |
 | D18 | Trains with no description at all are a **known limit**, not a solved case (§8) |
 | D19 | The new-crossing skill is updated as part of this work (§9) |
+| D20 | **The next crossing launches in December, as the first berth-first crossing**, chosen from the 12 areas with banked barrier data; Portslade migrates in January (§10.1) |
+| D21 | **v1 leaves out the TRUST/VSTP status checks**; a train past its deadline shows "Not yet seen" until v1.1 (§10.1) |
+| D22 | **The engine is a per-crossing setting**: rollback is a settings change, and the old engine stays a month after Portslade switches (§10.2) |
+| D23 | Outage wording: "Network Rail data is currently unavailable, so we can't predict closures. We're working to get this fixed." (§5.11) |
 
 ---
 
@@ -477,15 +483,71 @@ These sit alongside today's barrier timings, which remain the real bottleneck.
 **Each phase needs Rich's go-ahead. No push or deploy without "push and deploy". Portslade's
 behaviour changes only after replay proves it.**
 
-| Phase | What | User-visible? |
+### 10.1 The plan (agreed 2026-11-19): the next crossing goes first, in December
+
+Rich: February is too far away for the next crossing; it must launch in December. So the order is
+reversed from the original plan:
+
+- **The next crossing is the first to run berth-first.** It has no users yet, so nothing can regress.
+  It is chosen from the 12 areas whose barrier bits (S-Class) have been banked since the summer, so the
+  new engine is scored against the **real barrier** over months of history. Portslade can't offer that:
+  it has no barrier data, and its timings rest on a handful of field observations.
+- **Portslade migrates afterwards, in January**, once the new crossing has run cleanly. Until then it
+  stays on today's engine, with the new one running beside it in shadow.
+- **A smaller first version (v1).** In: berth tracking (§5.2), linking and type (§5.3–5.4), running
+  through (§5.5), stalls (§5.6), one train per berth (§5.7), the deadline with the safe default (§5.8),
+  starting trains (§5.9), closures and merging (§5.10), the outage message (§5.11), restarts (§5.12),
+  the page states (§6) and the timetable/Darwin forecast. **Out until v1.1:** the status checks that read
+  TRUST and VSTP (logged only since 19 Nov). A train that misses its deadline shows "Not yet seen", the
+  safe default, because its berths still bring it back (D5, D13).
+- **The candidate must be in a banked area:** BM, X7, RT, EN, EH, HG, EK, B3, BU, Q3, Q5 or EA. Yapton
+  (BM: 1,364 barrier episodes in 38 days) is the default unless the barrier scan (due from 21 Nov) finds
+  a better one. Its other 25-minute areas come from the national log, which reaches 14 days on 3 Dec.
+
+| When | What | User-visible? |
 |---|---|---|
-| 0. Log | All TD areas, VSTP, TRUST, Darwin cancelled services. One-hour volume test first (run 2026-11-19) | No |
-| 1. Measure (≥ 14 days of logs) | Coverage, outermost-berth offsets, buffers, stall and run-through thresholds, one-per-berth, overtakes, feed silence; confirm each feed's facts from samples; trace the T681 entries | No |
-| 2. Build in shadow | Berth tracker, linking, states, deadlines, cancellation flow, stall, run-through, outage, restart. Runs beside live, logs its output, serves nothing | No |
-| 3. Replay and shadow comparison | §11 against live code over all logged days, plus live shadow days | No |
-| 4. Page | States and wording (§6). Headless screenshots per `feedback_rail_crossing_verify_frontend` | Only on deploy |
-| 5. Switch | Serve berth-first at Portslade | Yes |
-| 6. Skill | §9 applied early, 2026-11-19, steps marked Now / Berth-first; rewrite around the engine at phase 5 | — |
+| 19 Nov | **Phase 0 logging live** (`a049364`): all TD areas, VSTP, TRUST, cancelled board services | No |
+| 20–24 Nov | Barrier scan; choose the crossing (crossing-launch Stage 0–1). **Fix the CB/CC swap** in `td-listener.js` on its own, proven by replay (§5.2 prerequisite) | No |
+| 24 Nov – ~12 Dec | **Build v1 in shadow** (behind a per-crossing engine setting, off by default). Build the **route-learning and calibration tool** (one tool: routes, junctions, per-berth timings, one-per-berth, overtakes, stall and run-through thresholds; it is also readiness item 7). Extend the replay harness to read `td-all`, `cclass-<AREA>`, `ldbCancelled` | No |
+| ~3 Dec | 14 days of national logs: find the area bringing Brighton/Hove trains into LA (T681/T682); measure the candidate's coverage and outermost-berth offsets | No |
+| ~12 Dec | **Replay the candidate** over its banked months against its real barrier data: ship gates 1–12. Portslade's shadow starts live | No |
+| ~12–17 Dec | Website states and wording (§6), screenshot-checked, working with either engine. At least 3 days of dark running | No |
+| **~18 Dec** | **Launch the new crossing on berth-first**, if every gate passes. Otherwise early January: not into Christmas week (engineering works, holiday timetables, less chance to watch it) | Yes |
+| Jan | **Portslade switches** after its shadow and replay pass §11, and the new crossing has run cleanly. Then v1.1 (TRUST/VSTP status checks), and the skill rewritten around the engine (§9) | Yes |
+
+**The risk is build time:** the engine core and the calibration tool are about three weeks of focused
+work with no slack. If the build slips past ~12 Dec, the launch moves to early January rather than into
+Christmas week.
+
+### 10.2 Migrating Portslade safely
+
+1. **Shadow first.** The new engine runs on live data for several weeks without being shown; each day
+   its predictions are scored against what happened (TD truth), next to the live engine's.
+2. **Replay against the live engine** over every logged day, to the pass marks in §11, including the
+   regression rule (never worse at the same moment, never worse as the train gets closer) and the named
+   cases (16 Nov 10:22, Fix A's three misses, 5H13, the 3S93 reversal).
+3. **A switch, not a replacement.** The engine is a per-crossing setting in the definition. Rollback is
+   a settings change and a restart, not a code revert. The old engine stays for at least a month after
+   Portslade switches.
+4. **Website first.** It learns the new states and wording before the backend switches, and works with
+   either engine. Each state is screenshot-checked (headless at a fixed width).
+5. **Switch at a quiet time**, then watch: `crossing-audit` on days 1, 7 and 30, and one of Rich's
+   observation sessions at the crossing in the first fortnight.
+6. **The westbound run-through rule** (§5.5) waits for about 4 weeks of `ldbCancelled` logs before it is
+   trusted (about one case a day; until now it was inferred from trains vanishing off the board). Until
+   then Portslade's shadow logs what the rule would have done.
+
+### 10.3 Phase summary
+
+| Phase | What | State |
+|---|---|---|
+| 0. Log | All TD areas, VSTP, TRUST, Darwin cancelled services | **Live 2026-11-19** |
+| 1. Measure | Coverage, offsets, buffers, thresholds, one-per-berth, overtakes, feed silence; confirm feed facts from samples | New crossing: from banked data, Nov–Dec. Portslade: from ~3 Dec |
+| 2. Build in shadow | v1 as in 10.1 | 24 Nov – ~12 Dec |
+| 3. Replay and shadow comparison | §11; the new crossing against real barrier data | ~12 Dec on |
+| 4. Page | §6 | ~12–17 Dec |
+| 5. Switch | New crossing ~18 Dec; Portslade January | — |
+| 6. Skill | §9 applied early (2026-11-19), steps marked Now / Berth-first; rewrite around the engine after Portslade switches | Partly done |
 
 ---
 
