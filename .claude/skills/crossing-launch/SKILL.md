@@ -38,8 +38,9 @@ launches on today's engine until berth-first ships: its gates are 1–7 plus any
 ## Rules that hold at every stage
 
 1. **Record first.** Every timing comes from accumulated feed data, and a day not recorded cannot be
-   recovered. Since 2026-11-19 every area's berth steps are logged nationally (Stage 2), so for C-Class
-   this is already done; S-Class (barrier bits) still has to be switched on per area.
+   recovered. Since 2026-11-19 every area's berth steps AND raw S-Class (barrier bits) are logged
+   nationally and permanently (Stage 2), so recording is already done for any candidate. What is not
+   done is keeping it: every log is pruned at **90 days**, so copy out anything needed for longer.
 2. **Numbers never transfer between crossings.** The structure does (which berth, why a class split
    exists); the numbers are measured per site. Yapton's timings are not Portslade's.
 3. **Provenance or GUESS.** Every number in a definition carries sample size, spread, date and method,
@@ -88,7 +89,8 @@ ships they are still code work.
   - TIPLOCs either side and the crossing's own station TIPLOC, **verified against CORPUS** (Portslade is
     `PSLDAWH`, not `PORTSLD`).
   - The TD area(s) covering the approach (SMART, or the Open Rail Data describer list).
-  - S-Class: is the area in `backend/config/sclass.json`, and is a byte:bit known for this crossing?
+  - S-Class: does the area publish barrier bits (the `crossing-directory-refresh` barrier scan lists the
+    candidates), and is a byte:bit known for this crossing (`backend/config/sclass.json`)?
   - Closure burden from CIF: closures/day, barrier-down minutes/day, peak-hour down-minutes.
   - Freight: 4xxx/6xxx/7xxx/8xxx on the route and how many are runs-as-required. Freight sets how long
     Stage 4 takes.
@@ -101,21 +103,33 @@ ships they are still code work.
 - **Out:** draft values for definition §1–5 and §12.
 - **Exit:** every Desk variable in `MEASURING.md` has a value or a recorded reason it has none.
 
-## Stage 2 — Start logging (the same day)
+## Stage 2 — Check the logs (the same day)
 
 - **In:** the TD area(s).
 - **Do:**
-  - **Berth steps are already logged for every area** (Now, since 2026-11-19, backend-v2 `a049364`):
-    `data/logs/td-all/td-all-<date>.jsonl(.gz)` on the VPS, raw CA/CB/CC/CT with a receive time `rx`,
-    one line per message, **kept 90 days**. Check the candidate's areas appear in it. If the calibration
-    window will run past 90 days, copy that area's lines out before they are pruned.
-  - Short-notice timetables (`data/logs/vstp/`, 180 days), train movements (`data/logs/trust/`, 60
-    days) and cancelled board services (`cat:"ldbCancelled"` in the daily log, crossing's own board
-    only) are logged too. A new crossing's board station is polled only once its definition exists.
-  - **S-Class still needs switching on**: add each area to `backend/config/sclass.json` in collection
-    mode (`"logRaw": "all"`, `"crossings": {}`) and deploy. This banks raw S-Class (the barrier bits)
-    and also an area-tagged berth log (`data/logs/sclass/cclass-<AREA>-*`, kept 180 days). A
-    crossing's own definition later adds its area to the main berth log, `data/logs/td/<AREA>/`.
+  - **Nothing needs switching on — every area is already logged.** One retention policy for every log
+    on the VPS: **kept 90 days, then pruned** (`backend/src/retention.js`, since 2026-11-19, backend-v2
+    `6d3421a`). Files are under `backend/data/` and named by **London** date. Check the candidate's
+    areas appear in each:
+
+    | Log | Where | Since | Notes |
+    |---|---|---|---|
+    | Berth steps, every area | `logs/td-all/td-all-<date>.jsonl(.gz)` | 2026-11-19 | Raw CA/CB/CC/CT with receive time `rx`, one line per message |
+    | Raw S-Class (barrier bits), every area not in `sclass.json` | `logs/sclass/survey-<date>.jsonl(.gz)` | 2026-11-12 | Permanent since 2026-11-19 (`sclass.json` `survey.until: "always"`); gzipped the next day |
+    | Raw S-Class + decoded barrier events, areas in `sclass.json` | `logs/sclass/sclass-<date>`, `barrier-<date>`, `cclass-<AREA>-<date>` | 2026-06-23 (BM) | The 12 configured areas |
+    | Train movements (TRUST) | `logs/trust/` | 2026-11-19 | |
+    | Short-notice timetables (VSTP) | `logs/vstp/` | 2026-11-19 | |
+    | Timetable (CIF): a full weekly + every daily update | `schedule/archive/cif-<full\|update>-<date>-<seq>.json.gz` | 2026-11-19 | Rebuild day X from the newest full on or before X plus the later updates in sequence order. Nothing earlier than 19 Nov can be rebuilt |
+    | Board: lateness, cancelled services (`cat:"ldb"`, `"ldbCancelled"`) | `logs/<date>.jsonl` (daily app log) | — | **Only for crossings with a definition**: a new crossing's board station is polled once its definition exists |
+    | Crossing berth log | `logs/td/<AREA>/` | — | Added by the crossing's definition |
+
+  - **90 days is the ceiling for any derivation.** If a calibration window, a backtest or an audit
+    will reach back further, copy that area's lines out to the Mac (`~/rc-data/`) before they are
+    pruned. History older than 90 days at 2026-11-19 (Portslade from 22 Mar, Yapton and the 12 S-Class
+    areas from 23 Jun, up to 31 Aug) is on the Mac at `~/rc-data/archive/`, not on the VPS.
+  - Adding an area to `backend/config/sclass.json` is needed only to **decode** its barrier live, once
+    the byte:bit is known (Stage 3). It moves the area's raw S-Class from `survey-<date>` to
+    `sclass-<date>`; the barrier scan reads both.
   - Confirm the logs land and rotate (files are named by **London** date).
   - Gap-check weekly: one file per day, each ending just before London midnight. The feed watchdog only
     notices the *whole* feed stopping, not one area going quiet. Exclude gap days from every derivation.
@@ -261,7 +275,7 @@ Gate 5 is `crossing-audit`'s job; hand off to it. Gates 8–10 apply once berth-
 ## Stage 8 — Watch
 
 - `crossing-audit` on days 1, 7 and 30; findings into `crossing-audit/KNOWN-ISSUES.md` tagged with the id.
-- S-Class calibration keeps running: free, permanent ground truth.
+- S-Class calibration keeps running: free ground truth, 90 days of it at any time.
 - Regenerate the berth timings monthly for the first quarter, then quarterly.
 
 ---
@@ -274,13 +288,15 @@ Gate 5 is `crossing-audit`'s job; hand off to it. Gates 8–10 apply once berth-
 | S-Class byte to hunt | ~6 weeks | none |
 | No S-Class | not supported | — |
 
-Almost all of it is waiting for logs. Instrument several candidates at once; Stage 2 costs minutes.
+Almost all of it is waiting for logs. Since 2026-11-19 every area is logged before it is a candidate,
+so the wait is already running for all of them (up to the 90-day window); Stage 2 is now a check.
 
 ## Open questions
 
 - **Calibration tooling.** To be rewritten from scratch. Stages 3 and 5 state inputs, outputs and
-  acceptance checks only; fill in the commands when the tools exist. They must read both the collection
-  log (`sclass/cclass-<AREA>-*`) and the crossing log (`td/<AREA>/`).
+  acceptance checks only; fill in the commands when the tools exist. They must read the national logs
+  (`td-all/`, `sclass/survey-*`), the collection logs (`sclass/sclass-*`, `sclass/cclass-<AREA>-*`), the
+  crossing log (`td/<AREA>/`) and the timetable archive (`schedule/archive/`), all plain and `.gz`.
 - **Unwired variables.** Most of the definition is still Hard-coded to Portslade. The close algorithm
   was unified (2026-11-06) and the direction slots made per-crossing names (2026-11-12); re-check the
   Code readiness list after each further change lands.
