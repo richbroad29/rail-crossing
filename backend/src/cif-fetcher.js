@@ -4,6 +4,7 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
+const { londonDateStamp } = require('./time-utils');
 
 const NROD_HOST = 'datafeeds.networkrail.co.uk';
 // Full daily snapshot (whole timetable). Pulled once at 04:00.
@@ -11,8 +12,9 @@ const FULL_PATH = '/ntrod/CifFileAuthenticate?type=CIF_ALL_FULL_DAILY&day=toc-fu
 const DATA_DIR = path.join(__dirname, '..', 'data', 'schedule');
 const TARGET = path.join(DATA_DIR, 'cif-latest.json.gz');
 const TEMP    = path.join(DATA_DIR, 'cif-latest.json.gz.tmp');
-// Daily UPDATE extract (changes since the full snapshot, incl. same-day STP=C
-// cancellations and Delete/overlay transactions). Pulled hourly.
+// Daily UPDATE extract: one day's changes (STP=C cancellations, overlays, Deletes), named for that day
+// and published ~00:30 UTC the next morning. Fetched after each full load and applied only if newer
+// than the full (timetable-update.js).
 const UPDATE_TARGET = path.join(DATA_DIR, 'cif-update-latest.json.gz');
 const UPDATE_TEMP   = path.join(DATA_DIR, 'cif-update-latest.json.gz.tmp');
 
@@ -24,11 +26,16 @@ function basicAuthHeader(user, pass) {
   return 'Basic ' + Buffer.from(user + ':' + pass).toString('base64');
 }
 
-// Today's NROD day-of-week token (mon..sun) in Europe/London. The update
-// extracts are published per weekday as toc-update-<dow>.
-function londonDowToken() {
-  return new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', weekday: 'short' })
-    .format(new Date()).toLowerCase();
+const DOW = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+
+// The name of the newest published update (toc-update-<dow>): YESTERDAY's weekday in London. An update
+// is named for the day whose changes it carries and appears ~00:30 UTC the next morning, so today's own
+// name is last week's file until tonight — asking for it is the bug fixed 2026-11-20. Before ~00:30
+// UTC even yesterday's name is still last week's; the caller's sequence check skips it then.
+// Worked from the London calendar date, not "now minus 24 h", so a clock change cannot shift it.
+function newestUpdateDay(now = new Date()) {
+  const [y, m, d] = londonDateStamp(now).split('-').map(Number);
+  return DOW[new Date(Date.UTC(y, m - 1, d - 1)).getUTCDay()];
 }
 
 // Download `reqPath` to tempPath, then atomic rename to targetPath. Follows one
@@ -98,9 +105,9 @@ function downloadCif() {
   return fetchToFile(FULL_PATH, TEMP, TARGET, 'CIF');
 }
 
-// Download today's daily UPDATE extract (toc-update-<dow>).
-function downloadCifUpdate() {
-  const day = londonDowToken();
+// Download the newest published UPDATE extract (toc-update-<yesterday>). Whether it is applied is decided
+// from its header, not its name (timetable-update.js).
+function downloadCifUpdate(day = newestUpdateDay()) {
   const reqPath = `/ntrod/CifFileAuthenticate?type=CIF_ALL_UPDATE_DAILY&day=toc-update-${day}`;
   return fetchToFile(reqPath, UPDATE_TEMP, UPDATE_TARGET, 'CIF-update')
     .then(res => ({ ...res, day }));
@@ -120,5 +127,5 @@ function latestFilePath() {
 
 module.exports = {
   downloadCif, downloadCifUpdate, downloadCifUpdateDay,
-  latestFilePath
+  latestFilePath, newestUpdateDay
 };

@@ -11,6 +11,7 @@ const sclassRotation = require('./sclass-rotation');
 const feedLogger = require('./feed-logger');
 const cifFetcher = require('./cif-fetcher');
 const cifArchive = require('./cif-archive');
+const { applyNewerUpdate } = require('./timetable-update');
 const corpusFetcher = require('./corpus-fetcher');
 const { computeRunRates } = require('./run-rate');
 const { tdLogFile, crossingTdAreas } = require('./td-paths');
@@ -28,12 +29,25 @@ const NR_TOKEN_SV = process.env.NR_TOKEN_SV;       // Direct SOAP token (alterna
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const SCHEDULE_FILE = process.env.SCHEDULE_FILE || '';
 const POLL_INTERVAL_MS = 30000; // 30 seconds
-const UPDATE_INTERVAL_MS = 3600000; // 1 hour — daily UPDATE extract apply cadence
 
-// Last full-parse result (per crossing), annotated with run-rates. The hourly
-// UPDATE-extract apply overlays onto a clone of this, so each application is
-// idempotent from a clean baseline. Null until the first full parse completes.
+// Last full-parse result (per crossing), annotated with run-rates. An UPDATE extract newer than the
+// full is overlaid onto a clone of this (refreshScheduleUpdate), so an application always starts from
+// a clean baseline. Null until the first full parse completes.
 let baseScheduleByCrossing = null;
+// Sequence number of the full timetable baseScheduleByCrossing was parsed from (from its own header),
+// so an update is applied only if it is newer (timetable-update.js). null = unknown: no update is applied.
+let loadedFullSeq = null;
+
+// The sequence in a timetable file's header, or null if it has none (a hand-made test timetable).
+async function fullSequence(file) {
+  try {
+    const h = await cifArchive.readHeader(file);
+    return h.type === 'full' ? h.sequence : null;
+  } catch (e) {
+    console.error(`CIF: could not read the full timetable's header (${e.message}) — no update will be applied over it`);
+    return null;
+  }
+}
 
 // Build auth config — RDM takes priority
 let auth;
@@ -152,6 +166,8 @@ async function loadSchedule() {
     const scheduleTrains = await parseScheduleFile(file, crossingsConfig);
     annotateRunRates(scheduleTrains);
     baseScheduleByCrossing = scheduleTrains;
+    loadedFullSeq = await fullSequence(file);
+    console.log(`Schedule loaded: full timetable sequence ${loadedFullSeq == null ? 'unknown' : loadedFullSeq}`);
     for (const [id, trains] of Object.entries(scheduleTrains)) {
       crossingStates[id].updateScheduleTrains(trains);
     }
@@ -160,29 +176,32 @@ async function loadSchedule() {
   }
 }
 
-// Fetch the daily UPDATE extract and overlay it on the last full parse, so a
-// same-day STP=C cancellation suppresses that train within the hour without
-// waiting for the next 04:00 full re-download. Non-fatal: on any failure we
-// keep the current predictions.
+// After each full load (startup, and the 04:00 refresh whether or not its download worked): fetch the
+// newest published UPDATE and overlay it on the full's parse ONLY if its header says it is newer than
+// the full (timetable-update.js). Normally it is not: the full is fetched after the morning's update is
+// published and already contains it. It matters when the 04:00 full failed and we are on yesterday's.
+//
+// This used to run hourly and ask for TODAY's file name, which is last week's file until tonight, so
+// it re-applied a six-day-old update over a fresh full all day (found 2026-11-19). Non-fatal: on any
+// failure we keep the current predictions.
 async function refreshScheduleUpdate() {
   if (!baseScheduleByCrossing) return; // no full-parse baseline yet
-  let updateFile;
+  const base = baseScheduleByCrossing;
   try {
-    const res = await cifFetcher.downloadCifUpdate();
-    updateFile = res.path;
-    console.log(`CIF update: downloaded ${res.bytes} bytes (toc-update-${res.day})`);
+    await applyNewerUpdate({
+      fullSeq: loadedFullSeq,
+      download: cifFetcher.downloadCifUpdate,
+      readHeader: cifArchive.readHeader,
+      log: line => console.log(line),
+      apply: async file => {
+        const { trains } = await applyUpdateExtract(file, crossingsConfig, base);
+        if (baseScheduleByCrossing !== base) return; // a newer full arrived meanwhile: it wins
+        annotateRunRates(trains);
+        for (const [id, t] of Object.entries(trains)) crossingStates[id].updateScheduleTrains(t);
+      }
+    });
   } catch (err) {
-    console.error('CIF update download failed (keeping current predictions):', err.message);
-    return;
-  }
-  try {
-    const { trains } = await applyUpdateExtract(updateFile, crossingsConfig, baseScheduleByCrossing);
-    annotateRunRates(trains);
-    for (const [id, t] of Object.entries(trains)) {
-      crossingStates[id].updateScheduleTrains(t);
-    }
-  } catch (err) {
-    console.error('CIF update apply failed (keeping current predictions):', err.message);
+    console.error('CIF update failed (keeping current predictions):', err.message);
   }
 }
 
@@ -210,13 +229,18 @@ function scheduleDailyCifRefresh() {
       const trains = await parseScheduleFile(cifFetcher.latestFilePath(), crossingsConfig);
       annotateRunRates(trains);
       baseScheduleByCrossing = trains;
+      loadedFullSeq = await fullSequence(cifFetcher.latestFilePath());
       for (const [id, t] of Object.entries(trains)) {
         crossingStates[id].updateScheduleTrains(t);
       }
-      console.log('CIF refresh: in-memory schedules updated');
+      console.log(`CIF refresh: in-memory schedules updated (full timetable sequence ${loadedFullSeq == null ? 'unknown' : loadedFullSeq})`);
     } catch (err) {
       console.error('CIF refresh failed (keeping previous data):', err.message);
     }
+    // Then the newest update, if it is newer than whichever full we now hold. On a normal morning it is
+    // the same sequence as the full just fetched and is skipped; after a failed download it brings in
+    // the changes the missed full would have had.
+    await refreshScheduleUpdate();
     // Schedule next 24h out
     setTimeout(tick, 24 * 3600 * 1000);
   }, ms);
@@ -299,18 +323,12 @@ async function main() {
   // Awaiting keeps the order correct; ~770KB gzipped → typically sub-second.
   await loadCorpus();
 
-  // Load schedule (non-blocking — LDB starts immediately). Once the full-parse
-  // baseline is in place, apply the daily UPDATE extract straight away so any
-  // already-issued same-day cancellations take effect at startup.
+  // Load schedule (non-blocking — LDB starts immediately). Once the full-parse baseline is in place,
+  // check for a newer UPDATE than the full on disk (it is newer if that full is from before this
+  // morning's publication, e.g. a restart after a failed 04:00 download).
   loadSchedule()
     .then(() => refreshScheduleUpdate())
     .catch(err => console.error('Schedule load error:', err));
-
-  // Re-apply the UPDATE extract hourly to pick up same-day STP=C cancellations
-  // (and overlays) without waiting for the 04:00 full re-download.
-  setInterval(() => {
-    refreshScheduleUpdate().catch(err => console.error('Schedule update error:', err));
-  }, UPDATE_INTERVAL_MS);
 
   // Daily refresh at 04:00 Europe/London (CORPUS, then CIF)
   scheduleDailyCifRefresh();
