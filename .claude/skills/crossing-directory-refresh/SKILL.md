@@ -5,13 +5,13 @@ description: Keep the crossing directory current - fold a new Network Rail level
 
 # Crossing directory refresh
 
-Three checks, run together **twice a year** and **before every crossing launch**. Start B's survey
-week first; do A while it runs:
+Three checks, run together **twice a year** and **before every crossing launch**:
 
 - **A. Network Rail list.** Has Network Rail published a new level-crossing file? If so, fold it
   into the master crossing list and rebuild the directory.
 - **B. Barrier data.** Which signalling areas, collected or not, carry barrier up/down data?
-  More areas means cheaper launches (crossing-launch, Gate 4). Needs a survey week first.
+  More areas means cheaper launches (crossing-launch, Gate 4). Every area is banked permanently, so
+  it can run any day.
 - **C. Live crossing pages.** Re-measure each live crossing's figures and remake its local map.
 
 Words: GLOSSARY.md (Crossing number, Crossing directory, Coming-soon crossing, Live crossing).
@@ -72,22 +72,25 @@ file must report **zero changes**; anything else means the wrong file.
 
 ## B. Barrier data
 
-The feed carries signalling (S-Class) data for **every** area in Britain. The server keeps only the
-areas in `backend/config/sclass.json` (12 today) unless a **survey** is on, when it also keeps
-every other area for up to 14 days, in `survey-<date>` files beside the usual `sclass-<date>`
-ones. So the check covers areas we don't collect, with nothing to look up by hand.
+The feed carries signalling (S-Class) data for **every** area in Britain, and the server keeps all
+of it: the areas in `backend/config/sclass.json` (12 today) in `sclass-<date>` files, every other
+area in `survey-<date>` files beside them. The all-area survey ran as a one-week window from
+2026-11-12 and has been **permanent since 2026-11-19** (backend-v2 `6d3421a`: `sclass.json`
+`survey.until: "always"`), gzipped the next day (~45 MB) and pruned after **90 days** like every log
+(`backend/src/retention.js`). So the check covers areas we don't collect, with nothing to switch on
+and nothing to look up by hand.
 
-1. **Start the survey a week before the check** (a backend change and a restart, so Rich's go):
-   on `backend-v2`, set `survey.until` in `backend/config/sclass.json` to 7 days ahead (ISO, e.g.
-   `"2026-11-21T00:00:00Z"`), commit, push, and give Rich the deploy steps (CLAUDE.md, "Deploying
-   the backend"). It switches itself off at that time; set it back to `null` in the next commit.
-2. **After day 1, check the disk:** `du -sh ~/rail-crossing/backend/data/logs/sclass/survey-*` and
-   `df -h /` on the VPS. Above ~2 GB a day, or under 10 GB free, set `until` to now and restart.
-   The journal's 5-minute summary line ends `+ N survey` while it runs.
+1. **Is the survey still on?** The journal's 5-minute summary line ends `+ N survey`, and
+   `survey.until` in `backend/config/sclass.json` is `"always"`. **Do not set it back to `null`**
+   (Rich, 2026-11-19: barrier data from every area is kept). If it is off, that is a fault: tell Rich.
+2. **Check the disk:** `du -sh ~/rail-crossing/backend/data/logs/sclass/survey-*` and `df -h /` on the
+   VPS. Expect ~45 MB a day gzipped (~620 MB for today's unzipped file) and the whole VPS at
+   ~14-18 GB of logs at steady state. Under 10 GB free: tell Rich before anything else.
 3. **Are the logs complete?** `ls ~/rail-crossing/backend/data/logs/sclass/ | tail -20`: one
-   `sclass-<date>` and one `survey-<date>` per survey day. A missing day lowers the per-day
-   rates; say so in the report.
-4. **Run the scan** over the survey days (copy it to the VPS and run it there, where the logs are):
+   `sclass-<date>` and one `survey-<date>` (plain or `.gz`) per day scanned. A missing day lowers
+   the per-day rates; say so in the report.
+4. **Run the scan** over the last 7 complete days (copy it to the VPS and run it there, where the logs
+   are; it reads `.gz` files too):
    ```
    scp -i ~/Downloads/ssh-key-2026-03-22.key .claude/skills/crossing-directory-refresh/scripts/barrier-bit-scan.js ubuntu@130.162.167.237:/tmp/
    ssh -i ~/Downloads/ssh-key-2026-03-22.key ubuntu@130.162.167.237 'cd ~/rail-crossing && nice -n 19 node --max-old-space-size=300 /tmp/barrier-bit-scan.js --days 7' > .claude/skills/crossing-directory-refresh/history/barrier-scan-<date>.txt
@@ -100,12 +103,13 @@ ones. So the check covers areas we don't collect, with nothing to look up by han
 6. **Compare with the previous `history/barrier-scan-*.txt`:** candidate bytes per area, which
    areas are **new** (not in `sclass.json`), and which bytes are new. A candidate is a
    **shortlist entry, not a crossing**: signals beside a crossing switch in the same rhythm. Only
-   the berth-correlation proof in crossing-launch Phase 3 binds a bit to a crossing. Report per
+   the berth-correlation proof in crossing-launch Stage 3 binds a bit to a crossing. Report per
    area: candidate bytes now vs last time, and the busiest new ones.
-7. **Feed it to crossing-launch:** a new area with candidates is proposed to Rich as a
-   collection-only area in `sclass.json` (`"logRaw": "all"`, `"crossings": {}`) so its data is
-   banked for good. Any Parked candidate in crossing-launch's `CANDIDATES.md` whose area gained
-   candidates is due a re-check (its "re-check if S-Class coverage expands" trigger).
+7. **Feed it to crossing-launch:** report each new area with candidates to Rich. Its data is already
+   banked (survey, 90 days), so nothing needs adding to `sclass.json` until a byte is bound to a
+   crossing (crossing-launch Stage 3), when the area goes in to decode that barrier live. Any Parked
+   candidate in crossing-launch's `CANDIDATES.md` whose area gained candidates is due a re-check (its
+   "re-check if S-Class coverage expands" trigger).
 
 ## C. Live crossing pages
 
