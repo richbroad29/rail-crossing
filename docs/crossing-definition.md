@@ -5,6 +5,7 @@ below is built (one definition file per crossing, generated pages), the close al
 directions, and the direction slots are named by the definition. About 30 variables are still
 Hard-coded to Portslade's value — see the Status column. Each one is work only if a new crossing needs a
 different value; the crossing-launch skill's "Code readiness" step lists them per candidate.
+§14 (added 2026-11-19) lists the variables of the berth-first redesign, none of them read by code yet.
 **Worked example:** Portslade (Boundary Road). Every row gives Portslade's value.
 
 This is the complete list of what makes one level crossing different from another, as far as this app
@@ -351,6 +352,34 @@ the measured file (e.g. eastbound 0006: chain 206 s; backend fast 96 s, stopping
 callers 246 s). Even in the picker, a train matched to a closure is timed by the backend; the chain
 time is only the fallback for an unmatched train. So for a new crossing the chain can be left out
 unless the picker is turned back on, and replacing it with the backend's numbers waits until then.
+
+## 14. Berth-first (designed, not built)
+
+Added 2026-11-19 with `docs/berth-first-design.md`: closures predicted only from trains the berths have
+seen. Every row is **New**: nothing reads it yet. Most can be measured now from logs we hold; how is in
+`MEASURING.md`, rows marked (BF). Two are checks the current engine also relies on (one train per berth,
+overtaking), so they are measured for every crossing from now on.
+
+| Variable | What it means | Portslade | Status |
+|---|---|---|---|
+| `coverage.<d>.routes[]` | Every route in: the berth path from the outermost berth to the clear step, across areas, and the junctions where routes join | east: area LA from ~35 min; west: T682 (coast) and T681 (Hove) in LA, further out in the Hove/Brighton area — to learn from `td-all` | New |
+| `coverage.<d>.horizonMins` | Minutes from first sighting to the crossing, per route. Target 25 | east median 35 (92% ≥ 25); west ~5½ from LA alone | New |
+| `coverage.<d>.lastJunction` | From here in, every train on the berths will cross | to learn | New |
+| `coverage.<d>.startingStations[]` | Stations within 25 min where trains start, with their platform berths; timed from booked departure until the first berth after leaving | Brighton (about 70% of westbound passenger trains) | New |
+| `berths.<berth>.onePerBerth` | `holds` or `exempt`. Where it holds, a follower is never projected into a berth before the train ahead has left it | holds on every approach berth (0–3 exceptions in 44 days) | New |
+| `tracks.<d>` | Tracks per direction on the approach and across the road, and where parallel tracks merge. More than one across the road is unsupported | one each way; 0 overtakes in 47 days | New |
+| `deadline.outermostOffsetSecs.<route>` | Booked time at the nearest timing point → step into the outermost berth | to measure | New |
+| `deadline.bufferSecs.<class>` | Lateness allowed before an unseen train's status is checked | to measure | New |
+| `deadline.noStatusCutoffSecs` | How long an unseen train with no status stays "Not yet seen" | to measure | New |
+| `stall.<berth>.<class>` | Normal time in a berth and the threshold past which a train is stalled (dropped from closures until it moves) | 0012: median 36 s, p90 48 s | New |
+| `runThrough.<station>` | The evidence that a train booked to stop will run through, and its threshold | west PLD: Darwin stop cancelled; east Southwick: time in 0010 below ~90–130 s | New |
+| `forecast.errorBandSecs.<lead>` | The ± on "around HH:MM" for trains not yet on the berths | east ±35–55 s at 10–25 min | New |
+| `feedHealth.<area>.maxSilenceSecs` | Silence that means the feed is down for this crossing ("Network Rail data is currently unavailable…") | to measure | New |
+
+**To be replaced once berth-first ships** (each removal proven by replay first): `td.noShowLeadSecs`,
+`td.areaEntryLeadSecs`, `td.sightingScope`, `close.unseenFloorSecs`, `open.unseenGraceSecs`, and
+`runsAsRequired.*` for closures. Reviewed in replay: `close.safetyNetSecs` and the `queue.*` settings.
+`confidenceWindows` becomes the forecast band above plus the berth confidence for trains on the berths.
 
 ---
 

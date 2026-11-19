@@ -10,15 +10,37 @@ going to produce a useful product.
 
 Stop at the first failure. They are ordered by cost-to-evaluate, cheapest first.
 
-### Gate 1 — C-Class berth data covering the approach
+### Gate 1 — Signalling berths covering 25 minutes on every route in
 
 **Hard requirement.** Without berth steps on the approach there is no position, no strike anchor, no
 clear step, and therefore no product: the app degrades to reading out a timetable that the user could
-have read themselves.
+have read themselves. Berth-first (docs/berth-first-design.md) goes further: a closure is only ever
+predicted from a train the berths have seen, so the berths must see trains early enough.
 
-Check: does the area publish C-Class at all, and do the berths on the approach have enough granularity
-to be useful? A single berth covering eight minutes of approach gives you one coarse trigger; four
-berths over the same stretch give you a sharpening ladder.
+Check (2026-11-19):
+
+1. **Every route in** to the crossing, both directions, including lines that join before it.
+2. **Each route needs berths for 25 minutes before the crossing**, possibly across several TD areas, or
+   back to the platform where its trains start (they are timed from booked departure until they leave).
+3. **Granularity:** a single berth covering eight minutes of approach gives one coarse trigger; four
+   berths over the same stretch give a sharpening ladder.
+
+Every area's berth steps are logged nationally since 2026-11-19 (`data/logs/td-all/` on the VPS), so
+this is measured from the log, not estimated: first sighting → crossing, per route (`MEASURING.md`,
+coverage horizon). Portslade: eastbound median 35 min (92% ≥ 25) from area LA alone; westbound only
+about 5½ min from LA, because Hove and Brighton are in the neighbouring area.
+
+**Verdicts, in these words:**
+
+- **No berth data at all → Rejected**, and the verdict says:
+
+  > **Can't be added.** Network Rail's signalling feed doesn't cover the railway around this crossing,
+  > so the app can't see trains coming. Timetables on their own aren't accurate enough to tell people
+  > when the barriers will go down, so we'd rather not show predictions than show poor ones.
+
+- **Partial coverage → Parked**, saying just as plainly what is missing, e.g. "Trains from the north can
+  only be seen 8 minutes out; we need 25." Proceed instead if the short route's trains start at a
+  station inside the 25 minutes, and say so.
 
 Rough test once logging: median dwell per approach berth. Berths with median dwell over ~180 s are
 doing little work. Portslade's east chain runs 37–143 s per berth, which is what makes the projection
@@ -112,7 +134,8 @@ Demand tells you *which* crossing. Gates 1–4 tell you *whether* and *when*.
 No weighted formula — the gates are near-binary and a composite score would hide that. Instead:
 
 ```
-Gate 1 fail            -> reject, permanently, with reason
+Gate 1 no berths       -> reject, permanently, in the Gate 1 wording
+Gate 1 short coverage  -> park, naming the route and its minutes
 Gate 2 = AOCL/UWC etc. -> reject unless there is a specific reason
 Gate 3 below bar       -> park; re-check if the timetable changes materially
 Gate 4 = no/no         -> park; re-check if S-Class coverage expands

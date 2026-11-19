@@ -11,22 +11,35 @@ description: The process for adding a new level crossing to railcrossing.uk — 
 > 2026-11-12: direction slots are named by the definition, not the code (any two names; every
 > per-direction block keyed by them). Board time per direction is a live setting and Stage 4 now
 > confirms it from the feed instead of only from the map, because a wrong pick is silent.
+> 2026-11-19: berth-first (docs/berth-first-design.md §9). Gate 1 is now 25 minutes of berths on every
+> route in, rejected in plain words; Stage 2 starts from the national berth log (live since 19 Nov);
+> new berth-log measurements (one train per berth, overtaking, coverage, stall and run-through
+> thresholds) and ship gates 8–12. Each change is marked **Now** (true today) or **Berth-first**
+> (only once that engine ships), because the engine predicting today is still the old one.
 
 Take a candidate from "someone asked for it" to "live and accurate" **without anyone standing at the
 crossing**. The signalling feed calibrates it: start logging first, measure everything from the feed,
 and launch only through the gates.
 
-Three references, each the single source for its subject:
+Four references, each the single source for its subject:
 
 - `docs/crossing-definition.md` — every variable a crossing has: meaning, Portslade's value, and whether
   the code reads it yet (Status column).
 - `MEASURING.md` (this folder) — how to obtain each variable and what breaks when it is wrong.
 - `SITE-SELECTION.md` (this folder) — the triage gates and scoring. `CANDIDATES.md` — every assessment.
+- `docs/berth-first-design.md` — the agreed redesign: closures only from trains the berths have seen,
+  timetable and Darwin as a forecast layer. Read §4–§5 before Stages 3–5: they say what the new
+  measurements are for.
+
+**Now / Berth-first.** Steps marked **Berth-first** feed an engine that is designed but not built. Do
+them anyway when they are cheap (they are measurements from logs we already hold), but a crossing
+launches on today's engine until berth-first ships: its gates are 1–7 plus any marked **Now**.
 
 ## Rules that hold at every stage
 
-1. **Record first.** Start logging the candidate's area the day it survives triage. Every timing comes
-   from accumulated feed data, and a day not recorded cannot be recovered.
+1. **Record first.** Every timing comes from accumulated feed data, and a day not recorded cannot be
+   recovered. Since 2026-11-19 every area's berth steps are logged nationally (Stage 2), so for C-Class
+   this is already done; S-Class (barrier bits) still has to be switched on per area.
 2. **Numbers never transfer between crossings.** The structure does (which berth, why a class split
    exists); the numbers are measured per site. Yapton's timings are not Portslade's.
 3. **Provenance or GUESS.** Every number in a definition carries sample size, spread, date and method,
@@ -35,6 +48,9 @@ Three references, each the single source for its subject:
    `scripts/templates/crossing-page.html` and rebuild, never the generated files.
 5. **A gate is a gate.** A failed gate means keep logging. The app's goals, in order: catch every
    closure, avoid false alarms, then timing accuracy.
+6. **The berths are the final word** (Berth-first). A timetable can take a train off the forecast; it can
+   never stop a closure the berths are showing. Any measurement whose error would show a train later
+   than it really arrives is the dangerous direction: say so in its provenance.
 
 ## Code readiness — check before Stage 1
 
@@ -43,7 +59,12 @@ whose Status is **Hard-coded** or **Partial**, compare the candidate's value wit
 difference is code work that must ship before this crossing can be calibrated. The ones most likely to
 bite: no adjacent station (`ldb.station` none currently crashes the board poll), automatic barriers
 (`closeModel`), bidirectional track, more than one clear step, a junction inside the approach, a
-crossing spanning two TD areas.
+crossing spanning two TD areas, **more than one track per direction across the road** (Now: not
+supported by either engine; design it against the first such crossing's data).
+
+Berth-first removes two of these: a junction inside the approach and an approach spanning several
+areas become ordinary, because routes are learned from the logs rather than listed by hand. Until it
+ships they are still code work.
 
 **Exit:** a list of required code changes (or "none") in the candidate's `CANDIDATES.md` row.
 
@@ -53,6 +74,7 @@ crossing spanning two TD areas.
 
 - **In:** a crossing name or road.
 - **Do:** run the four gates in `SITE-SELECTION.md`, cheapest first, stopping at the first failure.
+  Gate 1 is 25 minutes of berths on every route in (Now); its rejection wording is fixed there.
 - **Out:** a `CANDIDATES.md` row with gate results and a verdict.
 - **Exit:** verdict is Rejected (permanent reason), Parked (the condition that would revive it), or
   Proceed.
@@ -70,6 +92,12 @@ crossing spanning two TD areas.
   - Closure burden from CIF: closures/day, barrier-down minutes/day, peak-hour down-minutes.
   - Freight: 4xxx/6xxx/7xxx/8xxx on the route and how many are runs-as-required. Freight sets how long
     Stage 4 takes.
+  - **Every TD area** covering 25 minutes on every route in, not just the crossing's own (Now).
+  - **Stations within 25 minutes where trains start**, from timetable origins (Now). Their trains are
+    timed from booked departure until they leave the platform (design §5.9).
+  - **The last junction** before the crossing on each route: from there in, every train crosses (Now).
+  - **Tracks per direction** on each approach and across the road, and where parallel tracks merge
+    (Now). More than one track per direction across the road is code work (Code readiness).
 - **Out:** draft values for definition §1–5 and §12.
 - **Exit:** every Desk variable in `MEASURING.md` has a value or a recorded reason it has none.
 
@@ -77,13 +105,22 @@ crossing spanning two TD areas.
 
 - **In:** the TD area(s).
 - **Do:**
-  - Add each area to `backend/config/sclass.json` in collection mode (`"logRaw": "all"`,
-    `"crossings": {}`) and deploy. This banks the area's berth steps (`data/logs/sclass/cclass-<AREA>-*`)
-    and raw S-Class without creating a crossing. A crossing's own definition later adds its area to the
-    main berth log, `data/logs/td/<AREA>/`.
+  - **Berth steps are already logged for every area** (Now, since 2026-11-19, backend-v2 `a049364`):
+    `data/logs/td-all/td-all-<date>.jsonl(.gz)` on the VPS, raw CA/CB/CC/CT with a receive time `rx`,
+    one line per message, **kept 90 days**. Check the candidate's areas appear in it. If the calibration
+    window will run past 90 days, copy that area's lines out before they are pruned.
+  - Short-notice timetables (`data/logs/vstp/`, 180 days), train movements (`data/logs/trust/`, 60
+    days) and cancelled board services (`cat:"ldbCancelled"` in the daily log, crossing's own board
+    only) are logged too. A new crossing's board station is polled only once its definition exists.
+  - **S-Class still needs switching on**: add each area to `backend/config/sclass.json` in collection
+    mode (`"logRaw": "all"`, `"crossings": {}`) and deploy. This banks raw S-Class (the barrier bits)
+    and also an area-tagged berth log (`data/logs/sclass/cclass-<AREA>-*`, kept 180 days). A
+    crossing's own definition later adds its area to the main berth log, `data/logs/td/<AREA>/`.
   - Confirm the logs land and rotate (files are named by **London** date).
   - Gap-check weekly: one file per day, each ending just before London midnight. The feed watchdog only
     notices the *whole* feed stopping, not one area going quiet. Exclude gap days from every derivation.
+    Record each area's normal longest silence by time of day, and whether it sends heartbeats (CT)
+    (Berth-first: the outage detector, design §5.11).
 - **Out:** a growing, gap-checked log for each area.
 - **Exit:** ≥ 14 days of gap-free logs before Stage 3; freight needs weeks more.
 
@@ -100,9 +137,22 @@ crossing spanning two TD areas.
   - **Station-inside-a-berth test** at every approach berth: bimodal occupancy means a station stop
     splits the timings (Portslade: Southwick inside 0006, 160 s vs 49 s). The nearest station is not
     necessarily the one; test each.
-- **Out:** definition §6 and the geography half of §6a.
+  - **Now — measurable from the logs today, `MEASURING.md` has each method:**
+    - **Coverage horizon per route:** first sighting → clear step. Gate 1's number, measured.
+    - **Routes in and the last junction:** walk back from every clear step over the berths each train
+      used, across areas (`td-all`). By script until the route-learning tool exists.
+    - **One train per berth**, per approach berth: *holds* or *exempt*.
+    - **Overtaking count** per approach, and which tracks merge where.
+    - **Normal time per berth** per class, stopping and non-stopping separately where a station is
+      inside the berth (the stall rule's input).
+    - **Run-through evidence** at each station on the approach: what separates trains booked to stop
+      that ran through (Darwin stop cancelled; short time in a berth; leaving a station berth sooner than
+      any stopper), and the threshold.
+- **Out:** definition §6, the geography half of §6a, and §14.
 - **Accept:** each direction's berths are disjoint (or the crossing is flagged bidirectional); SMART
-  agrees with the derived anchors; every bimodal berth has a named station.
+  agrees with the derived anchors; every bimodal berth has a named station; every route in has a path
+  to the clear step; every approach berth is marked for one-per-berth; the overtaking count is recorded
+  (any overtake on a route means the no-overtaking rule is per track there, design §5.7).
 
 ## Stage 4 — Timetable, board and direction (~half a day)
 
@@ -123,7 +173,12 @@ crossing spanning two TD areas.
   - **Validate** against a day of CIF: traversal count matches Stage 1, no ambiguous drops; place lists
     agree with the timetable direction on ≥ 99% of matched board trains (Portslade: 34,028 / 34,031);
     the board-time check above agrees with the map, or the definition says why not.
-- **Out:** definition §3–5.
+  - **Outermost-berth offsets** (Now): for each route's outermost berth, booked time at the nearest
+    timing point → step into that berth, median and spread. Berth-first uses it only to decide when to
+    check on a train that hasn't appeared, never as a closure time (design §5.8).
+  - Berth-first narrows this stage: the timetable supplies identity, type, stopping pattern, the route
+    test and the outermost-berth time; the board time is used only for far-out forecasts.
+- **Out:** definition §3–5 and the timetable rows of §14.
 - **Exit:** validation passes, and no board train resolves to a guessed direction.
 
 ## Stage 5 — Calibrate (*tooling to be rebuilt*)
@@ -142,6 +197,9 @@ crossing spanning two TD areas.
   - **Freight before its sample matures:** the earliest feasible trigger with a deliberately early
     offset, labelled `GUESS`. Never the passenger rule; freight ran ~100 s slower at every Portslade
     berth.
+  - **Berth-first thresholds** (§14), each with provenance or `GUESS`: deadline buffer per class (from
+    lateness at the outermost berth), no-status cut-off, stall threshold per berth and class,
+    run-through thresholds, forecast error band by minutes out, feed-silence threshold per area.
 - **Out:** definition §6a timings and §7–10.
 - **Accept:** each timing reproduces out-of-sample on held-back days; gates 1–3 below pass.
 
@@ -169,8 +227,13 @@ crossing spanning two TD areas.
 | 5 | Replay integrity | 0 open-before-close, 0 CLEAR with a train on the road, over ≥ 3 days | Registers #14/#15 |
 | 6 | Data continuity | No unexplained gap in the calibration window | Register #21 |
 | 7 | Freight false alarms | Predicted-but-never-seen rate for runs-as-required trains measured and shown | Goal 2 |
+| 8 | Untimetabled trains (Berth-first) | 0 missed closures in replay for trains the berths saw but no timetable had | Portslade's live app missed 64 such in 46 days |
+| 9 | Feed down (Berth-first) | Outage and restart shown in replay: the "unavailable" message, never an empty "no closures" | Design §5.11–5.12 |
+| 10 | Replayable inputs (Berth-first) | Every input the crossing uses is logged and drives the replay | Design D15 |
+| 11 | Coverage (Now) | Horizon ≥ 25 min on every route, or the starting-station rule documented for that route | Gate 1, measured in Stage 3 |
+| 12 | Closing soon lead (Now) | ≥ 99% of closures had their train on the berths ≥ 90 s before barrier-down | Portslade 99.4% over 47 days |
 
-Gate 5 is `crossing-audit`'s job; hand off to it.
+Gate 5 is `crossing-audit`'s job; hand off to it. Gates 8–10 apply once berth-first is the engine.
 
 ## Stage 7 — Launch
 
@@ -227,3 +290,9 @@ Almost all of it is waiting for logs. Instrument several candidates at once; Sta
   backend. Acceptable for now; revisit if a dark crossing must be fully private.
 - **Gate bars** come from Portslade (MCB-CCTV). Untested on an automatic crossing, where the close should
   be much tighter.
+- **Route learning** (Berth-first) is the same rewrite as the calibration tooling above: one tool that
+  walks back from each clear step gives the routes, the junctions and the per-berth timings together.
+- **More than one track per direction across the road.** Not supported; design it when first met,
+  against that crossing's data.
+- **Berth-first itself.** Until it ships, the **Berth-first** steps above produce numbers nothing reads.
+  When it ships, rewrite this skill around it and drop the markers.

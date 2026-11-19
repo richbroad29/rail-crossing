@@ -5,12 +5,13 @@ re-requested; the second assessment should cost five minutes and reach the same 
 explicitly what changed.
 
 Gates are from `SITE-SELECTION.md`:
-**G1** C-Class berth data on the approach · **G2** crossing type · **G3** closure burden ·
+**G1** berths covering 25 min on every route in (before 2026-11-19: berth data on the approach) ·
+**G2** crossing type · **G3** closure burden ·
 **G4** barrier observability.
 
 | Crossing | Road | Area | Assessed | G1 | G2 | G3 (closures/day · peak down-min) | G4 | Verdict | Notes |
 |---|---|---|---|---|---|---|---|---|---|
-| Portslade | Boundary Road | LA | live since 2026 | ✅ | MCB-CCTV | ~22/day (single obs — re-measure) | ❌ no S-Class in LA | **Live** | The hard case, not the template. Human observation was the only option; every timing constant traces to n=8–11 barrier taps |
+| Portslade | Boundary Road | LA | live since 2026 | ✅ (25-min test 2026-11-19: east ✅ 35 min median; west ❌ 5½ min in LA, needs the Hove/Brighton area, now logged) | MCB-CCTV | ~22/day (single obs — re-measure) | ❌ no S-Class in LA | **Live** | The hard case, not the template. Human observation was the only option; every timing constant traces to n=8–11 barrier taps |
 | Yapton | — | BM | 2026 (data only) | ✅ | MCB-CCTV | not assessed | ✅ `L(YN)` byte 09 bit 7/6/5 | **Not launched** — instrumented only | 1,364 barrier episodes over 38 days, zero site visits. The proof that Group D calibration can be free |
 
 ## How to add a row

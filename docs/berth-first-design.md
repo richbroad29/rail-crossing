@@ -351,8 +351,9 @@ in the same order as live (D15). **Every timestamp is checked for the London wal
 ## 9. Changes to the new-crossing skill
 
 The `crossing-launch` skill (`SKILL.md`, `MEASURING.md`, `SITE-SELECTION.md`) and
-`docs/crossing-definition.md` change as below. **These land with the code**, not before: the skill must
-describe the engine that is running. Add a dated changelog line to `SKILL.md` saying why.
+`docs/crossing-definition.md` change as below. **Applied 2026-11-19** at Rich's request, ahead of the code:
+each step in the skill is marked **Now** (true today) or **Berth-first** (read by nothing until it ships),
+and the new variables are `crossing-definition.md` §14, all Status New.
 
 ### 9.1 Code readiness
 
@@ -484,7 +485,7 @@ behaviour changes only after replay proves it.**
 | 3. Replay and shadow comparison | §11 against live code over all logged days, plus live shadow days | No |
 | 4. Page | States and wording (§6). Headless screenshots per `feedback_rail_crossing_verify_frontend` | Only on deploy |
 | 5. Switch | Serve berth-first at Portslade | Yes |
-| 6. Skill | §9 lands with phase 5 | — |
+| 6. Skill | §9 applied early, 2026-11-19, steps marked Now / Berth-first; rewrite around the engine at phase 5 | — |
 
 ---
 
