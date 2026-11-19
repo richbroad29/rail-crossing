@@ -10,6 +10,7 @@ const tdRotation = require('./td-rotation');
 const sclassRotation = require('./sclass-rotation');
 const feedLogger = require('./feed-logger');
 const cifFetcher = require('./cif-fetcher');
+const cifArchive = require('./cif-archive');
 const corpusFetcher = require('./corpus-fetcher');
 const { computeRunRates } = require('./run-rate');
 const { tdLogFile, crossingTdAreas } = require('./td-paths');
@@ -221,6 +222,18 @@ function scheduleDailyCifRefresh() {
   }, ms);
 }
 
+function scheduleCifArchive() {
+  if (SCHEDULE_FILE) return; // a test timetable is not the real one
+  const run = () => cifArchive.runOnce({ download: cifFetcher.downloadCifUpdateDay, fullFile: cifFetcher.latestFilePath() })
+    .catch(err => console.error('CIF archive failed:', err.message));
+  setTimeout(run, 5 * 60 * 1000).unref(); // after the startup parse (~3 min), not competing with it
+  const next = nextFireAt(4, 30);
+  setTimeout(function tick() {
+    run();
+    setTimeout(tick, 24 * 3600 * 1000).unref();
+  }, next.getTime() - Date.now()).unref();
+}
+
 function nextFireAt(hour, minute) {
   const today = londonDateStamp();
   const hh = String(hour).padStart(2, '0');
@@ -298,6 +311,10 @@ async function main() {
 
   // Daily refresh at 04:00 Europe/London (CORPUS, then CIF)
   scheduleDailyCifRefresh();
+
+  // Timetable archive (cif-archive.js, log only): at startup once the schedule has loaded, then daily at
+  // 04:30 London, after the 04:00 full download. A failure costs archive data, never predictions.
+  scheduleCifArchive();
 
   // Start API server
   createApi(crossingStates, PORT);

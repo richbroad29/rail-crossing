@@ -106,11 +106,19 @@ function downloadCifUpdate() {
     .then(res => ({ ...res, day }));
 }
 
+// Download one weekday's UPDATE extract (toc-update-<day>) to `targetPath`, for the timetable archive
+// (cif-archive.js). Each file is named for the day whose changes it carries and is published ~00:30 UTC
+// the NEXT morning, so all seven names together are the last seven days.
+function downloadCifUpdateDay(day, targetPath) {
+  const reqPath = `/ntrod/CifFileAuthenticate?type=CIF_ALL_UPDATE_DAILY&day=toc-update-${day}`;
+  return fetchToFile(reqPath, targetPath + '.tmp', targetPath, `CIF-update-${day}`);
+}
+
 function latestFilePath() {
   return TARGET;
 }
 
 module.exports = {
-  downloadCif, downloadCifUpdate,
+  downloadCif, downloadCifUpdate, downloadCifUpdateDay,
   latestFilePath
 };
