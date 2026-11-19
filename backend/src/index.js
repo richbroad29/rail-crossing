@@ -262,6 +262,9 @@ function readTodaysTdEntries(area) {
     if (!line) continue;
     let r; try { r = JSON.parse(line); } catch (err) { continue; }
     if (!r.area || !r.desc || !r.ts) continue;
+    // Steps and cancels, as on the live path (CrossingState.recordTdEvent): an interpose is not
+    // a sighting for this engine. Older lines all carry `event`.
+    if (r.event === 'CC') continue;
     entries.push({ area: r.area, headcode: r.desc, ts: r.ts, from: r.from, to: r.to });
   }
   return { entries };
@@ -328,7 +331,9 @@ async function main() {
 
   // Each crossing takes only its own area's events (CrossingState.ownsTdArea) — berth codes
   // repeat across areas, so an unfiltered fan-out lets a distant train anchor a local closure.
-  tdListener.on('sighting', (s) => {
+  // Steps, cancels and interposes all arrive here, labelled; recordTdEvent decides what each
+  // is worth.
+  tdListener.on('berth', (s) => {
     for (const state of Object.values(crossingStates)) state.recordTdEvent(s);
   });
   tdListener.start({ areas: crossingTdAreas(crossingsConfig) });

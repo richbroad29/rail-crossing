@@ -60,7 +60,7 @@ const readLines = f => (fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split('\n'
   td._setLogFilesForTest({ td: tdFile, cclass: ccFile, tdAll: () => allFile });
 
   const sightings = [];
-  td.on('sighting', s => sightings.push(`${s.area}:${s.headcode}:${s.to}`));
+  td.on('berth', s => sightings.push(`${s.area}:${s.headcode}:${s.to}`));
 
   const ca = (area, descr, from, to) => ({ CA_MSG: { area_id: area, msg_type: 'CA', descr, from, to, time: String(Date.now()) } });
   const frame = () => JSON.stringify([

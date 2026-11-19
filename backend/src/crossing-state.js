@@ -45,7 +45,7 @@ const TD_LOCK_LEAD_MS = 60 * 1000;
 const TIMETABLE_DIRECTION_WINDOW_MS = 20 * 60 * 1000;
 // Fallback "first TD sighting → crossing" lead if config omits areaEntryLeadSecs.
 // Biased low so projections fire early rather than late (catch-every-closure).
-// These are deliberately ROUGH and intentionally too short: the 'sighting' fires
+// These are deliberately ROUGH and intentionally too short: the first sighting is
 // when a headcode first appears ANYWHERE in area LA — often many berths (i.e.
 // minutes) before the crossing — so the true lead is larger and variable. (The
 // ~112s westbound figure these were seeded from is crossing-section occupancy,
@@ -257,7 +257,7 @@ class CrossingState {
   // Request a recompute, coalescing everything that arrives in the same tick into one.
   //
   // Why coalesce rather than recompute inline: td-listener parses each STOMP frame into an
-  // ARRAY and emits one 'sighting' per message synchronously, and each of those runs all
+  // ARRAY and emits one 'berth' event per message synchronously, and each of those runs all
   // four recorders. A recompute measured at ~13 ms against a real 234-train day, so
   // recomputing per message would block the event loop for N x 13 ms per frame — with the
   // HTTP API queued behind it. Coalescing makes it one recompute per frame however many
@@ -300,11 +300,35 @@ class CrossingState {
     return !!mine && area === mine;
   }
 
-  // The single entry point for a live TD berth event (td-listener 'sighting'). Drops any
-  // event from another area, then runs the four recorders in the order they always ran.
+  // The single entry point for a live TD berth event (td-listener 'berth'). Drops any event
+  // from another area, then acts on its kind (td-listener berthEvent says what each means):
+  //   CA, a step       the four recorders below, in the order they always ran. An event with
+  //                    no kind is a step, as every caller sent before 2026-11-20.
+  //   CB, a cancel     a sighting, as it always was here, then recordTdCancel for the position.
+  //   CC, an interpose not used by this engine; returns false.
   // Returns whether the event was taken, for the caller's tests.
+  //
+  // This engine's sighting rules (the first sighting plus areaEntryLeadSecs, the drop rule
+  // that runs on it, the late-minute lock) were all set on steps and cancels, the two kinds
+  // td-listener passed on before 2026-11-20. They keep exactly that diet:
+  // - A cancel stays a sighting. A train handed in from a neighbouring area typically arrives
+  //   as an interpose into our first berth and a cancel from the fringe berth in the same
+  //   second (1H08, 2026-11-16: CC A001 + CB AM12 at 09:09:09), and the cancel is this
+  //   engine's only sign of it until the first step. Not counting it would move the first
+  //   sighting of 9,580 of 62,052 train-days (LA, 2026-05-23..11-19) a median 43 s later.
+  // - An interpose is not used. Counting it would move the first sighting of 5,663 of 16,358
+  //   train-days earlier (2026-10-01..11-16; median 4 min, p90 45 min: a description set up at
+  //   a starting platform long before the train moves), and would time a train standing at its
+  //   platform from the moment it was described. The berth-first engine is the one built to use
+  //   interposes (docs/berth-first-design.md §5.2, §5.9).
   recordTdEvent(evt) {
     if (!evt || !this.ownsTdArea(evt.area)) return false;
+    if (evt.event === 'CC') return false;
+    if (evt.event === 'CB') {
+      this.recordTdSighting(evt.headcode, evt.ts);
+      this.recordTdCancel(evt);
+      return true;
+    }
     this.recordTdSighting(evt.headcode, evt.ts);
     this.recordTdBerth(evt);       // B1: feed the live-position map (berth in payload)
     this.recordTdClearStep(evt);   // TD-triggered open: anchor closure end to the crossing clear step
@@ -312,9 +336,8 @@ class CrossingState {
     return true;
   }
 
-  // Record a TD sighting (called from td-listener for each CA/CB event we
-  // care about). We only need the headcode and the time — the berth itself
-  // doesn't matter for "is the train running today".
+  // Record a TD sighting (called for each berth step, CA). We only need the headcode and the
+  // time — the berth itself doesn't matter for "is the train running today".
   recordTdSighting(headcode, when) {
     if (!headcode) return;
     const ts = when instanceof Date ? when : new Date(when);
@@ -370,9 +393,8 @@ class CrossingState {
     return n;
   }
 
-  // B1: record a TD berth step into the live-position map. Called from the same
-  // 'sighting' hook as recordTdSighting, with the enriched payload that now
-  // carries the berth.
+  // B1: record a TD berth step into the live-position map. Called for the same berth steps
+  // as recordTdSighting, with the payload that carries the berth.
   //
   // This used to say the live map "must not touch predictions", which stopped being true on
   // 2026-07-26 when the projection started reading it. It now marks the state dirty for an
@@ -421,6 +443,27 @@ class CrossingState {
     // position, which beats falling back to a timetable estimate, and the next LDB poll
     // reconciles it anyway.
     if (berth && this._matchCloseStrikeBerth(berth)) this._markDirty();
+  }
+
+  // A berth cancel (CB): the description has been removed from berth `from`.
+  //
+  // If that is the berth we have this train in, we no longer know where it is, so the
+  // position is cleared. Its `lastSeen` and history are kept as they were: the train was not
+  // seen anywhere new, so the position memory must not look fresher than its last real
+  // position. A cancel at any other berth is about another description with the same headcode
+  // (a signaller's duplicate, a rename elsewhere) and leaves our train alone.
+  //
+  // Before 2026-11-20 a cancel went through the step recorders (td-listener had CB and CC the
+  // wrong way round), which refreshed `lastSeen` and blanked the position wherever the train
+  // was. Seen on 2026-10-23: 2P06 stood in 0001 while a duplicate 2P06 description was put
+  // into T677 and cancelled 4 s later, and the real train lost its position until its next step.
+  recordTdCancel(evt) {
+    if (!evt || !evt.headcode || !evt.from) return;
+    const live = this.liveTrains.get(evt.headcode);
+    if (!live || live.berth !== evt.from) return;
+    this.liveTrains.set(evt.headcode, { ...live, berth: null, fromBerth: evt.from, event: 'CB' });
+    // Losing a chain position changes the projection, as gaining one does (recordTdBerth).
+    if (this._matchCloseStrikeBerth(evt.from)) this._markDirty();
   }
 
   // TD-triggered open: record a train performing the crossing CLEAR step. Only the
@@ -586,7 +629,7 @@ class CrossingState {
     // STRIKE — the quantity the table's queued cells are conditioned on (lib/td-runs.markAhead
     // builds them with the same definition), read once here because it cannot be recovered
     // later: by the time the close is computed the train ahead has moved on. null = nothing
-    // in the way. Only when the live map already has this train in this berth (the 'sighting'
+    // in the way. Only when the live map already has this train in this berth (the 'berth'
     // hook records the berth first); otherwise left undefined, which means "not known".
     const live = this.liveTrains.get(evt.headcode);
     if (live && live.berth === evt.to) {
@@ -920,7 +963,7 @@ class CrossingState {
       // approach chain plus the transit for its class is a real position-based estimate
       // and it sharpens on every step.
       //
-      // FALLBACK — the old area-entry projection: the 'sighting' event fires on ANY CA/CB
+      // FALLBACK — the old area-entry projection: the first sighting is ANY berth
       // step in area LA and carries no berth, so it only means "somewhere in LA". That is
       // a poor estimate and, worse, it drives the drop rule below: measured over 10 days,
       // first-sighting→crossing is a median 2,329s eastbound against a 330s deadline, so

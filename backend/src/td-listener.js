@@ -10,8 +10,8 @@ const { londonDateStamp } = require('./time-utils');
 const { SClassDecoder, parseDataBytes } = require('./sclass-decoder');
 const { TD_LOG_ROOT, tdLogDir, tdLogFile, isValidArea } = require('./td-paths');
 
-// Single shared emitter — index.js wires its 'sighting' events into each
-// crossing-state's recordTdSighting method.
+// Single shared emitter — index.js wires its 'berth' events into each crossing-state's
+// recordTdEvent method (see berthEvent below for what each one means).
 const emitter = new EventEmitter();
 
 // NROD's public feed is plain STOMP — they do not expose a TLS endpoint.
@@ -22,14 +22,34 @@ const PORT = 61618;
 // at a fake STOMP server on this machine.
 let endpoint = { host: HOST, port: PORT };
 const TOPIC = '/topic/TD_ALL_SIG_AREA';
-// The areas whose C-Class berth steps drive crossing predictions: logged to the td log and
-// emitted as 'sighting'. Set by start() from crossings.json (td-paths.crossingTdAreas) — it
+// The areas whose C-Class berth events drive crossing predictions: logged to the td log and
+// emitted as 'berth'. Set by start() from crossings.json (td-paths.crossingTdAreas) — it
 // used to be a hard-coded 'LA', which meant a crossing in any other area got no berth steps
 // at all (multi-crossing-readiness.md, blocker 1). Empty until start(): nothing is assumed.
 let crossingAreas = new Set();
 const LOG_DIR = TD_LOG_ROOT;
 
 const RELEVANT_MSG_TYPES = new Set(['CA_MSG', 'CB_MSG', 'CC_MSG']);
+
+// What a C-Class message means. Checked against the live feed on 2026-10-25, and against every
+// area-LA message from 2026-10-01 to 11-16: all 12,826 CB carried `from` only, all 12,611 CC
+// carried `to` only.
+//   CA  step       the description moved from `from` to `to`: the train itself has moved.
+//   CB  cancel     the description was removed from `from`.
+//   CC  interpose  a description was written into `to`: a train handed over from a neighbouring
+//                  area, a train being set up to start, a train renamed where it stands, or a
+//                  signaller's reminder ("****", "-LB-").
+// Until 2026-11-20 this file had CB and CC the other way round. It passed every cancel on as a
+// sighting, which blanked that train's position wherever we had it (CLAUDE.md item 0b), and it
+// dropped every interpose. Each event now goes out under its own name and the consumer decides
+// what it is worth (CrossingState.recordTdEvent).
+//
+// Returns the event to emit, or null. Only messages carrying a description are events.
+function berthEvent(evt) {
+  if (!evt || !evt.desc) return null;
+  if (evt.event !== 'CA' && evt.event !== 'CB' && evt.event !== 'CC') return null;
+  return { headcode: evt.desc, ts: evt.ts, area: evt.area, event: evt.event, from: evt.from, to: evt.to };
+}
 
 // --- S-Class (additive) — barrier-state capture for the configured describer
 // areas (e.g. BM/Yapton), decoded ALONGSIDE (never instead of) the LA C-Class
@@ -77,7 +97,7 @@ if (surveyUntil) console.log(`S-Class survey: banking raw S-Class from every are
 // BM berth chain to confirm YN and for the Phase 2 join, and the real-time feed
 // cannot be backfilled — so it must start with this window. Captured to a
 // SEPARATE, area-tagged log (never the LA td log) and NEVER emitted as a
-// 'sighting' from this path. If an S-Class area is ALSO a crossing area, its
+// 'berth' event from this path. If an S-Class area is ALSO a crossing area, its
 // steps are written here AND go down the crossing path below (see processMessage)
 // — the crossing path is never diverted, and the S-Class tooling keeps its log.
 const CCLASS_EXTRA_AREAS = new Set(decoder ? Object.keys(decoder.areas) : []);
@@ -285,7 +305,7 @@ function handleSurvey(type, msg, area) {
 // separate, area-tagged log. Builds the SAME event shape as the LA path (so the
 // BM log is format-compatible for the Phase 2 join, using feed time as the LA
 // td log does), but writes only to cclass-<area>-<date>.jsonl and emits no
-// 'sighting'. The LA path's own statements are left exactly as they were.
+// 'berth' event. The LA path's own statements are left exactly as they were.
 function handleCClassExtra(type, msg) {
   const ms = Number(msg.time);
   const ts = Number.isFinite(ms) && ms > 0 ? new Date(ms).toISOString() : new Date().toISOString();
@@ -321,7 +341,7 @@ function processMessage(body) {
       if (S_CLASS_MSG_TYPES.has(type)) { handleSClass(type, msg); continue; }
 
       // C-Class berth steps for the extra S-Class areas (BM): separate, area-
-      // tagged log, no 'sighting'. An area that is ALSO a crossing area falls
+      // tagged log, no 'berth' event. An area that is ALSO a crossing area falls
       // through to the crossing block too, so being in the S-Class map never
       // takes berth steps away from a crossing.
       if (RELEVANT_MSG_TYPES.has(type) && msg && CCLASS_EXTRA_AREAS.has(msg.area_id)) {
@@ -345,17 +365,9 @@ function processMessage(body) {
       writeEvent(evt);
       eventsLogged++;
 
-      // Emit a sighting for downstream prediction state. CA = berth step,
-      // CB = interpose (headcode first appearing). Both confirm the train is
-      // physically here. Skip CC (cancel) — those carry the cleared headcode.
-      // Payload now carries the berth (from/to/event) too — recordTdSighting
-      // ignores the extra fields, while the live-position map (B1) needs them.
-      if (evt.desc && (evt.event === 'CA' || evt.event === 'CB')) {
-        emitter.emit('sighting', {
-          headcode: evt.desc, ts: evt.ts, area: evt.area,
-          event: evt.event, from: evt.from, to: evt.to
-        });
-      }
+      // Every step, cancel and interpose goes to the crossings, labelled for what it is.
+      const be = berthEvent(evt);
+      if (be) emitter.emit('berth', be);
     }
   }
 

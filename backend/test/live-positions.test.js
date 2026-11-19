@@ -54,7 +54,7 @@ console.log('\nB1 — live-position map\n');
   const s = freshState();
   s.recordTdBerth({ headcode: '6O12', ts: BASE, event: 'CA', from: '0006', to: '0004' });
   s.recordTdBerth({ headcode: '2W20', ts: BASE, event: 'CA', from: '0003', to: '0005' });
-  s.recordTdBerth({ headcode: '9Z99', ts: BASE, event: 'CB', from: 'A010', to: 'A035' });
+  s.recordTdBerth({ headcode: '9Z99', ts: BASE, event: 'CA', from: 'A010', to: 'A035' });
   s.recordTdBerth({ headcode: '5S00', ts: BASE - 10 * 60000, event: 'CA', from: '0001', to: '0002' }); // stale
 
   const live = s.getLiveTrains(BASE);
@@ -130,7 +130,7 @@ console.log('\nB1 — live-position map\n');
 // No LDB/CIF match → the four times are null; history still present.
 {
   const s = new CrossingState('portslade', cfg);
-  s.recordTdBerth({ headcode: '9Z99', ts: BASE, event: 'CB', from: 'A010', to: 'A035' });
+  s.recordTdBerth({ headcode: '9Z99', ts: BASE, event: 'CA', from: 'A010', to: 'A035' });
   const t = s.getLiveTrains(BASE).find(x => x.headcode === '9Z99');
   check('unmatched train: schedDep null', t && t.schedDep, null);
   check('unmatched train: history is an array', t && Array.isArray(t.history), true);
