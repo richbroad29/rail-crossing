@@ -4,9 +4,10 @@
 // new capture cannot grow without limit. Kept as a separate module (rather than
 // editing td-rotation) so the live C-Class log path is untouched. Handles the
 // raw `sclass-YYYY-MM-DD.jsonl`, decoded `barrier-YYYY-MM-DD.jsonl`, and area-
-// tagged `cclass-<AREA>-YYYY-MM-DD.jsonl` files in data/logs/sclass/: gzip after
-// 7 days, prune after 180 days. The all-area `survey-YYYY-MM-DD.jsonl` files (td-listener's
-// survey window) are much bigger and only feed one scan, so they are pruned after 60.
+// tagged `cclass-<AREA>-YYYY-MM-DD.jsonl` files in data/logs/sclass/, and the nationwide
+// `survey-YYYY-MM-DD.jsonl` (raw S-Class of every other area, ~620 MB a day raw, ~45 MB gzipped):
+// gzip every day before today, prune after the shared KEEP_DAYS (retention.js). Gzipping waited
+// 7 days until 2026-11-19; with the nationwide capture permanent, that would leave ~4 GB raw.
 
 const fs = require('fs');
 const path = require('path');
@@ -14,9 +15,8 @@ const zlib = require('zlib');
 const { pipeline } = require('stream');
 
 const LOG_DIR = path.join(__dirname, '..', 'data', 'logs', 'sclass');
-const GZIP_AFTER_DAYS = 7;
-const PRUNE_AFTER_DAYS = 180;
-const SURVEY_PRUNE_AFTER_DAYS = 60;
+const GZIP_AFTER_DAYS = 0;   // any day before today: the London-dated file is complete by 03:10
+const PRUNE_AFTER_DAYS = require('./retention').KEEP_DAYS;
 
 function parseDateFromName(name) {
   const m = name.match(/^(?:sclass|barrier|survey|cclass-[A-Za-z0-9]+)-(\d{4}-\d{2}-\d{2})\.jsonl(\.gz)?$/);
@@ -24,8 +24,9 @@ function parseDateFromName(name) {
   return new Date(m[1] + 'T00:00:00Z');
 }
 
-function pruneAfterDays(name) {
-  return name.startsWith('survey-') ? SURVEY_PRUNE_AFTER_DAYS : PRUNE_AFTER_DAYS;
+// Every file alike since 2026-11-19 (survey files were 60 days, the rest 180).
+function pruneAfterDays() {
+  return PRUNE_AFTER_DAYS;
 }
 
 function gzipFile(src) {
@@ -89,4 +90,5 @@ function start() {
   }, initial);
 }
 
-module.exports = { start, runOnce, _parseDateFromName: parseDateFromName, _pruneAfterDays: pruneAfterDays };
+module.exports = { start, runOnce, _parseDateFromName: parseDateFromName, _pruneAfterDays: pruneAfterDays,
+  _gzipAfterDays: GZIP_AFTER_DAYS };

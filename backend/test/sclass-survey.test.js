@@ -32,6 +32,7 @@ const body = (...w) => JSON.stringify(w);
   const now = Date.parse('2026-11-12T12:00:00Z');
   const { SURVEY_MAX_DAYS } = td._constantsForSurveyTest;
   check('no survey block -> off', td._surveyUntilFrom({ areas: {} }, now), null);
+  check('until "always" -> permanent', td._surveyUntilFrom({ survey: { until: 'always' } }, now), Infinity);
   check('until null -> off', td._surveyUntilFrom({ survey: { until: null } }, now), null);
   check('until in the past -> off', td._surveyUntilFrom({ survey: { until: '2026-11-01T00:00:00Z' } }, now), null);
   check('until not a date -> off', td._surveyUntilFrom({ survey: { until: 'next week' } }, now), null);
@@ -40,8 +41,9 @@ const body = (...w) => JSON.stringify(w);
   check(`until a year ahead -> capped at ${SURVEY_MAX_DAYS} days`,
     td._surveyUntilFrom({ survey: { until: '2027-11-12T12:00:00Z' } }, now), now + SURVEY_MAX_DAYS * 86400000);
   const liveUntil = require('../config/sclass.json').survey.until;
-  check('live config: survey.until is null or a real date (a typo would silently mean "off")',
-    liveUntil === null || Number.isFinite(Date.parse(liveUntil)), true);
+  check('live config: survey.until is null, "always" or a real date (a typo would silently mean "off")',
+    liveUntil === null || liveUntil === 'always' || Number.isFinite(Date.parse(liveUntil)), true);
+  check('live config: the nationwide capture is permanent', liveUntil, 'always');
 
   // ---- routing ---------------------------------------------------------------------------
   // Off: an unconfigured area writes nothing.
@@ -86,8 +88,11 @@ const body = (...w) => JSON.stringify(w);
 
   // ---- rotation --------------------------------------------------------------------------
   check('rotation recognises survey files', rotation._parseDateFromName('survey-2026-11-12.jsonl.gz') instanceof Date, true);
-  check('survey files pruned after 60 days', rotation._pruneAfterDays('survey-2026-11-12.jsonl'), 60);
-  check('other S-Class files still kept 180 days', rotation._pruneAfterDays('sclass-2026-11-12.jsonl'), 180);
+  const { KEEP_DAYS } = require('../src/retention');
+  check('one retention policy: 90 days', KEEP_DAYS, 90);
+  check('survey files pruned after KEEP_DAYS', rotation._pruneAfterDays('survey-2026-11-12.jsonl'), KEEP_DAYS);
+  check('other S-Class files pruned after KEEP_DAYS too', rotation._pruneAfterDays('sclass-2026-11-12.jsonl'), KEEP_DAYS);
+  check('S-Class files gzipped from the day after (age > 0)', rotation._gzipAfterDays, 0);
 
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(`\n${pass} passed, ${fail} failed\n`);

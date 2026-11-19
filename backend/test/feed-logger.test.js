@@ -40,13 +40,26 @@ F._setLogRootForTest(dir);
   fs.writeFileSync(path.join(t, 'unrelated.txt'), '');
   await F.rotate(new Date('2026-11-19T12:00:00Z'));
   const files = fs.readdirSync(t).sort();
-  // trust is kept F.KEEP_DAYS.trust (60) days: 1 Jan and the 2 Jul file written above are both older.
+  // trust is kept F.KEEP_DAYS.trust (90) days: 1 Jan and the 2 Jul file written above are both older.
   check('rotation: yesterday gzipped, today plain, older than the keep period pruned, other files left alone', files,
     ['trust-2026-11-18.jsonl.gz', 'trust-2026-11-19.jsonl', 'unrelated.txt']);
   fs.mkdirSync(path.join(dir, 'td-all'));
   fs.writeFileSync(path.join(dir, 'td-all', 'td-all-2026-11-18.jsonl'), '{}\n');
   await F.rotate(new Date('2026-11-19T12:00:00Z'));
   check('rotation also gzips the national C-Class log', fs.readdirSync(path.join(dir, 'td-all')), ['td-all-2026-11-18.jsonl.gz']);
+
+  // One policy: every feed kept 90 days (retention.js).
+  check('every feed kept 90 days', JSON.stringify(F.KEEP_DAYS), JSON.stringify({ vstp: 90, trust: 90, 'td-all': 90 }));
+
+  // The daily app log (<date>.jsonl in the log root): pruned past 90 days, never gzipped.
+  fs.writeFileSync(path.join(dir, '2026-08-21.jsonl'), '{}\n');   // 90 days before 19 Nov: kept
+  fs.writeFileSync(path.join(dir, '2026-08-20.jsonl'), '{}\n');   // 91 days: pruned
+  fs.writeFileSync(path.join(dir, '2026-11-18.jsonl'), '{}\n');   // yesterday: kept plain
+  fs.writeFileSync(path.join(dir, 'notes-2026-01-01.jsonl'), ''); // not a daily log: left alone
+  await F.rotate(new Date('2026-11-19T12:00:00Z'));
+  const root = fs.readdirSync(dir).filter(f => f.endsWith('.jsonl') || f.endsWith('.gz')).sort();
+  check('daily app log: older than 90 days pruned, the rest left plain, other files alone', root,
+    ['2026-08-21.jsonl', '2026-11-18.jsonl', 'notes-2026-01-01.jsonl']);
 
   fs.rmSync(dir, { recursive: true, force: true });
   console.log();

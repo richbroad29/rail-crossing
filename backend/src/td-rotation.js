@@ -5,7 +5,7 @@ const { pipeline } = require('stream');
 
 const { TD_LOG_ROOT: LOG_DIR, isValidArea } = require('./td-paths');
 const GZIP_AFTER_DAYS = 7;
-const PRUNE_AFTER_DAYS = 180;
+const PRUNE_AFTER_DAYS = require('./retention').KEEP_DAYS; // one policy for every log (retention.js)
 
 function parseDateFromName(name) {
   const m = name.match(/^td-(\d{4}-\d{2}-\d{2})\.jsonl(\.gz)?$/);

@@ -18,6 +18,8 @@
 // Files are written plain for the current day and gzipped once the London date has moved on
 // (rotate(), daily at 03:20 — after td-rotation 03:00 and sclass-rotation 03:10), together with
 // td-listener's national C-Class log (data/logs/td-all/). How long each is kept: KEEP_DAYS.
+// The same run prunes the daily app log (data/logs/<date>.jsonl: LDB lateness, state, held) at the
+// same age. It is left plain, not gzipped: the analysis tools and the startup seed read it as .jsonl.
 
 const fs = require('fs');
 const path = require('path');
@@ -34,11 +36,10 @@ const WATCHDOG_TICK_MS = 60 * 1000;
 // Days each log is kept. Every folder here is gzipped the day after it is written.
 // td-all is written by td-listener.js (the national C-Class log) but rotated here, with the others
 // that are gzipped daily rather than after 7 days: they are the big ones.
-// Set from the 2026-11-19 volume test (evening rate, gzipped): TRUST ~670 MB/day raw at ~16x,
-// national C-Class ~280 MB/day raw at ~6x — together ~100-150 MB/day compressed at daytime rates.
-// 180 days of both would fill the disk (28 GB free), so the two big ones are kept shorter. Revisit
-// once a week of real files exists. VSTP is tiny.
-const KEEP_DAYS = { vstp: 180, trust: 60, 'td-all': 90 };
+// One policy for every log (retention.js, 90 days, Rich 2026-11-19). Volume test 2026-11-19 (evening
+// rate): TRUST ~670 MB/day raw at ~16x, national C-Class ~280 MB/day raw at ~6-9x. VSTP is tiny.
+const { KEEP_DAYS: KEEP } = require('./retention');
+const KEEP_DAYS = { vstp: KEEP, trust: KEEP, 'td-all': KEEP };
 
 // staleMs: silence that forces a reconnect. null = never (VSTP is genuinely quiet for hours).
 const FEEDS = {
@@ -187,6 +188,16 @@ async function rotate(now = new Date()) {
       if (m[1] < today && !m[2]) {
         try { await gzipFile(full); gzipped++; } catch (e) { console.error(`feed rotation: gzip ${f} failed: ${e.message}`); }
       }
+    }
+  }
+  // The daily app log, data/logs/<date>.jsonl: pruned at the same age, never gzipped (see top).
+  if (fs.existsSync(logRoot)) {
+    for (const f of fs.readdirSync(logRoot)) {
+      const m = f.match(/^(\d{4}-\d{2}-\d{2})\.jsonl(\.gz)?$/);
+      if (!m) continue;
+      const ageDays = (Date.parse(today + 'T00:00:00Z') - Date.parse(m[1] + 'T00:00:00Z')) / 86400000;
+      if (ageDays <= KEEP) continue;
+      try { fs.unlinkSync(path.join(logRoot, f)); pruned++; } catch (e) { console.error(`feed rotation: prune ${f} failed: ${e.message}`); }
     }
   }
   if (gzipped || pruned) console.log(`feed rotation: ${gzipped} gzipped, ${pruned} pruned`);

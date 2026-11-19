@@ -50,22 +50,28 @@ try {
   console.warn('S-Class decode disabled (config load failed):', e.message);
 }
 
-// ---- S-Class survey: every area, for a bounded window ----
+// ---- S-Class survey: every area ----
 // The feed carries S-Class for EVERY describer in Britain; the decoder keeps only the areas in
 // sclass.json. A survey also banks the raw S-Class of every OTHER area, to survey-<date>.jsonl,
 // so the barrier-bit scan (crossing-directory-refresh skill) can find barrier data in areas we
-// don't collect yet. On only while sclass.json `survey.until` is in the future; it switches
-// itself off at that instant with no restart. Capped at SURVEY_MAX_DAYS from startup so a
-// forgotten date can't grow the disk without limit. Raw logging only: nothing is decoded,
-// emitted or fed to predictions, and configured areas are logged exactly as before.
+// don't collect yet — and, since 2026-11-19, so every crossing that publishes its barrier state
+// has a history to study. sclass.json `survey.until`:
+//   "always"  permanent nationwide capture (the setting since 2026-11-19). The disk is bounded by
+//             sclass-rotation: gzipped the next day (~45 MB), pruned after KEEP_DAYS (retention.js).
+//   ISO time  a bounded window that switches itself off at that instant with no restart, capped
+//             at SURVEY_MAX_DAYS from startup so a mistyped date can't run on.
+//   null      off.
+// Raw logging only: nothing is decoded, emitted or fed to predictions, and configured areas are
+// logged exactly as before.
 const SURVEY_MAX_DAYS = 14;
 function surveyUntilFrom(cfg, now) {
+  if (cfg && cfg.survey && cfg.survey.until === 'always') return Infinity;
   const until = cfg && cfg.survey && cfg.survey.until ? Date.parse(cfg.survey.until) : NaN;
   if (!Number.isFinite(until) || until <= now) return null;
   return Math.min(until, now + SURVEY_MAX_DAYS * 86400000);
 }
 let surveyUntil = surveyUntilFrom(sclassConfig, Date.now());
-if (surveyUntil) console.log(`S-Class survey: banking raw S-Class from every area until ${new Date(surveyUntil).toISOString()}`);
+if (surveyUntil) console.log(`S-Class survey: banking raw S-Class from every area ${surveyUntil === Infinity ? 'permanently' : 'until ' + new Date(surveyUntil).toISOString()}`);
 
 // C-Class berth steps for the S-Class areas (BM) are captured too: we need the
 // BM berth chain to confirm YN and for the Phase 2 join, and the real-time feed
