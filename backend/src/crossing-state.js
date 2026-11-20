@@ -671,10 +671,16 @@ class CrossingState {
     return !!(cfg && cfg.approach && cfg.approach.from === berth);
   }
 
+  // The longest any reader trusts a remembered position: the display TTL or the CLOSED
+  // gate's 20 min, whichever is longer.
+  _liveHorizonMs() {
+    return Math.max(this._getLiveTtlMs(), CLOSE_STRIKE_TTL_MS);
+  }
+
   // Drop remembered positions past the longest horizon any reader uses. Called on the
   // write path only — see the note in recordTdBerth for why not on read.
   _pruneLiveTrains(nowMs) {
-    const horizon = Math.max(this._getLiveTtlMs(), CLOSE_STRIKE_TTL_MS);
+    const horizon = this._liveHorizonMs();
     for (const [headcode, t] of this.liveTrains) {
       if (nowMs - t.lastSeen > horizon) this.liveTrains.delete(headcode);
     }
@@ -1398,9 +1404,20 @@ class CrossingState {
   // does not make every train look unsighted. Either map counts — they are fed by the same
   // TD events but written by different hooks, and a train with a known BERTH has
   // self-evidently been seen.
-  _everSighted(t) {
+  //
+  // A remembered position counts only while it is inside the horizon the map is pruned at.
+  // The map is pruned when something is written to it, so overnight, when nothing steps, a
+  // position from before the 03:00 reset can outlive tdSeenToday by hours; whether it did
+  // depended on unrelated traffic. Until 2026-11-20 every signaller's cancel was such a write
+  // (CLAUDE.md item 0b). Once cancels stopped writing, 3 Sep 2026 showed it: 1H72 last stepped
+  // at 00:47 UTC, nothing wrote until 02:20, and its board entry for 02:31 counted as sighted,
+  // so the page showed BARRIERS DOWN for 2.5 min with no train. Checked here against the same
+  // horizon, the answer no longer depends on what else happened to arrive.
+  _everSighted(t, now = new Date()) {
     if (!t.headcode) return false;
-    return this.tdSeenToday.has(t.headcode) || this.liveTrains.has(t.headcode);
+    if (this.tdSeenToday.has(t.headcode)) return true;
+    const live = this.liveTrains.get(t.headcode);
+    return !!live && now.getTime() - live.lastSeen <= this._liveHorizonMs();
   }
 
   // The train's fresh, direction-matched strike at `berth` (or null). A strike matches
@@ -1924,7 +1941,7 @@ class CrossingState {
       //
       // Holding rather than dropping the period keeps the countdown: the prediction is
       // untouched, so an unsighted train still reaches CLOSING_SOON.
-      if (this._upstreamOfAnchor(t, now) || !this._everSighted(t)) {
+      if (this._upstreamOfAnchor(t, now) || !this._everSighted(t, now)) {
         // TD shows the train still short of its anchor berth, so the anchor strike is
         // genuinely still to come — HOLD the gated close rather than let a drifting
         // bestTime fire CLOSED early. Floored (not just "skip the backstop"): falling
@@ -1953,7 +1970,7 @@ class CrossingState {
         // offsetSecs 0, the hold lands exactly on `now`, and CLOSED fires regardless.
         // safetyNetSecs is the direction's own missed-strike lag. Applied ONLY to the
         // unsighted case, so the upstream hold keeps its existing value everywhere else.
-        if (!this._everSighted(t)) {
+        if (!this._everSighted(t, now)) {
           const lag = typeof c.safetyNetSecs === 'number' ? c.safetyNetSecs : 60;
           return new Date(Math.max(held, now.getTime() + lag * 1000));
         }

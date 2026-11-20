@@ -1105,6 +1105,23 @@ console.log('  -- sighting gate on CLOSED --');
   check('unsighted: but it does still reach CLOSING_SOON', sweep.includes('CLOSING_SOON'), true);
 }
 
+// A remembered position counts as a sighting only inside the horizon the map is pruned at
+// (3 Sep 2026: 1H72's 00:47 UTC position outlived the 03:00 reset because nothing else
+// stepped, and its 02:31 board entry went to BARRIERS DOWN with no train).
+{
+  const t = () => mkT({ dir: 'east', headcode: '1H92', bestTimeMs: BASE, source: 'cif' });
+  const nowMs = BASE - 250000;
+  const withPosition = ageMs => {
+    const st = new CrossingState('t', closeCfg);
+    st.liveTrains.set('1H92', { berth: '0202', fromBerth: '0023', event: 'CA', lastSeen: nowMs - ageMs, history: [] });
+    return st._computeClosures([t()], new Date(nowMs))[0];
+  };
+  const stale = withPosition(93 * 60000), fresh = withPosition(5 * 60000);
+  check('position 93 min old, no sighting since the reset: held like an unsighted train',
+    Date.parse(stale.start) > nowMs && stale.start !== iso(BASE - 210000), true);
+  check('position 5 min old: still a sighting, the backstop fires', fresh.start, iso(BASE - 210000));
+}
+
 // A runs-as-required path with a measured run rate of 0 and no sighting is dropped from the
 // train list outright, so it cannot drive OR bridge a closure (6O40, 2026-08-03).
 {
