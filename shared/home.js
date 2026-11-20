@@ -67,7 +67,7 @@
     }
     var nl = r.hits.filter(function (h) { return h.e.id; }).length;
     return '<div class="hp-ddhead"><span>' + r.hits.length + ' crossing' + (r.hits.length === 1 ? '' : 's') +
-      (nl ? ' · ' + nl + ' live' : '') + '</span><button class="hp-linkbtn" type="button" data-fit>Show on map</button></div>' +
+      (nl ? ' · ' + nl + ' live' : '') + '</span><button class="hp-linkbtn" type="button" data-fit data-track="search-show-on-map: homepage">Show on map</button></div>' +
       (r.typo ? note('No exact matches — showing close spellings') : '') +
       r.hits.slice(0, 300).map(function (h) { return row(h.e, h.d); }).join('') +
       (r.hits.length > 300 ? note('Showing the first 300. Add a town or road to narrow it down.') : '');

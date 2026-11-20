@@ -26,15 +26,26 @@ A crossing is always named the same way, so one crossing's taps add up across th
 | `recent-tap: <crossing>` | A live crossing tapped in the homepage's Recent list |
 | `nearby-tap: <crossing>` | A live crossing tapped in the homepage's Near you cards |
 | `menu-tap: <crossing>` | A live crossing tapped in a crossing page's menu (search, closest or recent) |
-| `location-button: homepage` / `crossing menu` | "Show nearby" / "Find closest" pressed |
+| `search-show-on-map: homepage` | "Show on map" pressed in the homepage search results |
+| `search-see-more: portslade menu` | "See more" pressed under a crossing page's menu search (it opens the homepage with the search filled in; the search is counted once, on the crossing page) |
+| `location-button: homepage` / `portslade menu` | "Show nearby" / "Find closest" pressed |
 | `location-result: found` / `blocked` / `unavailable` / `unsupported` | What happened next: found you, location blocked, no fix, or the browser can't share location |
 | `request: <crossing>` | A specific coming-soon crossing's request form opened |
-| `request-from: <where>` | Any request-form link pressed. `<where>` is `map`, `search`, `recent`, `nearby`, `menu` (crossing-specific, so these also send `request:`), or `homepage button` / `homepage FAQ` / `homepage footer` / `portslade page` / `portslade page footer` (the general form) |
+| `request-from: <where>` | Any request-form link pressed. `<where>` is `map`, `search`, `recent`, `nearby`, `portslade menu` (crossing-specific, so these also send `request:`), or `homepage button` / `homepage FAQ` / `homepage footer` / `portslade page` / `portslade page footer` (the general form) |
 | `add-app: <where>` | Add as app pressed: `homepage map button`, `homepage text button`, `portslade menu` |
 | `add-app-shown: <what>` | What it showed: `install prompt` (the browser's own install dialog: Chrome, Edge and Samsung) or `iphone steps` / `android steps` / `other steps` (the instructions) |
 | `add-app-choice: accepted` / `dismissed` | The answer to the browser's install dialog |
 | `app-installed: <page>` | An install that completed, however it was started (our button or the browser's own menu). Only Chrome-family browsers report this: Android, and desktop Chrome/Edge. iPhone never does |
 | `gofundme: <where>` | A GoFundMe link pressed: `homepage FAQ`, `homepage footer`, `portslade page` |
+| `map-link: <where>` | A link to the live train map: `homepage footer`, `portslade page footer`, `portslade local map` (the street-map picture in About this crossing) |
+| `home-link: <where>` | A link back to the homepage from a crossing page: `portslade menu`, `portslade page footer` |
+| `menu-open: portslade page` | The burger menu opened |
+| `show-more: portslade page` | Show More pressed under the upcoming closures |
+| `refresh: portslade page` | The refresh button pressed |
+| `feedback-form: portslade page` | Share Feedback pressed |
+
+On a crossing page, `portslade` is that page's own name. Every crossing page is built from the same
+template, so a new crossing's buttons are counted automatically, under its own name.
 
 ## Notes
 

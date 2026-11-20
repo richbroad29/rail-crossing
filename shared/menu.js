@@ -24,10 +24,11 @@
   var SOON = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>';
   // Usage counts (shared/track.js; names in docs/analytics.md), a crossing named as home.js names it.
   var TRACK = window.TRACK || function () {};
+  var PAGE = location.pathname.split('/')[1] || 'crossing';   // "portslade": as the page's own buttons name it
   if (!TRACK.search) TRACK.search = function () {};
   function tapTrack(e) {
     var l = e.name + ' (' + F.place(e) + ') #' + e.n;
-    return ' data-track="' + esc(e.id ? 'menu-tap: ' + l : 'request: ' + l + ' | request-from: menu') + '"';
+    return ' data-track="' + esc(e.id ? 'menu-tap: ' + l : 'request: ' + l + ' | request-from: ' + PAGE + ' menu') + '"';
   }
   function row(e, d) {
     var dist = d != null ? '<span class="pm-dist">' + esc(F.fmtMiles(d)) + '</span>' : '';
@@ -53,7 +54,7 @@
 
   // ---- Find closest -------------------------------------------------------------------------
   function findClosest() {
-    TRACK('location-button: crossing menu');
+    TRACK('location-button: ' + PAGE + ' menu');
     input.value = '';
     results.innerHTML = note('Finding your location…');
     F.locate().then(function (here) {
@@ -95,7 +96,7 @@
       var h = r.typo ? note('No exact matches — showing close spellings') : '';
       h += r.hits.slice(0, LIMIT).map(function (x) { return row(x.e, x.d); }).join('');
       if (r.hits.length > LIMIT) {
-        h += '<a class="pm-seemore" href="/?q=' + encodeURIComponent(q) + '">See more (' + r.hits.length + ')</a>';
+        h += '<a class="pm-seemore" data-track="' + esc('search-see-more: ' + PAGE + ' menu') + '" href="/?q=' + encodeURIComponent(q) + '">See more (' + r.hits.length + ')</a>';
       }
       results.innerHTML = h;
     }).catch(loadFailed);

@@ -230,7 +230,7 @@ function page(id, d, r, template) {
     const station = d.ldb && d.ldb.station;
     const img = `<img src="local-map.webp" width="360" height="240" loading="lazy" decoding="async" alt="${esc(alt)}">`;
     localMap = station
-      ? `<a class="about-map" href="/map/#s=${esc(station)}" aria-label="Open the live train map at ${esc(p.stationName)}">${img}</a>`
+      ? `<a class="about-map" data-track="map-link: ${esc(id)} local map" href="/map/#s=${esc(station)}" aria-label="Open the live train map at ${esc(p.stationName)}">${img}</a>`
       : `<div class="about-map">${img}</div>`;
   }
   const raw = { jsonLd: jsonLd(id, d, r, f), localMap,

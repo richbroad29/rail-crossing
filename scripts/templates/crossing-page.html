@@ -42,7 +42,7 @@
       <h1 class="hdr-title" id="crossingName">{{name}}</h1>
       <div class="hdr-road" id="crossingRoad">{{road}}</div>
     </div>
-    <button class="pm-burger" id="menuBtn" type="button" aria-label="Menu" aria-controls="menuDrawer" aria-expanded="false"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+    <button class="pm-burger" id="menuBtn" type="button" data-track="menu-open: {{id}} page" aria-label="Menu" aria-controls="menuDrawer" aria-expanded="false"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
   </div>
 
   <div class="status-card" id="statusCard">
@@ -139,10 +139,10 @@
   <div class="section">
     <div class="section-hdr">
       <span>Upcoming Closures</span>
-      <button class="refresh-btn" id="refreshBtn" onclick="refreshData()"></button>
+      <button class="refresh-btn" id="refreshBtn" data-track="refresh: {{id}} page" onclick="refreshData()"></button>
     </div>
     <div id="closureList"><div class="empty">Fetching live data...</div></div>
-    <button class="show-more-btn hidden" id="showMoreBtn" onclick="showMoreClosures()">Show More</button>
+    <button class="show-more-btn hidden" id="showMoreBtn" data-track="show-more: {{id}} page" onclick="showMoreClosures()">Show More</button>
   </div>
 
   <!-- About this crossing (burger-menu ticket 12): fixed facts, written in at build time from the
@@ -165,7 +165,7 @@
     <div class="info-text">
       Powered by live train times and real-time railway signalling. As trains approach, we forecast when the barriers will come down &mdash; and by detecting the exact moment each train clears the crossing, we give you a sharper estimate of when they'll lift again.
     </div>
-    <a class="feedback-link" href="https://forms.gle/MvEes4H9pqSVyKpS8" target="_blank">Share Feedback</a>
+    <a class="feedback-link" data-track="feedback-form: {{id}} page" href="https://forms.gle/MvEes4H9pqSVyKpS8" target="_blank">Share Feedback</a>
   </div>
 
   <div class="section">
@@ -177,7 +177,7 @@
   </div>
 
   <div class="error hidden" id="errorBox"></div>
-  <nav class="footer-nav" aria-label="Site"><a href="/">Home</a><a href="/map/">Map</a><a data-track="request-from: {{id}} page footer" href="https://forms.gle/Tv3UcPDVcLygoG1D9" target="_blank" rel="noopener">Request a crossing</a></nav>
+  <nav class="footer-nav" aria-label="Site"><a data-track="home-link: {{id}} page footer" href="/">Home</a><a data-track="map-link: {{id}} page footer" href="/map/">Map</a><a data-track="request-from: {{id}} page footer" href="https://forms.gle/Tv3UcPDVcLygoG1D9" target="_blank" rel="noopener">Request a crossing</a></nav>
   <div class="footer">Estimates only · Not a safety system · Always obey signals & barriers</div>
 </div>
 
@@ -189,7 +189,7 @@
 <nav class="pm-drawer" id="menuDrawer" aria-label="Menu" hidden>
   <div class="pm-dbody">
     <div class="pm-toprow">
-      <a class="pm-item" href="/"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11 12 4l9 7"/><path d="M5 10v10h14V10"/></svg><span>Home</span></a>
+      <a class="pm-item" data-track="home-link: {{id}} menu" href="/"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11 12 4l9 7"/><path d="M5 10v10h14V10"/></svg><span>Home</span></a>
       <button class="pm-x" id="menuClose" type="button" aria-label="Close menu"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
     </div>
     <div class="pm-group" id="menuRecent" hidden></div>
