@@ -336,7 +336,8 @@ function homePage(defs, rows, dirText, dirUrl, template) {
   // county past 20 (ticket 05). data-n lets shared/home.js filter it by the search box.
   const rowsLive = live.map(([id, d]) => ({ id, d, r: rows[id], county: countyOf(rows[id]) }))
     .sort((a, b) => a.county.localeCompare(b.county) || a.d.name.localeCompare(b.d.name));
-  const rowHtml = x => `<a class="pm-row pm-live" data-n="${esc(x.d.crossingNumber)}" href="/${esc(x.id)}/"><span class="pm-row-main"><span class="pm-name">${esc(x.d.name)}</span><span class="pm-sub">${esc(x.d.road)}, ${esc(x.r.town)}</span></span><span class="pm-chev" aria-hidden="true">›</span></a>`;
+  // data-track: a tap counted in GoatCounter (shared/track.js), named as home.js names a crossing.
+  const rowHtml = x => `<a class="pm-row pm-live" data-n="${esc(x.d.crossingNumber)}" data-track="list-tap: ${esc(x.d.name)} (${esc(x.d.road)}, ${esc(x.r.town)}) #${esc(x.d.crossingNumber)}" href="/${esc(x.id)}/"><span class="pm-row-main"><span class="pm-name">${esc(x.d.name)}</span><span class="pm-sub">${esc(x.d.road)}, ${esc(x.r.town)}</span></span><span class="pm-chev" aria-hidden="true">›</span></a>`;
   let body = '', last = null;
   for (const x of rowsLive) {
     if (rowsLive.length > 20 && x.county !== last) { body += `<div class="hp-county">${esc(x.county)}</div>`; last = x.county; }

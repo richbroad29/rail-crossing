@@ -171,13 +171,13 @@
   <div class="section">
     <div style="font-size:12px;font-weight:600;margin-bottom:8px">Quick Links</div>
     <div class="setup-row">
-      <a class="setup-btn" href="https://forms.gle/Tv3UcPDVcLygoG1D9" target="_blank" style="text-decoration:none">Request Your Local Crossing</a>
-      <a class="setup-btn coffee-btn" href="https://www.gofundme.com/f/predict-level-crossing-closures-across-britain" target="_blank" rel="noopener" style="text-decoration:none">Support on GoFundMe</a>
+      <a class="setup-btn" data-track="request-from: {{id}} page" href="https://forms.gle/Tv3UcPDVcLygoG1D9" target="_blank" style="text-decoration:none">Request Your Local Crossing</a>
+      <a class="setup-btn coffee-btn" data-track="gofundme: {{id}} page" href="https://www.gofundme.com/f/predict-level-crossing-closures-across-britain" target="_blank" rel="noopener" style="text-decoration:none">Support on GoFundMe</a>
     </div>
   </div>
 
   <div class="error hidden" id="errorBox"></div>
-  <nav class="footer-nav" aria-label="Site"><a href="/">Home</a><a href="/map/">Map</a><a href="https://forms.gle/Tv3UcPDVcLygoG1D9" target="_blank" rel="noopener">Request a crossing</a></nav>
+  <nav class="footer-nav" aria-label="Site"><a href="/">Home</a><a href="/map/">Map</a><a data-track="request-from: {{id}} page footer" href="https://forms.gle/Tv3UcPDVcLygoG1D9" target="_blank" rel="noopener">Request a crossing</a></nav>
   <div class="footer">Estimates only · Not a safety system · Always obey signals & barriers</div>
 </div>
 
@@ -198,7 +198,7 @@
     <div class="pm-results" id="menuResults" aria-live="polite"></div>
   </div>
   <div class="pm-dfoot">
-    <button class="add-app-btn hidden pm-app" id="addAppBtn" type="button" onclick="addAsApp()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M12 8v6M9.5 11.5 12 14l2.5-2.5"/></svg>Add as app</button>
+    <button class="add-app-btn hidden pm-app" id="addAppBtn" type="button" data-track="add-app: {{id}} menu" onclick="addAsApp()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M12 8v6M9.5 11.5 12 14l2.5-2.5"/></svg>Add as app</button>
   </div>
 </nav>
 
@@ -210,6 +210,7 @@
   </div>
 </div>
 
+<script src="../shared/track.js"></script>
 <script src="../shared/predict.js"></script>
 <script src="../shared/closure-card.js"></script>
 <script src="../shared/crossing.js"></script>

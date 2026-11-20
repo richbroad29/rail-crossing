@@ -48,14 +48,24 @@ if (typeof window !== 'undefined' && window.addEventListener) {
   window.addEventListener('appinstalled', function () { installPrompt = null; setAddAppVisible(false); });
   setAddAppVisible(!isStandaloneApp());
 }
+// The click itself is counted by the button's data-track; these count what it led to
+// (shared/track.js, names in docs/analytics.md).
+function trackApp(name) { if (typeof window !== 'undefined' && typeof window.TRACK === 'function') window.TRACK(name); }
 function addAsApp() {
   if (installPrompt) {
     var p = installPrompt;
     installPrompt = null; // single-use; the browser fires a fresh one if it is dismissed
     p.prompt();
-    if (p.userChoice) p.userChoice.then(function (c) { if (c.outcome === 'accepted') setAddAppVisible(false); }, function () {});
+    trackApp('add-app-shown: install prompt');
+    if (p.userChoice) p.userChoice.then(function (c) {
+      trackApp('add-app-choice: ' + c.outcome);
+      if (c.outcome === 'accepted') setAddAppVisible(false);
+    }, function () {});
     return;
   }
+  var ua = navigator.userAgent || '';
+  trackApp('add-app-shown: ' + (/iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1) ? 'iphone steps'
+    : /Android/.test(ua) ? 'android steps' : 'other steps'));
   showModal('homescreen');
 }
 // The formatters, the closure mapping and the prediction itself all live in

@@ -82,7 +82,7 @@
         <p>{{liveSentence}} Every other road level crossing in Great Britain, {{soonCountText}} more, is on the map as coming soon.</p>
 
         <h2>Can I request my crossing?</h2>
-        <p>Yes. Tap its grey dot on the map, or <a href="{{requestUrl}}" target="_blank" rel="noopener">request a crossing here</a>. Crossings with the most requests, and those where the railway publishes barrier data, are the quickest to add.</p>
+        <p>Yes. Tap its grey dot on the map, or <a data-track="request-from: homepage FAQ" href="{{requestUrl}}" target="_blank" rel="noopener">request a crossing here</a>. Crossings with the most requests, and those where the railway publishes barrier data, are the quickest to add.</p>
 
         <h2>Is this an official Network Rail service?</h2>
         <p>No. railcrossing.uk is independent. It uses open data from Network Rail and National Rail, but neither runs or checks it.</p>
@@ -91,21 +91,21 @@
         <p>No. It's for planning your journey, not for safety: always obey the lights and barriers at the crossing.</p>
 
         <h2>Is it free?</h2>
-        <p>Yes: no ads and no sign-up. If you want to contribute to the development of the project, you can contribute via our <a href="https://www.gofundme.com/f/predict-level-crossing-closures-across-britain" target="_blank" rel="noopener">GoFundMe here</a>.</p>
+        <p>Yes: no ads and no sign-up. If you want to contribute to the development of the project, you can contribute via our <a data-track="gofundme: homepage FAQ" href="https://www.gofundme.com/f/predict-level-crossing-closures-across-britain" target="_blank" rel="noopener">GoFundMe here</a>.</p>
 
         <h2>Can I add it as an app?</h2>
         <p>Not yet, but you can do something just as good by adding it to your home screen: tap "Add as app" at the top of the map, or on iPhone use Share → Add to Home Screen.</p>
       </div>
 
       <div class="hp-request">
-        <a class="hp-btn hp-btn-primary" href="{{requestUrl}}" target="_blank" rel="noopener">Request your local crossing</a>
+        <a class="hp-btn hp-btn-primary" data-track="request-from: homepage button" href="{{requestUrl}}" target="_blank" rel="noopener">Request your local crossing</a>
         <p>Tell us which crossing you'd like next: requests help decide which crossings go live first.</p>
       </div>
     </section>
   </main>
 
   <footer class="hp-foot">
-    <a href="/">Home</a><a href="/map/">Map</a><a href="{{requestUrl}}" target="_blank" rel="noopener">Request a crossing</a><a href="https://www.gofundme.com/f/predict-level-crossing-closures-across-britain" target="_blank" rel="noopener">Support on GoFundMe</a>
+    <a href="/">Home</a><a href="/map/">Map</a><a data-track="request-from: homepage footer" href="{{requestUrl}}" target="_blank" rel="noopener">Request a crossing</a><a data-track="gofundme: homepage footer" href="https://www.gofundme.com/f/predict-level-crossing-closures-across-britain" target="_blank" rel="noopener">Support on GoFundMe</a>
     <small>Estimates only · Not a safety system · Always obey signals &amp; barriers</small>
     <small>Crossing list: Network Rail, Open Government Licence. Road and town names © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a>; the <a href="shared/directory.json">crossing list</a> is offered under the ODbL. Contains OS data © Crown copyright and database right 2026. Built-up areas: Office for National Statistics; © Crown copyright, National Records of Scotland.</small>
   </footer>
@@ -119,6 +119,7 @@
   </div>
 </div>
 
+<script src="shared/track.js"></script>
 <script src="shared/finder.js"></script>
 <script src="map/style.js"></script>
 <script src="shared/home.js"></script>
