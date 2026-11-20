@@ -422,6 +422,104 @@ const portsladeCfg = crossingsConfig.portslade.schedule;
       westAt(r, BASE_MS + 30 * 60000).includes(4 * 3600000), false);
   }
 
+  // --- a crossing ends a BOARD train too, however long the board goes on listing it ------
+  console.log('\nBoard trains the board goes on listing after they have crossed\n');
+  {
+    // 2026-09-17: 1H96 booked west 00:32, crossed 00:43:52, still on the board "on time" at
+    // 00:32 until 02:05. Once its clear step was 20 min old, the sighted, "uncleared" board
+    // train held its period open, and the page read BARRIERS DOWN until the board let it go.
+    // Retired at the TTL, not at barrier-up: see the comment in _mergeTrains.
+    const clearCfg = {
+      ...stateCfg,
+      td: {
+        east: { clear: { from: '0004', to: '0002' } },
+        west: { clear: { from: '0005', to: '0007' } }
+      },
+      timing: {
+        ...stateCfg.timing,
+        openLagSecs: { east: { passenger: 40, freight: 70 }, west: { passenger: 18, freight: 30 } }
+      }
+    };
+    const iso = ms => new Date(ms).toISOString();
+    const cif = (uid, mins) => ({ uid, headcode: '1H96', direction: 'west', trainType: 'passenger',
+      origin: 'BRIGHTON', destination: 'WEST WORTHING', operator: 'SN', callsAtStation: true,
+      estimatedCrossingMins: mins, legIndex: 0 });
+    const board = (uid, ms) => ({ uid, headcode: '1H96', direction: 'west', trainType: 'passenger',
+      origin: 'BRIGHTON', destination: 'WEST WORTHING', operator: 'SN', source: 'ldbsv',
+      scheduledTime: iso(ms), bestTime: iso(ms), timeSource: 'forecast', delayMins: 0 });
+    // mins is only a key: 32 = booked now (BASE_MS), 452 = a later run of 1H96, 7 h on.
+    const at = { 32: 0, 452: 7 * 3600000 };
+    const CROSSED = BASE_MS + 11 * 60000 + 52000;   // crossed 11m52s late, as 1H96 did
+    const mk = (boardTrains, { crossed = true } = {}) => {
+      const s = new CrossingState('t', clearCfg);
+      s._scheduleTimeToDate = (mins) => new Date(BASE_MS + at[mins]);
+      s.scheduleTrains = [cif('W11111', 32), cif('W22222', 452)];
+      s.ldbTrains = boardTrains;
+      s.recordTdSighting('1H96', new Date(BASE_MS - 10 * 60000));
+      if (crossed) s.recordTdClearStep({ headcode: '1H96', ts: new Date(CROSSED), from: '0005', to: '0007' });
+      return s;
+    };
+    const listed = (s, ms) => s._mergeTrains(new Date(ms))
+      .filter(m => m.headcode === '1H96').map(m => `${m.source}@${(m.scheduledTime.getTime() - BASE_MS) / 3600000}h`).join(',');
+    // A period the page would read as CLOSED now: started, and held or not yet ended.
+    const closedNow = (s, ms) => s._computeClosures(s._mergeTrains(new Date(ms)), new Date(ms))
+      .some(p => Date.parse(p.start) <= ms && (p.holdingOpen || ms <= Date.parse(p.end)));
+
+    const onBoard = () => [board('W11111', BASE_MS)];
+    const TTL = 20 * 60000;   // CLEAR_STEP_TTL_MS
+    const s = mk(onBoard());
+    check('barrier still down (10 s after the clear step): the board train is kept',
+      listed(s, CROSSED + 10000).split(',').includes('ldbsv@0h'), true);
+    // The board's normal 1-4 min tail is left exactly as today: listed, its period ends on the
+    // clear step, nothing held — and it still bridges into a following train's closure.
+    check('60 s after: still listed while the board lists it (as today)', listed(s, CROSSED + 60000), 'ldbsv@0h');
+    check('  ...and not CLOSED (its period ended on the clear step)', closedNow(s, CROSSED + 60000), false);
+    check('19 min after (clear step still fresh): still listed, not CLOSED',
+      listed(s, CROSSED + TTL - 60000) + '|' + closedNow(s, CROSSED + TTL - 60000), 'ldbsv@0h|false');
+    check('20 min after (clear step expired): gone though the board still lists it',
+      listed(s, CROSSED + TTL), '');
+    check('  ...and its timetable entry does not come back in its place',
+      s._mergeTrains(new Date(CROSSED + TTL)).some(m => m.uid === 'W11111'), false);
+    check('40 min on, still on the board: the crossing is not CLOSED',
+      closedNow(s, CROSSED + 40 * 60000), false);
+    check('  ...nor listed', listed(s, CROSSED + 40 * 60000), '');
+
+    const before = mk(onBoard(), { crossed: false });
+    check('control: not yet crossed, the board train is listed', listed(before, BASE_MS + 5 * 60000), 'ldbsv@0h');
+
+    const noTwin = mk([board('X99999', BASE_MS)]);
+    check('a board train with no timetable entry keeps today\'s rules (listed)',
+      listed(noTwin, CROSSED + TTL), 'ldbsv@0h');
+
+    const noUid = mk([board(null, BASE_MS + 2 * 60000)]);
+    check('no UID: matched by headcode within 5 min of booked, and retired',
+      listed(noUid, CROSSED + TTL), '');
+
+    const farNoUid = mk([board(null, BASE_MS + 6 * 60000)]);
+    check('no UID and 6 min from any booked time: no twin, kept',
+      listed(farNoUid, CROSSED + TTL).startsWith('ldbsv@0.1'), true);
+
+    const later = mk([board('W11111', BASE_MS), board('W22222', BASE_MS + 7 * 3600000)]);
+    check('the same headcode\'s run 7 h later stays on (its own entry has not crossed)',
+      listed(later, CROSSED + TTL), 'ldbsv@7h');
+
+    // Just before midnight the board lists tomorrow's first runs, while the timetable still
+    // places "00:02" today — on the run that crossed ~24 h ago, within the 24 h crossing record.
+    // Found in the full replay (27-30 Oct, 13 Oct): matched by UID with no time bound, tonight's
+    // train was dropped as crossed and its countdown went missing until midnight.
+    {
+      const sm = new CrossingState('t', clearCfg);
+      const YDAY = BASE_MS - 24 * 3600000 + 4 * 60000;   // yesterday's run of the same UID
+      sm._scheduleTimeToDate = (mins) => new Date(mins === 2 ? YDAY : BASE_MS + at[mins]);
+      sm.scheduleTrains = [{ ...cif('W33333', 2), headcode: '1H02' }];
+      sm.ldbTrains = [{ ...board('W33333', BASE_MS + 4 * 60000), headcode: '1H02' }];
+      sm.recordTdSighting('1H02', new Date(YDAY - 60000));
+      sm.recordTdClearStep({ headcode: '1H02', ts: new Date(YDAY + 30000), from: '0005', to: '0007' });
+      check('tomorrow\'s run on the board is not matched to yesterday\'s entry of the same UID (kept)',
+        sm._mergeTrains(new Date(BASE_MS)).filter(m => m.headcode === '1H02').map(m => m.source).join(), 'ldbsv');
+    }
+  }
+
   console.log();
   if (fail > 0) { console.error(`${fail} FAILED, ${pass} passed`); process.exit(1); }
   console.log(`All ${pass} checks passed.`);

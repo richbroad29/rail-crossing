@@ -77,6 +77,10 @@ const CLEAR_STEP_TTL_MS = 20 * 60 * 1000;
 const CROSSED_EARLY_MS = 8 * 60 * 60 * 1000;
 const CROSSED_LATE_MS = 4 * 60 * 60 * 1000;
 const CROSSINGS_MADE_KEEP_MS = 24 * 60 * 60 * 1000;
+// A board train's own timetable entry (_boardTwin) must be booked this close to the board's time:
+// by UID, 30 min (a UID repeats daily — see _boardTwin); by headcode, the dedup rule's 5 min.
+const BOARD_TWIN_UID_WINDOW_MS = 30 * 60 * 1000;
+const BOARD_TWIN_HEADCODE_WINDOW_MS = 5 * 60 * 1000;
 // --- TD-triggered close (approach strike-in anchor) ---
 // When TD shows a train stepping INTO the approach-side berth (config
 // td.<dir>.approach.from — 0006 east / 0003 west), the barrier's CLOSE start can
@@ -544,6 +548,40 @@ class CrossingState {
     return out;
   }
 
+  // A board train's own timetable entry, so it can share that entry's crossing (above). The
+  // matching itself is never done against the board: the board lists only trains still to
+  // call, so an earlier run of the same headcode would be missing from it and in-order pairing
+  // could hand that run's crossing to this one. The timetable holds the whole day.
+  //  - With a UID (the board supplies one on every service): that UID and direction, booked
+  //    within 30 min of the board's time. An out-and-back working has one UID and an entry per
+  //    leg, so the direction picks the leg; two legs the same way, the one booked nearest.
+  //  - Without one: the same headcode and direction booked within 5 min of the board's time,
+  //    the window the dedup rule already uses.
+  // Null when the timetable has no such entry (a short-notice train): today's rules then apply.
+  //
+  // The 30 min bound is not optional. A UID repeats every day the train runs, and just before
+  // midnight the board lists tomorrow's first runs while the timetable still places "00:02"
+  // TODAY — on the run that crossed ~24 h ago, still inside the 24 h crossing record. Unbounded,
+  // that matched, and tonight's train was dropped as crossed: its countdown went missing until
+  // midnight (full replay, 13 and 27-30 Oct, up to 35 min late). The board's time is the station
+  // call and the entry's the crossing, a few minutes apart; 30 min covers that and nothing else.
+  _boardTwin(t, direction) {
+    const boardMs = Date.parse(t.scheduledTime || t.bestTime);
+    if (!Number.isFinite(boardMs)) return null;
+    const windowMs = t.uid ? BOARD_TWIN_UID_WINDOW_MS : BOARD_TWIN_HEADCODE_WINDOW_MS;
+    let best = null, bestD = Infinity;
+    for (const s of this.scheduleTrains) {
+      if (s.direction !== direction) continue;
+      if (t.uid ? s.uid !== t.uid : (!t.headcode || s.headcode !== t.headcode)) continue;
+      const est = this._scheduleTimeToDate(s.estimatedCrossingMins);
+      if (!est) continue;
+      const d = Math.abs(est.getTime() - boardMs);
+      if (d > windowMs) continue;
+      if (best === null || d < bestD) { best = s; bestD = d; }
+    }
+    return best;
+  }
+
   // A direction's TD settings (td.<slot>), or undefined for a direction that is not one of
   // this crossing's slots — 'unknown', or absent.
   _tdFor(direction) {
@@ -897,6 +935,7 @@ class CrossingState {
 
     const ldbByUid = new Map();
     const ldbByHeadcode = new Map(); // headcode -> [trains]
+    const crossedAt = this._crossedAtByEntry(now);
 
     for (const t of this.ldbTrains) {
       // A board train whose direction neither the timetable nor the place lists could give
@@ -917,6 +956,29 @@ class CrossingState {
           continue;
         }
       }
+      // Crossed, and its clear step has expired: the board train is finished, whatever the
+      // board still says. Read through the board train's own timetable entry (_boardTwin), so
+      // it is the same crossing record that retires timetable entries below.
+      //
+      // Found 2026-11-20 replaying 2026-09-16/17. From 22:45 BST the board went on listing six
+      // 1H trains 81–113 min after each had crossed (Darwin never recorded them passing
+      // Portslade: 1H96 crossed 00:43 and stayed listed at 00:32 "on time" until 02:05). A
+      // board train is kept for as long as the board lists it, and once its clear step is
+      // CLEAR_STEP_TTL_MS old a sighted train with no clear step HOLDS its period open
+      // (_trainEndInfo) — so the page read BARRIERS DOWN without a break from 23:04 to 03:00
+      // (the 03:00 railway-day reset ended it), across 13 real crossings. 25 trains on 10 of
+      // 177 days; 264 of the replay's 2,160 false BARRIERS DOWN minutes fall in their windows.
+      //
+      // Why at the TTL and not at barrier-up (crossing + openLagSecs), the rule timetable
+      // entries use: the board normally drops a train 1–4 min after it crosses, and while it is
+      // listed its period still ends on the clear step, so nothing is held. That short tail is
+      // also what keeps one closure continuous when the next train's barrier comes down before
+      // the engine has confirmed it (9 Jul 11:46: 2Y29 and 1S30 had crossed, 1N23's barrier was
+      // already down). Retiring at barrier-up put the page on Closing soon, or OPEN, in that
+      // gap — measured over the 10 affected days, +23 min of Closing soon and +1.3 min of OPEN
+      // with the barrier down. At the TTL the change touches only what the bug touches.
+      const twin = crossedAt.size ? this._boardTwin(t, direction) : null;
+      if (twin && crossedAt.has(twin) && now.getTime() - crossedAt.get(twin) >= CLEAR_STEP_TTL_MS) continue;
       const train = {
         ...t,
         direction,
@@ -932,7 +994,6 @@ class CrossingState {
       }
     }
 
-    const crossedAt = this._crossedAtByEntry(now);
     for (const t of this.scheduleTrains) {
       const estTime = this._scheduleTimeToDate(t.estimatedCrossingMins);
       if (!estTime) continue;
@@ -2545,8 +2606,11 @@ class CrossingState {
   // clear with a train still on it. That is what holdingOpen fixes, at its three readers —
   // which is what lets the bound here be the honest small number instead of a safe big one.
   //
-  // Cannot hold forever: _mergeTrains drops a sighted train SIGHTING_DROP_GRACE_MS (3 min)
-  // past its projected crossing, and a period with no trains ceases to exist.
+  // Cannot hold forever: _mergeTrains drops a sighted timetable train SIGHTING_DROP_GRACE_MS
+  // (3 min) past its projected crossing, drops a timetable train once it has crossed and its
+  // barrier is up and a board train once its clear step has expired, and a period with no
+  // trains ceases to exist. Before the board half of that (2026-11-20) a board train held for
+  // as long as the board listed it.
   _periodEndInfo(end, trains, now) {
     const plain = (at) => ({ at, holdingOpen: false });
     if (!this.timing || !this.timing.openLagSecs) return plain(end);
