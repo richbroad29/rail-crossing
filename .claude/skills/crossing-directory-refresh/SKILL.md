@@ -89,22 +89,38 @@ and nothing to look up by hand.
 3. **Are the logs complete?** `ls ~/rail-crossing/backend/data/logs/sclass/ | tail -20`: one
    `sclass-<date>` and one `survey-<date>` (plain or `.gz`) per day scanned. A missing day lowers
    the per-day rates; say so in the report.
-4. **Run the scan** over the last 7 complete days (copy it to the VPS and run it there, where the logs
-   are; it reads `.gz` files too):
+4. **Run the scan on the Mac, not the VPS.** Over every area it peaks at **1.2 GB** of memory
+   (2026-11-21); the VPS has 952 MB in all, shared with the live service, so the old 300 MB run
+   there would die. Copy the last 7 complete days (`sclass`, `survey`, `barrier`, ~350 MB) and the
+   config into `~/rc-data/sclass-survey/`, then run it there (~30 min; it reads `.gz`):
    ```
-   scp -i ~/Downloads/ssh-key-2026-03-22.key .claude/skills/crossing-directory-refresh/scripts/barrier-bit-scan.js ubuntu@130.162.167.237:/tmp/
-   ssh -i ~/Downloads/ssh-key-2026-03-22.key ubuntu@130.162.167.237 'cd ~/rail-crossing && nice -n 19 node --max-old-space-size=300 /tmp/barrier-bit-scan.js --days 7' > .claude/skills/crossing-directory-refresh/history/barrier-scan-<date>.txt
+   mkdir -p ~/rc-data/sclass-survey/<date> && cd ~/rc-data/sclass-survey/<date>
+   ssh -i ~/Downloads/ssh-key-2026-03-22.key ubuntu@130.162.167.237 'cd ~/rail-crossing/backend && tar cf - config/sclass.json data/logs/sclass/{sclass,survey,barrier}-2026-11-{14..20}.jsonl.gz' | tar xf -
+   for f in data/logs/sclass/*.gz; do gzip -t "$f" || echo "BAD $f"; done
+   node --max-old-space-size=8000 <repo>/.claude/skills/crossing-directory-refresh/scripts/barrier-bit-scan.js --days 7 --dir "$PWD/data/logs/sclass" --config "$PWD/config/sclass.json" > <repo>/.claude/skills/crossing-directory-refresh/history/barrier-scan-<date>.txt
    ```
+   (Put the 7 dates in the `{14..20}`; a week across a month end needs two brace groups. scp
+   will not expand braces on the server; the tar pipe does.)
    Its first line must say "7 with an all-area survey"; fewer means the survey didn't cover the
    week.
-5. **Known answer first.** BM byte 09 (Yapton, bits 7/6) must be a candidate at roughly the
-   number of Yapton closures a day (`barrier-<date>` files, `"kind":"CLOSE"`; ~217/day in Nov 2026).
-   If it is not, the scan or the feed is broken; stop and fix that before reading anything else.
-6. **Compare with the previous `history/barrier-scan-*.txt`:** candidate bytes per area, which
+5. **Known answer first.** BM byte 09 (Yapton, bits 7/6) must be a candidate at the number of
+   Yapton closures a day **over the same 7 days** (`barrier-<date>` files, `"kind":"CLOSE"`, summed
+   and divided by 7). Not a fixed figure: a weekday is ~200-237, but engineering works can stop the
+   line (14-15 Nov 2026: 9 and 4), which pulls the week down (158/day that week). If they do not
+   match, the scan or the feed is broken; stop and fix that before reading anything else.
+6. **Compare with the previous `history/barrier-scan-*.txt`:**
+   `node scripts/area-names.js ~/rail-map-refdata/smart-latest.json.gz ~/rail-map-refdata/corpus-latest.json.gz > <scratch>/area-names.json`
+   (each TD area's busiest SMART places, since the Open Rail Data wiki refuses automated fetches), then
+   `node scripts/barrier-scan-compare.js <previous scan> <this scan> <sclass.json> <scratch>/area-names.json`.
+   Self-test: the 2026-11-12 file against itself must give 99 pairs / 63 bytes. It lists
+   candidate bytes per area, which
    areas are **new** (not in `sclass.json`), and which bytes are new. A candidate is a
    **shortlist entry, not a crossing**: signals beside a crossing switch in the same rhythm. Only
    the berth-correlation proof in crossing-launch Stage 3 binds a bit to a crossing. Report per
-   area: candidate bytes now vs last time, and the busiest new ones.
+   area: candidate bytes now vs last time, and the busiest new ones. **Expect noise:** in Nov 2026,
+   11 London areas with at most one road crossing (X0 X1 X2 X3 X8 XA XB Q0 NX Y9 VC) carried 81
+   candidate bytes, from points and signals. A count of candidates is not a count of crossings, and a minimum
+   closure length only halves the noise (≥45 s: 81 → 36), so the berth correlation stays the filter.
 7. **Feed it to crossing-launch:** report each new area with candidates to Rich. Its data is already
    banked (survey, 90 days), so nothing needs adding to `sclass.json` until a byte is bound to a
    crossing (crossing-launch Stage 3), when the area goes in to decode that barrier live. Any Parked
