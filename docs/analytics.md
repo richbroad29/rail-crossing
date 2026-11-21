@@ -28,6 +28,8 @@ A crossing is always named the same way, so one crossing's taps add up across th
 | `menu-tap: <crossing>` | A live crossing tapped in a crossing page's menu (search, closest or recent) |
 | `search-show-on-map: homepage` | "Show on map" pressed in the homepage search results |
 | `search-see-more: portslade menu` | "See more" pressed under a crossing page's menu search (it opens the homepage with the search filled in; the search is counted once, on the crossing page) |
+| `train-map-search: <words>` / `train-map-search (no results): <words>` | Something searched for in the live train map's own search (train codes and stations), counted the same way as the crossing searches but kept separate from them |
+| `train-map-pick: train <code>` / `station <name> (<code>)` | A result picked from the train map's search, e.g. `train-map-pick: station Brighton (BTN)` |
 | `location-button: homepage` / `portslade menu` | "Show nearby" / "Find closest" pressed |
 | `location-result: found` / `blocked` / `unavailable` / `unsupported` | What happened next: found you, location blocked, no fix, or the browser can't share location |
 | `request: <crossing>` | A specific coming-soon crossing's request form opened |

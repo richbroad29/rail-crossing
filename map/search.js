@@ -5,6 +5,11 @@
   'use strict';
 
   var RM = root.RM, h = RM.dom.h, clear = RM.dom.clear, classes = RM.classes, S = RM.stations;
+  // Usage counts (shared/track.js; names in docs/analytics.md): what was searched for, as the
+  // crossing searches count it but under its own name, and which result was picked.
+  var TRACK = root.TRACK || function () {};
+  if (!TRACK.search) TRACK.search = TRACK.searchNow = function () {};
+  function counted(q, n) { TRACK.search(q, n, 'train-map-search'); }
 
   function createSearch(o) {
     var input = o.input, list = o.list;
@@ -28,6 +33,8 @@
     function pick(i) {
       var it = items[i];
       if (!it) return;
+      TRACK.searchNow();                                   // the search that found it, first
+      TRACK(it.type === 'train' ? 'train-map-pick: train ' + it.hc : 'train-map-pick: station ' + classes.titleCase(it.name) + ' (' + it.crs + ')');
       close();
       input.value = '';
       input.blur();
@@ -97,10 +104,13 @@
 
     function run() {
       query = input.value.trim();
-      if (!query) { close(); return; }
+      if (!query) { counted(''); close(); return; }
       var mine = ++token;
       var local = localItems(query);
       items = local;
+      // Provisional, and only when the page already has a match: "no results" waits for the
+      // service's answer, or a slow reply would log a search as failing that then succeeds.
+      if (local.length) counted(query, local.length);
       remoteDone = false;
       render(false);
       if (timer) clearTimeout(timer);
@@ -116,10 +126,12 @@
           items = merge(local, rt.concat(rs));
           remoteDone = true;
           render(true);
+          counted(query, items.length);
         }, function () {
           if (mine !== token) return;
           remoteDone = true;
           render(true);                       // keep what we have; local results still stand
+          counted(query, items.length);
         });
       }, 220);
     }

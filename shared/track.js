@@ -8,8 +8,9 @@
 //   - markup: data-track="gofundme: homepage footer" on anything clickable; several events on
 //     one click are separated by " | ". One delegated listener on the document, so it works for
 //     rows drawn after load too (GoatCounter's own data-goatcounter-click binds once, at load).
-//   - code:   TRACK('location-result: blocked'), and TRACK.search(term, hits) for the search
-//     boxes, which waits for the visitor to stop typing.
+//   - code:   TRACK('location-result: blocked'), and TRACK.search(term, hits[, kind]) for the
+//     search boxes, which waits for the visitor to stop typing. `kind` names the search box
+//     ("search" by default: the crossing searches; "train-map-search" on /map/).
 //
 // GoatCounter's count.js loads async after everything else, so an event raised before it arrives
 // waits in a short queue. count.js itself refuses localhost, file:// and a browser that has opted
@@ -47,14 +48,14 @@
   function sendSearch() {
     clearTimeout(pendTimer); pendTimer = null;
     var p = pending; pending = null;
-    if (!p || p.term === lastSent) return;
-    lastSent = p.term;
-    track((p.hits ? 'search: ' : 'search (no results): ') + p.term);
+    if (!p || p.kind + p.term === lastSent) return;
+    lastSent = p.kind + p.term;
+    track(p.kind + (p.hits ? ': ' : ' (no results): ') + p.term);
   }
-  track.search = function (term, hits) {
+  track.search = function (term, hits, kind) {
     term = clean(term).toLowerCase().slice(0, 60);
     if (term.replace(/\s/g, '').length < 2) { pending = null; clearTimeout(pendTimer); return; }
-    pending = { term: term, hits: hits };
+    pending = { term: term, hits: hits, kind: kind || 'search' };
     clearTimeout(pendTimer);
     pendTimer = setTimeout(sendSearch, 2000);
   };
