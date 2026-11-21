@@ -369,7 +369,7 @@ function updateStatus() {
     // A held open has no time to reopen at — the train hasn't cleared the crossing, so we
     // genuinely don't know. Say that rather than counting down to a bound (register #14).
     if (pr.openHeld) { msg = 'Opening once the train is clear'; }
-    else { msg = openMs <= 0 ? 'Opening soon' : 'Opening in ~' + fmtCountdown(openMs); }
+    else { msg = openMs <= 0 ? 'Opening soon' : 'Opening in ' + fmtCountdown(openMs); }
     $('statusCard').classList.add('pulse');
   } else {
     $('statusCard').classList.remove('pulse');
@@ -386,8 +386,8 @@ function updateStatus() {
       // closure row use, so the three cannot show three different numbers.
       var heldMs = nextCloseTime.getTime() - pr.heldRef;
       if (pr.closeHeld) { msg = heldMs > 0 ? 'Train held — no closure for ' + PREDICT.fmtHeld(heldMs) : 'Train held on approach'; }
-      else if (status === 'CLOSING_SOON') { msg = ms <= 0 ? 'Closing soon' : 'Closing in ~' + fmtCountdown(ms); }
-      else { msg = 'Next closure in ~' + fmtCountdown(ms); }
+      else if (status === 'CLOSING_SOON') { msg = ms <= 0 ? 'Closing soon' : 'Closing in ' + fmtCountdown(ms); }
+      else { msg = 'Next closure in ' + fmtCountdown(ms); }
     } else { msg = 'No more closures expected today'; }
   }
   var c = getColors(status);
@@ -496,7 +496,7 @@ function fbEsc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').r
 // exact below it — which is the whole window in which someone is actually standing at the
 // barrier choosing a train, and the reason this ticks at all.
 function fbGap(secs){
-  if(secs >= 120) return '~'+Math.round(secs/60)+' min';
+  if(secs >= 120) return Math.round(secs/60)+' min';
   if(secs >= 60) return Math.floor(secs/60)+'m '+(secs%60)+'s';
   return secs+'s';
 }

@@ -37,7 +37,7 @@
   }
   function fmtCountdownRough(ms) {
     var m = Math.round(ms / 60000);
-    return m <= 0 ? 'now' : '~' + m + ' min';
+    return m <= 0 ? 'now' : m + ' min';
   }
   // The "when" half of a closure pill, as a phrase rather than a bare value — the
   // template used to prefix "in " unconditionally, so a countdown sitting at or past
@@ -45,7 +45,7 @@
   // driven by the confidence window: when the window is a minute or wider, second
   // precision is a lie. The window is no longer DRAWN as a ± band (2026-08-14) — this is
   // now the only place it reaches the user, as the difference between "in 3m 20s" and
-  // "in ~3 min", which is the honest way to spend it.
+  // "in 3 min", which is the honest way to spend it.
   function fmtWhen(ms, rough) {
     if (ms <= 0) return 'any moment now';
     if (!rough) return 'in ' + fmtCountdown(ms);
