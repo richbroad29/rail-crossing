@@ -265,7 +265,7 @@ Dedup: UID-first (CIF `CIF_train_uid` vs LDBSVWS `svc.uid`), then headcode + tim
 
 **Midnight-crossing CIF times — FIXED, don't re-fix.** This section used to describe a live bug: CIF times past 24:00 (e.g. `2510` = 01:10 next morning) mapped modulo-24, placing the train at 01:10 *today* instead of *tomorrow*. It was fixed in `1315934` and the description here was left stale, contradicting "Recently shipped" below. `londonMinsToDate` now takes `dayOffset = Math.floor(total / 1440)` and shifts the date stamp by it, and `analyseRoute` unwraps a route's times across 00:00 — so `2510` resolves to 01:10 tomorrow. Verified in `time-utils.js:80-93`.
 
-*TD* — STOMP listener active, writing JSONL to `~/rail-crossing/backend/data/logs/td/`. **Partially joined into predictions:** every CA/CB event emits a `sighting` event (`td-listener.js`); `crossing-state` records the first sighting per headcode per day in `tdSeenToday`, surfaces `tdSeen`/`tdSeenAt` on the API, and uses the sighting as the late-minute lock signal for CIF predictions (see Q-freight handling below). Still pending: confidence-tier narrowing via `tdBerth` (approach/protecting/clear).
+*TD* — STOMP listener active, writing JSONL to `~/rail-crossing/backend/data/logs/td/`. **Partially joined into predictions:** every CA/CB/CC event emits a `berth` event labelled with its kind (`td-listener.js`, since 2026-11-21; CA = step, CB = cancel, CC = interpose); `crossing-state.recordTdEvent` dispatches it — a CA or CB counts as a sighting, a CC is not used by today's engine — and records the first sighting per headcode per day in `tdSeenToday`, surfaces `tdSeen`/`tdSeenAt` on the API, and uses the sighting as the late-minute lock signal for CIF predictions (see Q-freight handling below). Still pending: confidence-tier narrowing via `tdBerth` (approach/protecting/clear).
 
 **TD can stop silently — check the logs are growing, 2026-09-27.** `td-listener` reconnects on a
 failed connect (exponential backoff to 60 s) and on a client `error` event, but nothing watches
@@ -513,7 +513,7 @@ planted answer first; that is how two of its bugs were caught.
 
 - **Late-running CIF freight re-attachment** — a TD-sighted train whose scheduled crossing has passed (or is inside T−60s) now has `bestTime` re-projected from the sighting + `timing.areaEntryLeadSecs`, floored to the future, so it shows as imminent instead of expiring/vanishing. The lead values are a deliberate stopgap pending position-based triggering — **do not tune them** (see "Confidence-tier narrowing" below).
 - **Midnight-crossing CIF placement** — `analyseRoute` unwraps times across 00:00 and `londonMinsToDate` maps `mins ≥ 1440` to the correct next day, so overnight traversals appear at e.g. 00:05 instead of being dropped/mis-dated.
-- **Same-day STP=C cancellations** — the daily UPDATE extract (`toc-update-<dow>`) is now fetched + applied hourly on top of the full snapshot, so a cancellation suppresses its train within the hour. Logs `CIF update: suppressed N service(s) from update extract — …`. Validate against a live extract with `node scripts/validate-update.js`. Delete transactions are counted but not acted on (fail-safe).
+- **Daily UPDATE extract — applied only if newer than the full (LIVE 2026-11-21, `992a5e4`).** Network Rail names each `toc-update-<dow>` for the day whose changes it carries and publishes it ~00:30 UTC the next morning, so the old hourly fetch of TODAY's name re-applied last week's file all day. Now, after each full load (startup, 04:00), the newest published update (yesterday's name) is applied only if its header sequence is newer than the full's (`src/timetable-update.js`); normally it is the same and skipped. No hourly loop. Logs `CIF update: toc-update-<dow> is sequence N (date), loaded full is M — applied / not applied`. Validate against a live extract with `node scripts/validate-update.js`. Delete transactions are counted but not acted on (fail-safe).
 - **CR / TI / TA records** — assessed immaterial to Portslade (BLI1); counted + logged, not applied.
 
 ## Active work / pending items
@@ -541,18 +541,16 @@ the closure vanishes. Which of two things it is decides its priority:
   `how`, `trainClass`, `direction` are exactly as they appear. Plant a known answer in a fixture
   before trusting it.
 
-**0b. CB and CC are swapped in `td-listener.js` (~line 184) — investigate WITH 0a, they may be one
-fault.** Verified against the real feed 2026-10-25, not just the spec: `CB` carries `from` only
-(`"from":"AM12","to":null`) and `CC` carries `to` only (`"from":null,"to":"A001"`). So CB is the
-cancel and CC the interpose, the opposite of the comment there. The code emits sightings on
-`CA || CB` and skips `CC`, so interposes are missed until the next CA, and — the part that bites —
-every CB reaches `recordTdBerth`, where `const berth = evt.to || null` writes **`berth: null` into
-`liveTrains` and refreshes `lastSeen`**. That blanks the train's position for every reader,
-including `_blockedByAhead` and `_chainIndex`, so a queued hold cannot release on position. ~37
-CB/day (370 CA-vs-CB-vs-CC over ten October days: 9,435 / 370 / 413). The clear-step and
-close-strike recorders are safe — both require `evt.to`. If fixing, also fix the fixture at
-`live-positions.test.js:56` (a made-up CB carrying both from and to) and this file's line saying
-"every CA/CB event emits a sighting".
+**0b. ~~CB and CC swapped in `td-listener.js`~~ — FIXED, LIVE 2026-11-21 16:58 UTC (backend-v2
+`73ca165` + `8be2573`, deployed as `992a5e4`; rollback `32c84f3`).** CB is the cancel (`from` only)
+and CC the interpose (`to` only). The listener now emits `berth` events labelled CA/CB/CC; a cancel
+no longer blanks a train's position (it clears it only if the train is at that berth, without
+refreshing `lastSeen`). `8be2573`: a remembered position counts as a sighting only inside the
+liveTrains prune horizon — without it the CB fix put the page on BARRIERS DOWN for 2.5 min on
+3 Sep with no train. 177-day replay scored on the PAGE (`shared/predict.js`): identical BARRIERS
+DOWN / not-OPEN / missed; 12 ticks differ on 2 days, status never. A hand-over from a neighbouring
+area is CC into our first berth + CB from the fringe berth in the same second (berth-first treats
+the pair as a step).
 
 1. ~~Verify `queueMaxAhead` in production.~~ **DONE 2026-10-25 — passed.** 10–19 Oct: 6,889 s/day of
    queued holds against ~21,400 before and ~6,800 predicted (32%); total held down ~57% against ~60%
