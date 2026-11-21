@@ -27,13 +27,24 @@
     close: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>'
   };
   function note(t, cls) { return '<div class="pm-note' + (cls ? ' ' + cls : '') + '">' + t + '</div>'; }
+  // Usage counts (shared/track.js; names listed in docs/analytics.md). A crossing is named the
+  // same way everywhere — "Name (Road, Town) #number" — so one crossing's taps add up.
+  var TRACK = window.TRACK || function () {};
+  if (!TRACK.search) TRACK.search = TRACK.searchNow = function () {};
+  var skipTerm = null;   // a search arriving from the menu's "See more" was counted there
+  function label(e) { return e.name + ' (' + F.place(e) + ') #' + e.n; }
+  // A live crossing tapped from `where`, or a coming-soon one requested from there.
+  function tapTrack(e, where) {
+    return ' data-track="' + esc(e.id ? where + '-tap: ' + label(e) : 'request: ' + label(e) + ' | request-from: ' + where) + '"';
+  }
   // The same row as the burger menu: live plain with a chevron, coming soon striped with a badge.
-  function row(e, d, num) {
+  function row(e, d, num, where) {
     var n = num != null ? '<span class="pm-num">' + num + '</span>' : '';
     var dist = d != null ? '<span class="pm-dist">' + esc(F.fmtMiles(d)) + '</span>' : '';
     var main = '<span class="pm-row-main"><span class="pm-name">' + esc(e.name) + '</span><span class="pm-sub">' + esc(F.place(e)) + '</span>';
-    if (e.id) return '<a class="pm-row pm-live" href="' + esc(F.href(e)) + '">' + n + main + '</span>' + dist + '<span class="pm-chev" aria-hidden="true">›</span></a>';
-    return '<a class="pm-row pm-soon" href="' + esc(F.requestUrl(e)) + '" target="_blank" rel="noopener">' + n + main +
+    var tr = tapTrack(e, where || 'search');
+    if (e.id) return '<a class="pm-row pm-live" href="' + esc(F.href(e)) + '"' + tr + '>' + n + main + '</span>' + dist + '<span class="pm-chev" aria-hidden="true">›</span></a>';
+    return '<a class="pm-row pm-soon" href="' + esc(F.requestUrl(e)) + '" target="_blank" rel="noopener"' + tr + '>' + n + main +
       '<span class="pm-req">Tap to request it</span></span>' + dist + '<span class="pm-tag">' + ICON.soon + 'Coming soon</span></a>';
   }
 
@@ -42,19 +53,21 @@
   function ddHTML() {
     var text = q.value.trim();
     if (!text) {
+      TRACK.search('');
       var rec = F.recent(0);
       return '<button class="hp-dditem" type="button" data-near>' + ICON.near + '<span>Show nearby crossings</span></button>' +
-        (rec.length ? '<div class="pm-eyebrow">Recent</div>' + rec.map(function (e) { return row(e); }).join('') : '');
+        (rec.length ? '<div class="pm-eyebrow">Recent</div>' + rec.map(function (e) { return row(e, null, null, 'recent'); }).join('') : '');
     }
-    if (text.replace(/\s/g, '').length < 2) return note('Keep typing…');
+    if (text.replace(/\s/g, '').length < 2) { TRACK.search(''); return note('Keep typing…'); }
     var r = hits();
+    if (text !== skipTerm) TRACK.search(text, r.hits.length);
     if (!r.hits.length) {
       return note('No road crossings match “' + esc(text) + '”. Try a town or road name.') +
         '<button class="hp-dditem" type="button" data-near>' + ICON.near + '<span>Show nearby crossings</span></button>';
     }
     var nl = r.hits.filter(function (h) { return h.e.id; }).length;
     return '<div class="hp-ddhead"><span>' + r.hits.length + ' crossing' + (r.hits.length === 1 ? '' : 's') +
-      (nl ? ' · ' + nl + ' live' : '') + '</span><button class="hp-linkbtn" type="button" data-fit>Show on map</button></div>' +
+      (nl ? ' · ' + nl + ' live' : '') + '</span><button class="hp-linkbtn" type="button" data-fit data-track="search-show-on-map: homepage">Show on map</button></div>' +
       (r.typo ? note('No exact matches — showing close spellings') : '') +
       r.hits.slice(0, 300).map(function (h) { return row(h.e, h.d); }).join('') +
       (r.hits.length > 300 ? note('Showing the first 300. Add a town or road to narrow it down.') : '');
@@ -103,13 +116,14 @@
   // ---- Nearby (ticket 05: numbered cards under the map; the map fits to you + them) --------------
   function card(e, d, num, label) {
     var live = !!e.id;
-    return '<a class="hp-card' + (live ? '' : ' pm-soon') + '" href="' + esc(F.href(e)) + '"' + (live ? '' : ' target="_blank" rel="noopener"') + '>' +
+    return '<a class="hp-card' + (live ? '' : ' pm-soon') + '" href="' + esc(F.href(e)) + '"' + (live ? '' : ' target="_blank" rel="noopener"') + tapTrack(e, 'nearby') + '>' +
       '<span class="row1"><span class="pm-num">' + num + '</span><span class="pm-dist">' + (label ? label + ' · ' : '') + esc(F.fmtMiles(d)) + '</span></span>' +
       '<span class="pm-name">' + esc(e.name) + '</span><span class="pm-sub">' + esc(F.place(e)) + '</span>' +
       (live ? '<span class="hp-card-live">Live — see closing times ›</span>' : '<span class="pm-tag">' + ICON.soon + 'Coming soon · tap to request</span>') + '</a>';
   }
   function findNear() {
     closeDD(); q.blur();
+    TRACK('location-button: homepage');
     strip.hidden = false;
     stripIn.innerHTML = '<h2 class="hp-h2">Near you</h2>' + note('Finding your location…');
     F.locate().then(function (here) { return ready.then(function () { return here; }); }).then(function (here) {
@@ -118,7 +132,9 @@
       if (n.nearestLive) items.push(card(n.nearestLive.e, n.nearestLive.d, '★', 'Nearest live'));
       stripIn.innerHTML = '<h2 class="hp-h2">Near you</h2><div class="hp-cards">' + items.join('') + '</div>';
       MAP.showNear(here, n);
+      TRACK('location-result: found');
     }).catch(function (err) {
+      if (!(err && /^directory/.test(err.message || ''))) TRACK('location-result: ' + F.locationHelp(err).kind);
       stripIn.innerHTML = '<h2 class="hp-h2">Near you</h2>' + (err && /^directory/.test(err.message || '')
         ? note('Couldn’t load the list of crossings. Check your connection and try again.', 'pm-warn')
         : note(F.locationHelp(err).html, 'pm-warn') +
@@ -128,9 +144,9 @@
 
   // ---- events ---------------------------------------------------------------------------------
   q.addEventListener('focus', function () { F.quietLocation(); openDD(); });
-  q.addEventListener('input', function () { clearBtn.hidden = !q.value; openDD(); filterLive(); });
+  q.addEventListener('input', function () { skipTerm = null; clearBtn.hidden = !q.value; openDD(); filterLive(); });
   q.addEventListener('keydown', function (e) {
-    if (e.key === 'Enter') { e.preventDefault(); closeDD(); q.blur(); ready.then(function () { MAP.fitTo(hits().hits); }); }
+    if (e.key === 'Enter') { e.preventDefault(); TRACK.searchNow(); closeDD(); q.blur(); ready.then(function () { MAP.fitTo(hits().hits); }); }
     if (e.key === 'Escape') { closeDD(); q.blur(); }
   });
   clearBtn.addEventListener('click', function () { q.value = ''; clearBtn.hidden = true; filterLive(); q.focus(); openDD(); });
@@ -138,13 +154,13 @@
   document.addEventListener('click', function (e) {
     if (!e.target.closest('#hpSearch') && !dd.hidden) closeDD();
     if (e.target.closest('[data-near]')) { findNear(); return; }
-    if (e.target.closest('[data-fit]')) { closeDD(); q.blur(); MAP.fitTo(hits().hits); return; }
+    if (e.target.closest('[data-fit]')) { TRACK.searchNow(); closeDD(); q.blur(); MAP.fitTo(hits().hits); return; }
     if (e.target.closest('[data-unsel]')) MAP.unselect();
   });
   // Arriving from the menu's "See more": the query filled in, the dropdown open, the map fitted.
   var arrived = new URLSearchParams(location.search).get('q');
   if (arrived) {
-    q.value = arrived; clearBtn.hidden = false;
+    q.value = arrived; clearBtn.hidden = false; skipTerm = arrived.trim();
     openDD(); filterLive();
     ready.then(function () { MAP.fitTo(hits().hits); });
   }
@@ -249,6 +265,7 @@
       if (!f) return;
       var c = F.byNumber(f.properties.n);
       if (!c) return;
+      TRACK('map-tap: ' + label(c) + (c.id ? ' (live)' : ' (coming soon)'));
       if (c.id) { location.href = F.href(c); return; }
       select(c);
     }
@@ -259,7 +276,7 @@
         '<b>' + esc(c.name) + '</b><span class="s">' + esc(F.place(c)) + ' · ' + esc(c.county) + '</span></div>' +
         '<button class="hp-x" type="button" data-unsel aria-label="Close">' + ICON.close + '</button></div>' +
         '<p>Not live yet. Ask for it: requests help decide which crossings go live first.</p>' +
-        '<a class="hp-btn hp-btn-primary hp-btn-wide" href="' + esc(F.requestUrl(c)) + '" target="_blank" rel="noopener">Request this crossing</a>';
+        '<a class="hp-btn hp-btn-primary hp-btn-wide" href="' + esc(F.requestUrl(c)) + '" target="_blank" rel="noopener"' + tapTrack(c, 'map') + '>Request this crossing</a>';
       placeCard.hidden = false;
       map.panTo([c.lon, c.lat]);
     }
@@ -315,7 +332,14 @@
   showApp(!standalone());
   Array.prototype.forEach.call(appBtns, function (b) {
     b.addEventListener('click', function () {
-      if (installPrompt) { var p = installPrompt; installPrompt = null; p.prompt(); return; }
+      TRACK('add-app: homepage ' + (b.classList.contains('hp-app-inline') ? 'text button' : 'map button'));
+      if (installPrompt) {
+        var p = installPrompt; installPrompt = null; p.prompt();
+        TRACK('add-app-shown: install prompt');
+        if (p.userChoice) p.userChoice.then(function (c) { TRACK('add-app-choice: ' + c.outcome); }, function () {});
+        return;
+      }
+      TRACK('add-app-shown: ' + (isIOS ? 'iphone steps' : isAndroid ? 'android steps' : 'other steps'));
       var t, body;
       if (isIOS) {
         t = 'Add to your home screen — iPhone';

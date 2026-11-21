@@ -22,9 +22,9 @@
 <meta property="og:url" content="https://railcrossing.uk/portslade/">
 <meta property="og:image" content="https://railcrossing.uk/shared/icon-512.png">
 <meta name="twitter:card" content="summary">
-<link rel="stylesheet" href="../shared/crossing.css?v=202611122218">
-<link rel="stylesheet" href="../shared/closure-card.css?v=202611122218">
-<link rel="stylesheet" href="../shared/menu.css?v=202611122218">
+<link rel="stylesheet" href="../shared/crossing.css?v=202611210634">
+<link rel="stylesheet" href="../shared/closure-card.css?v=202611210634">
+<link rel="stylesheet" href="../shared/menu.css?v=202611210634">
 <script type="application/ld+json">
 {
  "@context": "https://schema.org",
@@ -86,7 +86,7 @@
       <h1 class="hdr-title" id="crossingName">Portslade Level Crossing</h1>
       <div class="hdr-road" id="crossingRoad">Boundary Road</div>
     </div>
-    <button class="pm-burger" id="menuBtn" type="button" aria-label="Menu" aria-controls="menuDrawer" aria-expanded="false"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+    <button class="pm-burger" id="menuBtn" type="button" data-track="menu-open: portslade page" aria-label="Menu" aria-controls="menuDrawer" aria-expanded="false"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
   </div>
 
   <div class="status-card" id="statusCard">
@@ -183,10 +183,10 @@
   <div class="section">
     <div class="section-hdr">
       <span>Upcoming Closures</span>
-      <button class="refresh-btn" id="refreshBtn" onclick="refreshData()"></button>
+      <button class="refresh-btn" id="refreshBtn" data-track="refresh: portslade page" onclick="refreshData()"></button>
     </div>
     <div id="closureList"><div class="empty">Fetching live data...</div></div>
-    <button class="show-more-btn hidden" id="showMoreBtn" onclick="showMoreClosures()">Show More</button>
+    <button class="show-more-btn hidden" id="showMoreBtn" data-track="show-more: portslade page" onclick="showMoreClosures()">Show More</button>
   </div>
 
   <!-- About this crossing (burger-menu ticket 12): fixed facts, written in at build time from the
@@ -194,7 +194,7 @@
        running code. The live status above stays code-driven. -->
   <section class="section about" aria-labelledby="aboutHdr">
     <h2 class="about-hdr" id="aboutHdr">About this crossing</h2>
-    <a class="about-map" href="/map/#s=PLD" aria-label="Open the live train map at Portslade"><img src="local-map.webp" width="360" height="240" loading="lazy" decoding="async" alt="Street map of about 400 metres around Portslade Level Crossing on Boundary Road, Portslade by Sea, with Al Medina, Cherry News and Little Bruce Coffee nearby."></a>
+    <a class="about-map" data-track="map-link: portslade local map" href="/map/#s=PLD" aria-label="Open the live train map at Portslade"><img src="local-map.webp" width="360" height="240" loading="lazy" decoding="async" alt="Street map of about 400 metres around Portslade Level Crossing on Boundary Road, Portslade by Sea, with Al Medina, Cherry News and Little Bruce Coffee nearby."></a>
     <dl class="about-list">
       <dt>Where</dt><dd>Boundary Road, Portslade by Sea, Brighton and Hove, East Sussex</dd>
       <dt>Nearest station</dt><dd>Portslade</dd>
@@ -209,19 +209,19 @@
     <div class="info-text">
       Powered by live train times and real-time railway signalling. As trains approach, we forecast when the barriers will come down &mdash; and by detecting the exact moment each train clears the crossing, we give you a sharper estimate of when they'll lift again.
     </div>
-    <a class="feedback-link" href="https://forms.gle/MvEes4H9pqSVyKpS8" target="_blank">Share Feedback</a>
+    <a class="feedback-link" data-track="feedback-form: portslade page" href="https://forms.gle/MvEes4H9pqSVyKpS8" target="_blank">Share Feedback</a>
   </div>
 
   <div class="section">
     <div style="font-size:12px;font-weight:600;margin-bottom:8px">Quick Links</div>
     <div class="setup-row">
-      <a class="setup-btn" href="https://forms.gle/Tv3UcPDVcLygoG1D9" target="_blank" style="text-decoration:none">Request Your Local Crossing</a>
-      <a class="setup-btn coffee-btn" href="https://www.gofundme.com/f/predict-level-crossing-closures-across-britain" target="_blank" rel="noopener" style="text-decoration:none">Support on GoFundMe</a>
+      <a class="setup-btn" data-track="request-from: portslade page" href="https://forms.gle/Tv3UcPDVcLygoG1D9" target="_blank" style="text-decoration:none">Request Your Local Crossing</a>
+      <a class="setup-btn coffee-btn" data-track="gofundme: portslade page" href="https://www.gofundme.com/f/predict-level-crossing-closures-across-britain" target="_blank" rel="noopener" style="text-decoration:none">Support on GoFundMe</a>
     </div>
   </div>
 
   <div class="error hidden" id="errorBox"></div>
-  <nav class="footer-nav" aria-label="Site"><a href="/">Home</a><a href="/map/">Map</a><a href="https://forms.gle/Tv3UcPDVcLygoG1D9" target="_blank" rel="noopener">Request a crossing</a></nav>
+  <nav class="footer-nav" aria-label="Site"><a data-track="home-link: portslade page footer" href="/">Home</a><a data-track="map-link: portslade page footer" href="/map/">Map</a><a data-track="request-from: portslade page footer" href="https://forms.gle/Tv3UcPDVcLygoG1D9" target="_blank" rel="noopener">Request a crossing</a></nav>
   <div class="footer">Estimates only · Not a safety system · Always obey signals & barriers</div>
 </div>
 
@@ -233,7 +233,7 @@
 <nav class="pm-drawer" id="menuDrawer" aria-label="Menu" hidden>
   <div class="pm-dbody">
     <div class="pm-toprow">
-      <a class="pm-item" href="/"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11 12 4l9 7"/><path d="M5 10v10h14V10"/></svg><span>Home</span></a>
+      <a class="pm-item" data-track="home-link: portslade menu" href="/"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11 12 4l9 7"/><path d="M5 10v10h14V10"/></svg><span>Home</span></a>
       <button class="pm-x" id="menuClose" type="button" aria-label="Close menu"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
     </div>
     <div class="pm-group" id="menuRecent" hidden></div>
@@ -242,7 +242,7 @@
     <div class="pm-results" id="menuResults" aria-live="polite"></div>
   </div>
   <div class="pm-dfoot">
-    <button class="add-app-btn hidden pm-app" id="addAppBtn" type="button" onclick="addAsApp()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M12 8v6M9.5 11.5 12 14l2.5-2.5"/></svg>Add as app</button>
+    <button class="add-app-btn hidden pm-app" id="addAppBtn" type="button" data-track="add-app: portslade menu" onclick="addAsApp()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M12 8v6M9.5 11.5 12 14l2.5-2.5"/></svg>Add as app</button>
   </div>
 </nav>
 
@@ -254,11 +254,12 @@
   </div>
 </div>
 
-<script src="../shared/predict.js?v=202611122218"></script>
-<script src="../shared/closure-card.js?v=202611122218"></script>
-<script src="../shared/crossing.js?v=202611122218"></script>
-<script src="../shared/finder.js?v=202611122218"></script>
-<script src="../shared/menu.js?v=202611122218"></script>
+<script src="../shared/track.js?v=202611210634"></script>
+<script src="../shared/predict.js?v=202611210634"></script>
+<script src="../shared/closure-card.js?v=202611210634"></script>
+<script src="../shared/crossing.js?v=202611210634"></script>
+<script src="../shared/finder.js?v=202611210634"></script>
+<script src="../shared/menu.js?v=202611210634"></script>
 <script>
 initCrossing('portslade');
 </script>

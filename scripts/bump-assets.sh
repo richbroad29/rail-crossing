@@ -39,7 +39,9 @@ perl -pi -e "s{((?:src|href)=\")((?:\.\./)*(?:shared|map)/[A-Za-z0-9._-]+\.(?:js
 # (the pinned unpkg URLs, which carry their own exact version and SRI hash) is left alone.
 MAP_FILES="map/index.html"
 perl -pi -e "s{((?:src|href)=\")([A-Za-z0-9_-]+\.(?:js|css))(?:\?v=[^\"]*)?\"}{\$1\$2?v=$TOKEN\"}g" $MAP_FILES
+# …and the one shared file it loads (../shared/track.js, the usage counts).
+perl -pi -e "s{((?:src|href)=\")((?:\.\./)+shared/[A-Za-z0-9._-]+\.(?:js|css))(?:\?v=[^\"]*)?\"}{\$1\$2?v=$TOKEN\"}g" $MAP_FILES
 
 echo "asset token -> $TOKEN"
 grep -hoE '(src|href)="(\.\./)*(shared|map)/[A-Za-z0-9._-]+\.(js|css)\?v=[0-9]+"' $FILES | sort -u
-grep -hoE '(src|href)="[A-Za-z0-9_-]+\.(js|css)\?v=[0-9]+"' $MAP_FILES | sort -u
+grep -hoE '(src|href)="((\.\./)+shared/)?[A-Za-z0-9_-]+\.(js|css)\?v=[0-9]+"' $MAP_FILES | sort -u

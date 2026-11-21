@@ -22,15 +22,23 @@
     });
   }
   var SOON = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>';
+  // Usage counts (shared/track.js; names in docs/analytics.md), a crossing named as home.js names it.
+  var TRACK = window.TRACK || function () {};
+  var PAGE = location.pathname.split('/')[1] || 'crossing';   // "portslade": as the page's own buttons name it
+  if (!TRACK.search) TRACK.search = function () {};
+  function tapTrack(e) {
+    var l = e.name + ' (' + F.place(e) + ') #' + e.n;
+    return ' data-track="' + esc(e.id ? 'menu-tap: ' + l : 'request: ' + l + ' | request-from: ' + PAGE + ' menu') + '"';
+  }
   function row(e, d) {
     var dist = d != null ? '<span class="pm-dist">' + esc(F.fmtMiles(d)) + '</span>' : '';
     var main = '<span class="pm-row-main"><span class="pm-name">' + esc(e.name) + '</span>' +
       '<span class="pm-sub">' + esc(F.place(e)) + '</span>';
     if (e.id) {
-      return '<a class="pm-row pm-live" href="' + esc(F.href(e)) + '">' + main + '</span>' + dist +
+      return '<a class="pm-row pm-live" href="' + esc(F.href(e)) + '"' + tapTrack(e) + '>' + main + '</span>' + dist +
         '<span class="pm-chev" aria-hidden="true">›</span></a>';
     }
-    return '<a class="pm-row pm-soon" href="' + esc(F.requestUrl(e)) + '" target="_blank" rel="noopener">' + main +
+    return '<a class="pm-row pm-soon" href="' + esc(F.requestUrl(e)) + '" target="_blank" rel="noopener"' + tapTrack(e) + '>' + main +
       '<span class="pm-req">Tap to request it</span></span>' + dist +
       '<span class="pm-tag">' + SOON + 'Coming soon</span></a>';
   }
@@ -46,6 +54,7 @@
 
   // ---- Find closest -------------------------------------------------------------------------
   function findClosest() {
+    TRACK('location-button: ' + PAGE + ' menu');
     input.value = '';
     results.innerHTML = note('Finding your location…');
     F.locate().then(function (here) {
@@ -58,9 +67,11 @@
           row(n.nearestLive.e, n.nearestLive.d) + '</div>';
       }
       results.innerHTML = h;
+      TRACK('location-result: found');
     }).catch(function (err) {
       if (err && err.message && /^directory/.test(err.message)) return loadFailed();
       var help = F.locationHelp(err);
+      TRACK('location-result: ' + help.kind);
       results.innerHTML = note(help.html, 'pm-warn') +
         (help.kind === 'unavailable' ? '<button class="pm-link" type="button" data-nearby>Try again</button>' : '');
     });
@@ -70,11 +81,13 @@
   var LIMIT = 5;
   function renderSearch() {
     var q = input.value;
+    if (q.replace(/\s/g, '').length < 2) TRACK.search('');   // deleted back: drop the half-typed term
     if (!q.trim()) { results.innerHTML = ''; return; }
     if (q.replace(/\s/g, '').length < 2) { results.innerHTML = note('Keep typing…'); return; }
     F.load().then(function () {
       if (input.value !== q) return;                     // a newer keystroke will render
       var r = F.search(q, { here: F.knownLocation() });
+      TRACK.search(q, r.hits.length);
       if (!r.hits.length) {
         results.innerHTML = note('No road crossings match “' + esc(q) + '”. Try a town or road name.') +
           '<button class="pm-link" type="button" data-nearby>Show nearby crossings</button>';
@@ -83,7 +96,7 @@
       var h = r.typo ? note('No exact matches — showing close spellings') : '';
       h += r.hits.slice(0, LIMIT).map(function (x) { return row(x.e, x.d); }).join('');
       if (r.hits.length > LIMIT) {
-        h += '<a class="pm-seemore" href="/?q=' + encodeURIComponent(q) + '">See more (' + r.hits.length + ')</a>';
+        h += '<a class="pm-seemore" data-track="' + esc('search-see-more: ' + PAGE + ' menu') + '" href="/?q=' + encodeURIComponent(q) + '">See more (' + r.hits.length + ')</a>';
       }
       results.innerHTML = h;
     }).catch(loadFailed);

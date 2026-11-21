@@ -28,6 +28,7 @@ shared/crossings.json            Per-crossing config (timing params, IDs, feedba
 shared/crossing.css              Styles
 shared/apps-script-feedback.gs   Copy of the Google Apps Script behind the feedback Sheet
 shared/icon-180.png, icon.svg    Icons
+shared/track.js                  Usage counts (GoatCounter events); event names in docs/analytics.md
 shared/finder.js                 FINDING CORE — search / nearest / recents / request links, shared by menu + homepage
 shared/menu.js, menu.css         The burger menu on crossing pages
 shared/home.js, home.css         The homepage: search, Nearby, map (MapLibre, loaded after the text)
@@ -374,7 +375,7 @@ The authoritative copy is `backend/config/crossings/portslade.json` → `td.east
 - **NWR SCHEDULE (CIF)** — downloaded automatically from NROD `CifFileAuthenticate` endpoint using the same basic-auth credentials as STOMP (`NR_FEED_USER`/`NR_FEED_PASS` in backend `.env`). No separate NROD subscription needed — the portal grants global access to all feeds. Daily full extract, ~120 MB gzipped; stored at `~/rail-crossing/backend/data/schedule/cif-latest.json.gz`. **Credential testing gotcha:** `source .env` in bash expands `$` in the password (e.g., `p$i$d…` → `p`) — use `awk -F= '/^NR_FEED_PASS=/{sub(/^NR_FEED_PASS=/,"");print}' .env` to read the literal value.
 - **NWR CORPUS** — downloaded from `https://publicdatafeeds.networkrail.co.uk/ntrod/SupportingFileAuthenticate?type=CORPUS` using the same `NR_FEED_USER`/`NR_FEED_PASS` credentials. ~770 KB gzipped, ~12.3k usable TIPLOC entries after build; stored at `~/rail-crossing/backend/data/corpus/corpus-latest.json.gz`. Used only for resolving CIF train origin/destination names — see "CIF origin/destination resolution via CORPUS" above.
 - **Google Apps Script + Sheets** — feedback collection. URL is in `crossings.json`.
-- **GoatCounter** — analytics
+- **GoatCounter** — analytics (richbroad29.goatcounter.com): page views plus click events via `shared/track.js`; every event name is listed in `docs/analytics.md`
 - **GoFundMe** — donations (https://www.gofundme.com/f/predict-level-crossing-closures-across-britain; in the crossing-page and homepage templates). Replaced Buy Me a Coffee 2026-11-12.
 
 **Never commit secrets** to this repo (PATs, Cloudflare API tokens, RDM API keys, SSH keys). They go in environment files that are gitignored, or in Cloudflare/Oracle secret stores.
