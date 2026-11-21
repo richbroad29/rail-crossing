@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { pollCrossing } = require('./ldb-poller');
 const { parseScheduleFile, applyUpdateExtract } = require('./schedule-parser');
-const CrossingState = require('./crossing-state');
+const { CrossingEngines } = require('./engines');
 const { createApi } = require('./api');
 const logger = require('./logger');
 const tdListener = require('./td-listener');
@@ -20,8 +20,10 @@ const { parseLondonWallClock, londonDateStamp } = require('./time-utils');
 
 // Load config
 // One definition file per crossing, config/crossings/<id>.json (src/crossing-definitions.js).
-const { loadCrossings } = require('./crossing-definitions');
+const { loadCrossings, loadRoutesFor, engineOf, shadowEngineOf } = require('./crossing-definitions');
 const crossingsConfig = loadCrossings();
+// The berth-first routes of each crossing that uses berth-first (serving or shadow); none otherwise.
+const routesById = loadRoutesFor(crossingsConfig);
 
 // Environment
 const RDM_API_KEY = process.env.RDM_API_KEY;       // RDM consumer key (preferred)
@@ -62,11 +64,14 @@ if (RDM_API_KEY) {
   process.exit(1);
 }
 
-// Create state objects for each crossing
-const crossingStates = {};
+// Each crossing's engines (engines.js): the serving one, whose state the API publishes, and an
+// optional shadow fed the same inputs and only logged. `crossingStates` is the serving engines.
+const engines = new CrossingEngines(crossingsConfig, routesById);
+const crossingStates = engines.serving;
 for (const [id, config] of Object.entries(crossingsConfig)) {
-  crossingStates[id] = new CrossingState(id, config);
-  console.log(`Crossing registered: ${id} (${config.name})`);
+  const shadow = shadowEngineOf(config);
+  console.log(`Crossing registered: ${id} (${config.name}) — engine ${engineOf(config)}` +
+    (shadow ? `, shadow ${shadow} (logged, not served; areas ${(routesById[id] && routesById[id].areas || []).join('+')})` : ''));
   // A name on both place lists would match neither (src/direction.js) — say so at startup.
   for (const p of validateDirections(config.directions)) console.error(`Crossing ${id}: directions config: ${p}`);
 }
@@ -78,7 +83,7 @@ async function pollAll() {
       const trains = await pollCrossing(id, config, auth, {
         timetableDirection: q => crossingStates[id].timetableDirection(q)
       });
-      crossingStates[id].updateLdbTrains(trains);
+      engines.ldb(id, trains);
       console.log(`LDB ${id}: ${trains.length} trains, state=${crossingStates[id].state}`);
     } catch (err) {
       console.error(`LDB poll failed for ${id}:`, err.message);
@@ -168,9 +173,7 @@ async function loadSchedule() {
     baseScheduleByCrossing = scheduleTrains;
     loadedFullSeq = await fullSequence(file);
     console.log(`Schedule loaded: full timetable sequence ${loadedFullSeq == null ? 'unknown' : loadedFullSeq}`);
-    for (const [id, trains] of Object.entries(scheduleTrains)) {
-      crossingStates[id].updateScheduleTrains(trains);
-    }
+    for (const [id, trains] of Object.entries(scheduleTrains)) engines.schedule(id, trains);
   } catch (err) {
     console.error('Failed to load schedule:', err.message);
   }
@@ -197,7 +200,7 @@ async function refreshScheduleUpdate() {
         const { trains } = await applyUpdateExtract(file, crossingsConfig, base);
         if (baseScheduleByCrossing !== base) return; // a newer full arrived meanwhile: it wins
         annotateRunRates(trains);
-        for (const [id, t] of Object.entries(trains)) crossingStates[id].updateScheduleTrains(t);
+        for (const [id, t] of Object.entries(trains)) engines.schedule(id, t);
       }
     });
   } catch (err) {
@@ -230,9 +233,7 @@ function scheduleDailyCifRefresh() {
       annotateRunRates(trains);
       baseScheduleByCrossing = trains;
       loadedFullSeq = await fullSequence(cifFetcher.latestFilePath());
-      for (const [id, t] of Object.entries(trains)) {
-        crossingStates[id].updateScheduleTrains(t);
-      }
+      for (const [id, t] of Object.entries(trains)) engines.schedule(id, t);
       console.log(`CIF refresh: in-memory schedules updated (full timetable sequence ${loadedFullSeq == null ? 'unknown' : loadedFullSeq})`);
     } catch (err) {
       console.error('CIF refresh failed (keeping previous data):', err.message);
@@ -351,10 +352,18 @@ async function main() {
   // repeat across areas, so an unfiltered fan-out lets a distant train anchor a local closure.
   // Steps, cancels and interposes all arrive here, labelled; recordTdEvent decides what each
   // is worth.
-  tdListener.on('berth', (s) => {
-    for (const state of Object.values(crossingStates)) state.recordTdEvent(s);
-  });
-  tdListener.start({ areas: crossingTdAreas(crossingsConfig) });
+  // A shadow engine gets each event too, as its own copy (engines.js).
+  tdListener.on('berth', (s) => engines.berth(s));
+  // The listener hears each crossing's td.area and, for a berth-first crossing, every area its
+  // routes cross (td-paths.crossingTdAreas).
+  tdListener.start({ areas: crossingTdAreas(crossingsConfig, routesById) });
+
+  // Shadow logging (berth-first-v1-plan §3), only for crossings that have a shadow: both engines'
+  // closures on change, checked every 5 s, and an hourly line per shadow.
+  if (engines.shadowIds().length) {
+    setInterval(() => engines.logClosureChanges(), 5000).unref();
+    setInterval(() => engines.logShadowSummary(), 3600 * 1000).unref();
+  }
   tdRotation.start();
   sclassRotation.start(); // bound + rotate the new S-Class logs alongside the TD logs
   // VSTP + TRUST, logged for berth-first replay (docs/berth-first-design.md §7). Log only.

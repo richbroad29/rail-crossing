@@ -13,12 +13,71 @@
 
 const fs = require('fs');
 const path = require('path');
+const { isValidArea } = require('./td-paths');
 
 const DEFAULT_DIR = path.join(__dirname, '..', 'config', 'crossings');
 const ID_RE = /^[a-z0-9][a-z0-9-]*$/;
 
 const BOARD_TIMES = ['arrival', 'departure'];
 const CLASS_RULES = ['approachStop', 'stopping'];
+
+// --- Which engine predicts a crossing (docs/berth-first-design.md D22, berth-first-v1-plan §3) ---
+// `engine` is the one that serves the crossing's page; `shadowEngine`, if set, is fed the same
+// inputs beside it and only logged. Absent `engine` means 'classic', today's engine
+// (crossing-state.js), so a definition that names neither behaves exactly as before. Rollback is
+// a settings change and a restart.
+const ENGINES = ['classic', 'berth-first'];
+// Engines allowed to serve a page. berth-first is a stub until v1 is built and replayed, so it
+// may run only as a shadow; this list is how that is enforced, at load.
+const SERVABLE_ENGINES = ['classic'];
+const engineOf = def => (def && def.engine) || 'classic';
+const shadowEngineOf = def => (def && def.shadowEngine) || null;
+const usesBerthFirst = def => engineOf(def) === 'berth-first' || shadowEngineOf(def) === 'berth-first';
+
+function engineProblems(def) {
+  const problems = [];
+  if (def.engine !== undefined) {
+    if (!ENGINES.includes(def.engine)) problems.push(`engine must be one of ${ENGINES.join('/')}, is ${JSON.stringify(def.engine)}`);
+    else if (!SERVABLE_ENGINES.includes(def.engine)) problems.push(`engine ${def.engine} cannot serve a page yet; it can run only as shadowEngine`);
+  }
+  if (def.shadowEngine !== undefined) {
+    if (!ENGINES.includes(def.shadowEngine)) problems.push(`shadowEngine must be one of ${ENGINES.join('/')}, is ${JSON.stringify(def.shadowEngine)}`);
+    else if (def.shadowEngine === engineOf(def)) problems.push(`shadowEngine is the engine that already serves (${def.shadowEngine})`);
+  }
+  return problems;
+}
+
+// --- The berth-first routes file: <id>.routes.json beside the definition ---
+// Written by tools/learn-routes.js (berth-first-v1-plan §4) and required by any crossing that
+// uses berth-first, serving or shadow. `areas` is every TD area its routes cross: the listener
+// has to hear all of them (td-paths.crossingTdAreas), not just the crossing's own td.area.
+function routesProblems(routes) {
+  const problems = [];
+  if (!routes || typeof routes !== 'object' || Array.isArray(routes)) return ['is not a JSON object'];
+  if (!Array.isArray(routes.areas) || !routes.areas.length) problems.push('areas must be a non-empty list of TD areas');
+  else for (const a of routes.areas) if (!isValidArea(a)) problems.push(`areas: ${JSON.stringify(a)} is not a TD area id`);
+  return problems;
+}
+
+function loadRoutes(id, source = DEFAULT_DIR) {
+  const f = path.join(source, `${id}.routes.json`);
+  let routes;
+  try {
+    routes = JSON.parse(fs.readFileSync(f, 'utf8'));
+  } catch (e) {
+    throw new Error(`crossing ${id} uses berth-first but its routes file ${path.basename(f)} could not be read: ${e.message}`);
+  }
+  const problems = routesProblems(routes);
+  if (problems.length) throw new Error(`routes file ${path.basename(f)}: ${problems.join('; ')}`);
+  return routes;
+}
+
+// The routes of every crossing that uses berth-first, { <id>: routes }; the rest have none.
+function loadRoutesFor(crossings, source = DEFAULT_DIR) {
+  const out = {};
+  for (const [id, def] of Object.entries(crossings)) if (usesBerthFirst(def)) out[id] = loadRoutes(id, source);
+  return out;
+}
 
 // The direction slots are the two keys of `directions`; every per-direction block is keyed by
 // them, and the code never names one (docs/crossing-definition.md on main). A block keyed by
@@ -81,6 +140,7 @@ function definitionProblems(def) {
       if (!isComment(k) && !isSlot(k)) problems.push(`${where}.${k} is not a direction slot (${slots.join(', ')})`);
     }
   }
+  problems.push(...engineProblems(def));
   return problems;
 }
 
@@ -100,8 +160,15 @@ function loadCrossings(source = DEFAULT_DIR) {
     }
     const problems = definitionProblems(out[id]);
     if (problems.length) throw new Error(`crossing definition ${f}: ${problems.join('; ')}`);
+    // A crossing that uses berth-first without a usable routes file is refused here, at load,
+    // rather than running blind.
+    if (usesBerthFirst(out[id])) loadRoutes(id, source);
   }
   return out;
 }
 
-module.exports = { loadCrossings, definitionProblems, DEFAULT_DIR };
+module.exports = {
+  loadCrossings, definitionProblems, DEFAULT_DIR,
+  ENGINES, SERVABLE_ENGINES, engineOf, shadowEngineOf, usesBerthFirst,
+  loadRoutes, loadRoutesFor, routesProblems
+};

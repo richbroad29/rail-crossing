@@ -38,13 +38,21 @@ function tdLogFile(area, dateStamp) {
 
 // The distinct TD areas the configured crossings need C-Class from, in config order.
 // A crossing with no td.area contributes nothing; an invalid one is reported and skipped.
-function crossingTdAreas(crossingsConfig) {
+// `routesById` (crossing-definitions.loadRoutesFor) adds every area a berth-first crossing's
+// routes cross, after its own td.area: berth-first follows trains across areas
+// (berth-first-v1-plan §2). The classic engine still takes only its own area's events
+// (CrossingState.ownsTdArea), so hearing more areas changes nothing for it.
+function crossingTdAreas(crossingsConfig, routesById = {}) {
   const areas = [];
-  for (const [id, c] of Object.entries(crossingsConfig || {})) {
-    const area = c && c.td && c.td.area;
-    if (area == null) continue;
-    if (!isValidArea(area)) { console.error(`crossing ${id}: invalid td.area ${JSON.stringify(area)} — ignored`); continue; }
+  const add = (id, area, what) => {
+    if (area == null) return;
+    if (!isValidArea(area)) { console.error(`crossing ${id}: invalid ${what} ${JSON.stringify(area)} — ignored`); return; }
     if (!areas.includes(area)) areas.push(area);
+  };
+  for (const [id, c] of Object.entries(crossingsConfig || {})) {
+    add(id, c && c.td && c.td.area, 'td.area');
+    const routes = routesById && routesById[id];
+    for (const a of (routes && routes.areas) || []) add(id, a, 'routes area');
   }
   return areas;
 }
