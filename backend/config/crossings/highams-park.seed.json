@@ -1,0 +1,13 @@
+{
+  "_comment": "Seed for tools/learn-routes.js until Highams Park has a definition. Not loaded by the backend (a dotted file name is not a definition). Highams Park (Larkshall Road, NR 2629, CCTV) has NO barrier bits in the signalling feed (Q4 scan 2026-11-21), so its clear steps cannot be found from data: both are GUESSES from the berth timings, to confirm against the Q4 berth map and field taps. Direction slots: up = towards Liverpool Street, down = towards Chingford.",
+  "area": "Q4",
+  "directions": {
+    "up": { "clear": { "from": "1432", "to": "1430", "_provenance": "GUESS: 1432 is the up platform berth (dwell ~70 s, 2T01 20 Nov 05:17:54-05:19:02); the crossing is taken to be at the London end of the platforms, so leaving 1432 = crossing the road. Confirm on the berth map." } },
+    "down": { "clear": { "from": "1427", "to": "1429", "_provenance": "GUESS: 1429 is the down platform berth (dwell ~100 s before Chingford); a down train crosses the road just before entering it. Confirm on the berth map." } }
+  },
+  "schedule": {
+    "station": "HGHMSPK",
+    "before": { "up": ["CHINGFD"], "down": ["WDST", "LIVST", "HACKNYD", "CLAPTON", "STMFDHL", "BTHNLGR"] }
+  },
+  "barrier": null
+}
