@@ -151,6 +151,56 @@
     return { top: top, nearestLive: nearestLive };
   }
 
+  // ---- postcodes (search: the crossings closest to a UK postcode) -----------------------------
+  // A postcode isn't a word in the directory, so search can't match one; instead it becomes a
+  // position, and the answer is nearest() from there, the same as Find closest. The position comes
+  // from postcodes.io (free, no key; ONS Postcode Directory, Open Government Licence). Only the
+  // postcode is sent, and only once it is complete ("CF5 6XB") or a whole district ("CF5").
+  var PC_FULL = /^([A-Z]{1,2}[0-9][A-Z0-9]?)([0-9][A-Z]{2})$/;     // with every separator taken out
+  var PC_AREA = /^([A-Z]{1,2}[0-9][A-Z0-9]?)(?: [0-9][A-Z]?)?$/;   // "CF5", or "CF5 6X" half typed
+  var PC_PART = /^[A-Z]{1,2}[0-9][A-Z0-9]?[0-9][A-Z]?$/;           // "CF56X": can't tell where the district ends
+  // What a search looks like as a postcode: null, or { kind, code, area } where kind is 'full'
+  // (code "CF5 6XB"), 'area' (code "CF5", the district) or 'partial' (nothing to look up yet).
+  // `area` is the district, never the full postcode: it is all the usage counts are told.
+  // Spaces, hyphens and dots all count as separators. A full postcode needs none ("cf56xb"): its
+  // second half is always the last three characters, so where the district ends is never in doubt.
+  function postcode(q) {
+    var s = String(q == null ? '' : q).toUpperCase().replace(/[\s.\-]+/g, ' ').trim(), m;
+    if ((m = PC_FULL.exec(s.replace(/ /g, '')))) return { kind: 'full', code: m[1] + ' ' + m[2], area: m[1] };
+    if ((m = PC_AREA.exec(s))) return { kind: 'area', code: m[1], area: m[1] };
+    if (PC_PART.test(s)) return { kind: 'partial', code: s, area: null };
+    return null;
+  }
+  var PC_API = 'https://api.postcodes.io/', pcAsked = {};
+  // Resolves { lat, lon } for a 'full' or 'area' postcode(), or null when no such postcode exists;
+  // rejects when the lookup itself failed (offline, slow, service down). A retired postcode still
+  // has a place, so a full one not found is tried again as retired. Answers are kept for the visit;
+  // a failure is not, so asking again retries.
+  function lookupPostcode(p) {
+    if (!p || (p.kind !== 'full' && p.kind !== 'area')) return Promise.resolve(null);
+    var key = p.kind + ' ' + p.code, id = encodeURIComponent(p.code.replace(' ', ''));
+    if (pcAsked[key]) return pcAsked[key];
+    function get(path) {
+      return new Promise(function (resolve, reject) {
+        var t = setTimeout(function () { reject(new Error('postcode timeout')); }, 8000);
+        root.fetch(PC_API + path + id).then(function (r) {
+          if (r.status === 404) return null;
+          if (!r.ok) throw new Error('postcode ' + r.status);
+          return r.json().then(function (d) {
+            var x = d && d.result;
+            return x && typeof x.latitude === 'number' ? { lat: x.latitude, lon: x.longitude } : null;
+          });
+        }).then(function (v) { clearTimeout(t); resolve(v); }, function (e) { clearTimeout(t); reject(e); });
+      });
+    }
+    var ask = get(p.kind === 'full' ? 'postcodes/' : 'outcodes/').then(function (pos) {
+      return pos || p.kind !== 'full' ? pos : get('terminated_postcodes/');
+    });
+    pcAsked[key] = ask;
+    ask.catch(function () { delete pcAsked[key]; });
+    return ask;
+  }
+
   // Location is used only on the phone and never asked for unless the visitor taps Find closest
   // or Nearby. `known` is a position already granted this visit; it is not stored.
   var known = null;
@@ -246,6 +296,7 @@
   }
 
   var FINDER = { load: load, use: use, search: search, nearest: nearest, miles: miles, fmtMiles: fmtMiles,
+    postcode: postcode, lookupPostcode: lookupPostcode,
     locate: locate, quietLocation: quietLocation, knownLocation: knownLocation, locationHelp: locationHelp, place: place, href: href,
     requestUrl: requestUrl, recordVisit: recordVisit, recent: recent, byNumber: byNumber,
     _norm: norm, _lev1: lev1 };

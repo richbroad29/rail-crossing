@@ -86,20 +86,49 @@
     if (q.replace(/\s/g, '').length < 2) { results.innerHTML = note('Keep typing…'); return; }
     F.load().then(function () {
       if (input.value !== q) return;                     // a newer keystroke will render
-      var r = F.search(q, { here: F.knownLocation() });
-      TRACK.search(q, r.hits.length);
-      if (!r.hits.length) {
-        results.innerHTML = note('No road crossings match “' + esc(q) + '”. Try a town or road name.') +
-          '<button class="pm-link" type="button" data-nearby>Show nearby crossings</button>';
+      var r = F.search(q, { here: F.knownLocation() }), p = F.postcode(q);
+      if (!p || p.kind === 'partial') {
+        TRACK.search(q, r.hits.length);
+        results.innerHTML = hitsHTML(q, r, p, false);
         return;
       }
-      var h = r.typo ? note('No exact matches — showing close spellings') : '';
-      h += r.hits.slice(0, LIMIT).map(function (x) { return row(x.e, x.d); }).join('');
-      if (r.hits.length > LIMIT) {
-        h += '<a class="pm-seemore" data-track="' + esc('search-see-more: ' + PAGE + ' menu') + '" href="/?q=' + encodeURIComponent(q) + '">See more (' + r.hits.length + ')</a>';
-      }
-      results.innerHTML = h;
+      // A postcode (or a district): looked up by finder.js, once a visit, then laid out as Find
+      // closest lays out "you". Counted by its district only, never the full postcode.
+      results.innerHTML = p.kind === 'full' || !r.hits.length ? note('Looking up ' + esc(p.code) + '…') : hitsHTML(q, r, p, false);
+      F.lookupPostcode(p).then(function (pos) { return { pos: pos }; }, function () { return { failed: true }; }).then(function (a) {
+        if (input.value !== q) return;
+        var top = '';
+        if (a.pos) top = postcodeHTML(p, a.pos);
+        else if (a.failed && (p.kind === 'full' || !r.hits.length)) top = note('Couldn’t look up that postcode just now. Check your connection and try again, or search for a town or road.', 'pm-warn');
+        else if (p.kind === 'full') top = note('Couldn’t find the postcode ' + esc(p.code) + '. Check it, or search for a town or road.');
+        if (a.pos || p.kind === 'full') TRACK.search(p.area, !!a.pos, 'postcode-search');
+        else TRACK.search(q, r.hits.length);
+        results.innerHTML = top && !r.hits.length ? top : top + hitsHTML(q, r, p, !!top);
+      });
     }).catch(loadFailed);
+  }
+  function hitsHTML(q, r, p, below) {
+    if (!r.hits.length) {
+      return note('No road crossings match “' + esc(q) + '”. ' + (p ? 'For a postcode, type all of it (like BN41 1AB).' : 'Try a town, road or postcode.')) +
+        '<button class="pm-link" type="button" data-nearby>Show nearby crossings</button>';
+    }
+    var h = below ? '<div class="pm-eyebrow">Matching “' + esc(q.trim()) + '”</div>' : '';
+    h += r.typo ? note('No exact matches — showing close spellings') : '';
+    h += r.hits.slice(0, LIMIT).map(function (x) { return row(x.e, x.d); }).join('');
+    if (r.hits.length > LIMIT) {
+      h += '<a class="pm-seemore" data-track="' + esc('search-see-more: ' + PAGE + ' menu') + '" href="/?q=' + encodeURIComponent(q) + '">See more (' + r.hits.length + ')</a>';
+    }
+    return h;
+  }
+  function postcodeHTML(p, pos) {
+    var n = F.nearest(pos, 3), full = p.kind === 'full';
+    var h = '<div class="pm-eyebrow">Closest to ' + esc(full ? p.code : 'the ' + p.code + ' area') + '</div>' +
+      n.top.map(function (x) { return row(x.e, x.d); }).join('');
+    if (n.nearestLive) {
+      h += '<div class="pm-nearest-live"><div class="pm-eyebrow">Nearest live crossing</div>' + row(n.nearestLive.e, n.nearestLive.d) + '</div>';
+    }
+    if (!full) h += note('Measured from the middle of ' + esc(p.code) + '. Type the whole postcode for the closest to you.');
+    return h + '<a class="pm-seemore" data-track="' + esc('postcode-show-on-map: ' + PAGE + ' menu') + '" href="/?q=' + encodeURIComponent(p.code) + '">Show on map</a>';
   }
   function loadFailed() {
     results.innerHTML = note('Couldn’t load the list of crossings. Check your connection and try again.', 'pm-warn');

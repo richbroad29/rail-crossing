@@ -27,13 +27,16 @@ A crossing is always named the same way, so one crossing's taps add up across th
 | `nearby-tap: <crossing>` | A live crossing tapped in the homepage's Near you cards |
 | `menu-tap: <crossing>` | A live crossing tapped in a crossing page's menu (search, closest or recent) |
 | `search-show-on-map: homepage` | "Show on map" pressed in the homepage search results |
+| `postcode-search: <district>` / `postcode-search (no results): <district>` | A UK postcode typed into a crossing search, homepage or crossing-page menu (since 2026-11-22). Only the district is counted, e.g. `cf5` for CF5 6XB, never the full postcode. `(no results)` = no such postcode, or the lookup failed. A postcode is not also counted as `search:` |
+| `postcode-tap: <crossing>` | A live crossing tapped in the closest-to-a-postcode results (dropdown or cards) |
+| `postcode-show-on-map: homepage` / `portslade menu` | "Show on map" pressed under a postcode's closest crossings (from a menu it opens the homepage map at that postcode) |
 | `search-see-more: portslade menu` | "See more" pressed under a crossing page's menu search (it opens the homepage with the search filled in; the search is counted once, on the crossing page) |
 | `train-map-search: <words>` / `train-map-search (no results): <words>` | Something searched for in the live train map's own search (train codes and stations), counted the same way as the crossing searches but kept separate from them |
 | `train-map-pick: train <code>` / `station <name> (<code>)` | A result picked from the train map's search, e.g. `train-map-pick: station Brighton (BTN)` |
 | `location-button: homepage` / `portslade menu` | "Show nearby" / "Find closest" pressed |
 | `location-result: found` / `blocked` / `unavailable` / `unsupported` | What happened next: found you, location blocked, no fix, or the browser can't share location |
 | `request: <crossing>` | A specific coming-soon crossing's request form opened |
-| `request-from: <where>` | Any request-form link pressed. `<where>` is `map`, `search`, `recent`, `nearby`, `portslade menu` (crossing-specific, so these also send `request:`), or `homepage button` / `homepage FAQ` / `homepage footer` / `portslade page` / `portslade page footer` (the general form) |
+| `request-from: <where>` | Any request-form link pressed. `<where>` is `map`, `search`, `postcode`, `recent`, `nearby`, `portslade menu` (crossing-specific, so these also send `request:`), or `homepage button` / `homepage FAQ` / `homepage footer` / `portslade page` / `portslade page footer` (the general form) |
 | `add-app: <where>` | Add as app pressed: `homepage map button`, `homepage text button`, `portslade menu` |
 | `add-app-shown: <what>` | What it showed: `install prompt` (the browser's own install dialog: Chrome, Edge and Samsung) or `iphone steps` / `android steps` / `other steps` (the instructions) |
 | `add-app-choice: accepted` / `dismissed` | The answer to the browser's install dialog |

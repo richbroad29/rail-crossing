@@ -59,14 +59,25 @@
         (rec.length ? '<div class="pm-eyebrow">Recent</div>' + rec.map(function (e) { return row(e, null, null, 'recent'); }).join('') : '');
     }
     if (text.replace(/\s/g, '').length < 2) { TRACK.search(''); return note('Keep typing…'); }
-    var r = hits();
-    if (text !== skipTerm) TRACK.search(text, r.hits.length);
+    var r = hits(), p = F.postcode(text), pc = postcodeFor(p);
+    // A postcode is counted by its district only ("postcode-search: cf5"), never the full postcode.
+    var asPostcode = pc && (p.kind === 'full' || pc.state === 'found' || pc.state === 'pending');
+    if (text !== skipTerm) {
+      if (asPostcode) TRACK.search(p.area, pc.state === 'found' || pc.state === 'pending', 'postcode-search');
+      else TRACK.search(text, r.hits.length);
+    }
+    var top = '';
+    if (pc && pc.state === 'found') top = postcodeHTML(p, pc.pos);
+    else if (pc && pc.state === 'pending') top = note('Looking up ' + esc(p.code) + '…');
+    else if (pc && pc.state === 'error' && (p.kind === 'full' || !r.hits.length)) top = note('Couldn’t look up that postcode just now. Check your connection and try again, or search for a town or road.', 'pm-warn');
+    else if (pc && p.kind === 'full') top = note('Couldn’t find the postcode ' + esc(p.code) + '. Check it, or search for a town or road.');
     if (!r.hits.length) {
-      return note('No road crossings match “' + esc(text) + '”. Try a town or road name.') +
+      if (top) return top;
+      return note('No road crossings match “' + esc(text) + '”. ' + (p ? 'For a postcode, type all of it (like BN41 1AB).' : 'Try a town, road or postcode.')) +
         '<button class="hp-dditem" type="button" data-near>' + ICON.near + '<span>Show nearby crossings</span></button>';
     }
     var nl = r.hits.filter(function (h) { return h.e.id; }).length;
-    return '<div class="hp-ddhead"><span>' + r.hits.length + ' crossing' + (r.hits.length === 1 ? '' : 's') +
+    return top + '<div class="hp-ddhead"><span>' + r.hits.length + ' crossing' + (r.hits.length === 1 ? '' : 's') +
       (nl ? ' · ' + nl + ' live' : '') + '</span><button class="hp-linkbtn" type="button" data-fit data-track="search-show-on-map: homepage">Show on map</button></div>' +
       (r.typo ? note('No exact matches — showing close spellings') : '') +
       r.hits.slice(0, 300).map(function (h) { return row(h.e, h.d); }).join('') +
@@ -82,6 +93,37 @@
   }
   function closeDD() { dd.hidden = true; nearBtn.hidden = false; }
 
+  // ---- postcode search: the closest crossings to a postcode, as Nearby does for "you" -----------
+  // Each postcode is looked up once a visit (finder.js does the asking); the dropdown shows
+  // "Looking up…" and redraws itself when the answer arrives, if that postcode is still typed.
+  var pcSeen = {};   // "full CF5 6XB" -> { state: pending|found|none|error, pos }
+  function postcodeFor(p) {
+    if (!p || p.kind === 'partial') return null;
+    var key = p.kind + ' ' + p.code;
+    if (pcSeen[key]) return pcSeen[key];
+    var s = pcSeen[key] = { state: 'pending', pos: null };
+    F.lookupPostcode(p).then(function (pos) { s.state = pos ? 'found' : 'none'; s.pos = pos; },
+      function () { s.state = 'error'; })
+      .then(function () {
+        var now = F.postcode(q.value);
+        if (now && now.kind + ' ' + now.code === key) { if (!dd.hidden) openDD(); filterLive(); }
+      });
+    return s;
+  }
+  function postcodeHTML(p, pos) {
+    var n = F.nearest(pos, 3), full = p.kind === 'full';
+    return '<div class="hp-ddhead"><span>Closest to ' + esc(full ? p.code : 'the ' + p.code + ' area') + '</span>' +
+      '<button class="hp-linkbtn" type="button" data-pcmap data-track="postcode-show-on-map: homepage">Show on map</button></div>' +
+      n.top.map(function (x, i) { return row(x.e, x.d, i + 1, 'postcode'); }).join('') +
+      (n.nearestLive ? '<div class="pm-eyebrow">Nearest live crossing</div>' + row(n.nearestLive.e, n.nearestLive.d, '★', 'postcode') : '') +
+      (full ? '' : note('Measured from the middle of ' + esc(p.code) + '. Type the whole postcode for the closest to you.'));
+  }
+  // "Show on map" or Enter: the Nearby cards and map, measured from the postcode.
+  function showPostcode(p, pos) {
+    closeDD(); q.blur();
+    nearCards(pos, p.kind === 'full' ? 'Near ' + p.code : 'Near the ' + p.code + ' area', 'postcode');
+  }
+
   // ---- Live crossings list: the static links, filtered by the search text (ticket 05) -----------
   var liveRows = $('liveRows'), liveCount = $('liveCount'), liveNone = $('liveNone');
   var LIVE_TOTAL = liveRows ? liveRows.querySelectorAll('[data-n]').length : 0;
@@ -93,8 +135,12 @@
       liveCount.textContent = LIVE_TOTAL; liveNone.hidden = true; groupHeads(); return;
     }
     ready.then(function () {
-      var keep = {};
-      F.search(text).hits.forEach(function (h) { if (h.e.id) keep[h.e.n] = 1; });
+      var keep = {}, found = F.search(text).hits;
+      if (!found.length && F.postcode(text)) {   // a postcode names no crossing: keep the whole list
+        Array.prototype.forEach.call(all, function (a) { a.hidden = false; });
+        liveCount.textContent = LIVE_TOTAL; liveNone.hidden = true; groupHeads(); return;
+      }
+      found.forEach(function (h) { if (h.e.id) keep[h.e.n] = 1; });
       var shown = 0;
       Array.prototype.forEach.call(all, function (a) { var on = !!keep[a.getAttribute('data-n')]; a.hidden = !on; if (on) shown++; });
       liveCount.textContent = shown + ' of ' + LIVE_TOTAL + ' match “' + text + '”';
@@ -114,12 +160,21 @@
   }
 
   // ---- Nearby (ticket 05: numbered cards under the map; the map fits to you + them) --------------
-  function card(e, d, num, label) {
+  function card(e, d, num, label, where) {
     var live = !!e.id;
-    return '<a class="hp-card' + (live ? '' : ' pm-soon') + '" href="' + esc(F.href(e)) + '"' + (live ? '' : ' target="_blank" rel="noopener"') + tapTrack(e, 'nearby') + '>' +
+    return '<a class="hp-card' + (live ? '' : ' pm-soon') + '" href="' + esc(F.href(e)) + '"' + (live ? '' : ' target="_blank" rel="noopener"') + tapTrack(e, where || 'nearby') + '>' +
       '<span class="row1"><span class="pm-num">' + num + '</span><span class="pm-dist">' + (label ? label + ' · ' : '') + esc(F.fmtMiles(d)) + '</span></span>' +
       '<span class="pm-name">' + esc(e.name) + '</span><span class="pm-sub">' + esc(F.place(e)) + '</span>' +
       (live ? '<span class="hp-card-live">Live — see closing times ›</span>' : '<span class="pm-tag">' + ICON.soon + 'Coming soon · tap to request</span>') + '</a>';
+  }
+  // The 3 closest to `here` (plus the nearest live one) as cards, and the map fitted to them.
+  function nearCards(here, title, where) {
+    var n = F.nearest(here, 3);
+    var items = n.top.map(function (x, i) { return card(x.e, x.d, i + 1, null, where); });
+    if (n.nearestLive) items.push(card(n.nearestLive.e, n.nearestLive.d, '★', 'Nearest live', where));
+    strip.hidden = false;
+    stripIn.innerHTML = '<h2 class="hp-h2">' + esc(title) + '</h2><div class="hp-cards">' + items.join('') + '</div>';
+    MAP.showNear(here, n);
   }
   function findNear() {
     closeDD(); q.blur();
@@ -127,11 +182,7 @@
     strip.hidden = false;
     stripIn.innerHTML = '<h2 class="hp-h2">Near you</h2>' + note('Finding your location…');
     F.locate().then(function (here) { return ready.then(function () { return here; }); }).then(function (here) {
-      var n = F.nearest(here, 3);
-      var items = n.top.map(function (x, i) { return card(x.e, x.d, i + 1); });
-      if (n.nearestLive) items.push(card(n.nearestLive.e, n.nearestLive.d, '★', 'Nearest live'));
-      stripIn.innerHTML = '<h2 class="hp-h2">Near you</h2><div class="hp-cards">' + items.join('') + '</div>';
-      MAP.showNear(here, n);
+      nearCards(here, 'Near you', 'nearby');
       TRACK('location-result: found');
     }).catch(function (err) {
       if (!(err && /^directory/.test(err.message || ''))) TRACK('location-result: ' + F.locationHelp(err).kind);
@@ -144,9 +195,24 @@
 
   // ---- events ---------------------------------------------------------------------------------
   q.addEventListener('focus', function () { F.quietLocation(); openDD(); });
-  q.addEventListener('input', function () { skipTerm = null; clearBtn.hidden = !q.value; openDD(); filterLive(); });
+  q.addEventListener('input', function () {
+    skipTerm = null; clearBtn.hidden = !q.value;
+    for (var k in pcSeen) if (pcSeen[k].state === 'error') delete pcSeen[k];   // a failed lookup retries on the next edit
+    openDD(); filterLive();
+  });
   q.addEventListener('keydown', function (e) {
-    if (e.key === 'Enter') { e.preventDefault(); TRACK.searchNow(); closeDD(); q.blur(); ready.then(function () { MAP.fitTo(hits().hits); }); }
+    if (e.key === 'Enter') {
+      e.preventDefault(); TRACK.searchNow(); closeDD(); q.blur();
+      var p = F.postcode(q.value);
+      ready.then(function () {
+        if (!p || p.kind === 'partial') { MAP.fitTo(hits().hits); return; }
+        F.lookupPostcode(p).then(function (pos) {
+          if (pos) showPostcode(p, pos);
+          else if (p.kind === 'full') openDD();   // say it wasn't found
+          else MAP.fitTo(hits().hits);
+        }, function () { openDD(); });
+      });
+    }
     if (e.key === 'Escape') { closeDD(); q.blur(); }
   });
   clearBtn.addEventListener('click', function () { q.value = ''; clearBtn.hidden = true; filterLive(); q.focus(); openDD(); });
@@ -155,11 +221,23 @@
     if (!e.target.closest('#hpSearch') && !dd.hidden) closeDD();
     if (e.target.closest('[data-near]')) { findNear(); return; }
     if (e.target.closest('[data-fit]')) { TRACK.searchNow(); closeDD(); q.blur(); MAP.fitTo(hits().hits); return; }
+    if (e.target.closest('[data-pcmap]')) {
+      var p = F.postcode(q.value), s = postcodeFor(p);
+      if (s && s.pos) showPostcode(p, s.pos);
+      return;
+    }
     if (e.target.closest('[data-unsel]')) MAP.unselect();
   });
   // Arriving from the menu's "See more": the query filled in, the dropdown open, the map fitted.
   var arrived = new URLSearchParams(location.search).get('q');
-  if (arrived) {
+  // A postcode from the menu's "Show on map": straight to its closest crossings on the map.
+  var arrivedPc = arrived && F.postcode(arrived);
+  if (arrivedPc && arrivedPc.kind !== 'partial') {
+    q.value = arrived; clearBtn.hidden = false; skipTerm = arrived.trim();
+    ready.then(function () { return F.lookupPostcode(arrivedPc); }).then(function (pos) {
+      if (pos) showPostcode(arrivedPc, pos); else { openDD(); filterLive(); }
+    }, function () { openDD(); });
+  } else if (arrived) {
     q.value = arrived; clearBtn.hidden = false; skipTerm = arrived.trim();
     openDD(); filterLive();
     ready.then(function () { MAP.fitTo(hits().hits); });
