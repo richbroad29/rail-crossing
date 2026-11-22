@@ -116,14 +116,30 @@ and nothing to look up by hand.
    candidate bytes per area, which
    areas are **new** (not in `sclass.json`), and which bytes are new. A candidate is a
    **shortlist entry, not a crossing**: signals beside a crossing switch in the same rhythm. Only
-   the berth-correlation proof in crossing-launch Stage 3 binds a bit to a crossing. Report per
+   the train check (step 7) binds a bit to a crossing. Report per
    area: candidate bytes now vs last time, and the busiest new ones. **Expect noise:** in Nov 2026,
    11 London areas with at most one road crossing (X0 X1 X2 X3 X8 XA XB Q0 NX Y9 VC) carried 81
    candidate bytes, from points and signals. A count of candidates is not a count of crossings, and a minimum
    closure length only halves the noise (≥45 s: 81 → 36), so the berth correlation stays the filter.
-7. **Feed it to crossing-launch:** report each new area with candidates to Rich. Its data is already
+7. **Train check: which candidates are crossings, and which ones.** `scripts/barrier-train-check.js`
+   tests every candidate against the trains, without being told any berths (its header says how).
+   It needs the all-area train steps for the same days (`td-all-<date>`, kept since 19 Nov 2026, 90
+   days); copy them beside the S-Class files, in the same folder as step 4:
+   ```
+   ssh -i ~/Downloads/ssh-key-2026-03-22.key ubuntu@130.162.167.237 'cd ~/rail-crossing/backend && tar cf - data/logs/td-all/td-all-2026-11-{14..20}.jsonl.gz' | tar xf -
+   node --max-old-space-size=12000 <repo>/.claude/skills/crossing-directory-refresh/scripts/barrier-train-check.js --sclass "$PWD/data/logs/sclass" --cclass "$PWD/data/logs/td-all" --from 2026-11-14 --to 2026-11-20 --scan <repo>/.claude/skills/crossing-directory-refresh/history/barrier-scan-<date>.txt --json <scratch>/train-check.json > <repo>/.claude/skills/crossing-directory-refresh/history/barrier-train-check-<date>.txt
+   ```
+   (2 days: 45 s, 0.5 GB on the Mac.) **Read the last line first:** the Yapton known answer must say
+   PASS. Verdicts: **CONFIRMED** = the bit follows the trains both ways and sits at a named crossing;
+   **WHICH ONE?** = it passes every train rule, but two or three listed crossings are too close to
+   choose between (settle by berth order or a site check); **POSSIBLE** = one rule could not be tested
+   (no timed station near its trains, the other direction not found); **REJECTED** = says why. Count
+   crossings, not bits: one crossing can show in several bytes and in two areas (Yapton is BM 09 and
+   CH 18 - every down-bit change within 5 s). Dry run 22 Nov on 20-21 Nov only: 17 confirmed, 10
+   unresolved groups, and all 127 London noise candidates rejected.
+8. **Feed it to crossing-launch:** report each new area with candidates to Rich. Its data is already
    banked (survey, 90 days), so nothing needs adding to `sclass.json` until a byte is bound to a
-   crossing (crossing-launch Stage 3), when the area goes in to decode that barrier live. Any Parked
+   crossing (step 7, or crossing-launch Stage 3), when the area goes in to decode that barrier live. Any Parked
    candidate in crossing-launch's `CANDIDATES.md` whose area gained candidates is due a re-check (its
    "re-check if S-Class coverage expands" trigger).
 
