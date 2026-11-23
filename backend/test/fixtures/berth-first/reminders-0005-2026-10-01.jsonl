@@ -1,0 +1,23 @@
+{"note":"LA own logs 30 Sep 23:50 - 1 Oct 01:00, every message: **** CC into 0005 every few minutes, **** CA 0005>0007 at 00:10:34 and 00:34:47"}
+{"ts":"2026-09-30T23:56:31.000Z","area":"LA","event":"CC","desc":"-LB-","from":null,"to":"L002","trust_uid":null}
+{"ts":"2026-09-30T23:56:58.000Z","area":"LA","event":"CC","desc":"-LB-","from":null,"to":"A036","trust_uid":null}
+{"ts":"2026-09-30T23:59:57.000Z","area":"LA","event":"CC","desc":"****","from":null,"to":"0005","trust_uid":null}
+{"ts":"2026-10-01T00:10:34.000Z","area":"LA","event":"CA","desc":"****","from":"0005","to":"0007","trust_uid":null}
+{"ts":"2026-10-01T00:13:53.000Z","area":"LA","event":"CA","desc":"****","from":"0007","to":"0009","trust_uid":null}
+{"ts":"2026-10-01T00:14:57.000Z","area":"LA","event":"CC","desc":"****","from":null,"to":"0005","trust_uid":null}
+{"ts":"2026-10-01T00:18:41.000Z","area":"LA","event":"CC","desc":"****","from":null,"to":"0005","trust_uid":null}
+{"ts":"2026-10-01T00:21:49.000Z","area":"LA","event":"CC","desc":"****","from":null,"to":"0005","trust_uid":null}
+{"ts":"2026-10-01T00:26:38.000Z","area":"LA","event":"CA","desc":"6Z02","from":"0013","to":"0015","trust_uid":null}
+{"ts":"2026-10-01T00:26:46.000Z","area":"LA","event":"CC","desc":"****","from":null,"to":"0005","trust_uid":null}
+{"ts":"2026-10-01T00:29:31.000Z","area":"LA","event":"CC","desc":"****","from":null,"to":"0005","trust_uid":null}
+{"ts":"2026-10-01T00:32:33.000Z","area":"LA","event":"CC","desc":"****","from":null,"to":"0005","trust_uid":null}
+{"ts":"2026-10-01T00:34:16.000Z","area":"LA","event":"CA","desc":"6Z02","from":"0015","to":"0017","trust_uid":null}
+{"ts":"2026-10-01T00:34:47.000Z","area":"LA","event":"CA","desc":"****","from":"0005","to":"0007","trust_uid":null}
+{"ts":"2026-10-01T00:35:59.000Z","area":"LA","event":"CC","desc":"****","from":null,"to":"0005","trust_uid":null}
+{"ts":"2026-10-01T00:38:56.000Z","area":"LA","event":"CC","desc":"****","from":null,"to":"0005","trust_uid":null}
+{"ts":"2026-10-01T00:40:41.000Z","area":"LA","event":"CA","desc":"6Z02","from":"0017","to":"0019","trust_uid":null}
+{"ts":"2026-10-01T00:42:53.000Z","area":"LA","event":"CC","desc":"****","from":null,"to":"0005","trust_uid":null}
+{"ts":"2026-10-01T00:46:21.000Z","area":"LA","event":"CC","desc":"****","from":null,"to":"0005","trust_uid":null}
+{"ts":"2026-10-01T00:47:23.000Z","area":"LA","event":"CA","desc":"6Z02","from":"0019","to":"0021","trust_uid":null}
+{"ts":"2026-10-01T00:51:44.000Z","area":"LA","event":"CC","desc":"****","from":null,"to":"0005","trust_uid":null}
+{"ts":"2026-10-01T00:53:27.000Z","area":"LA","event":"CA","desc":"6Z02","from":"0021","to":"0023","trust_uid":null}

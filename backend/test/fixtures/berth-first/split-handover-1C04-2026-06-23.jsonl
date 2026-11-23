@@ -1,0 +1,23 @@
+{"note":"LA own log + BM cclass 23 Jun 06:13-06:31, 1C04 only: BM from H987; LA CC A001 at 06:17:57, CB AM12 at :58; both areas then report A001..BH71"}
+{"ts":"2026-06-23T06:14:09.000Z","area":"LA","event":"CC","desc":"1C04","from":null,"to":"AM12","trust_uid":null}
+{"ts":"2026-06-23T06:17:57.000Z","area":"LA","event":"CC","desc":"1C04","from":null,"to":"A001","trust_uid":null}
+{"ts":"2026-06-23T06:17:58.000Z","area":"LA","event":"CB","desc":"1C04","from":"AM12","to":null,"trust_uid":null}
+{"ts":"2026-06-23T06:18:40.000Z","area":"LA","event":"CA","desc":"1C04","from":"A001","to":"A003","trust_uid":null}
+{"ts":"2026-06-23T06:21:40.000Z","area":"LA","event":"CA","desc":"1C04","from":"A003","to":"A005","trust_uid":null}
+{"ts":"2026-06-23T06:23:49.000Z","area":"LA","event":"CA","desc":"1C04","from":"A005","to":"A007","trust_uid":null}
+{"ts":"2026-06-23T06:24:37.000Z","area":"LA","event":"CA","desc":"1C04","from":"A007","to":"BH71","trust_uid":null}
+{"ts":"2026-06-23T06:14:08.000Z","area":"BM","event":"CC","desc":"1C04","from":null,"to":"H987","trust_uid":null}
+{"ts":"2026-06-23T06:16:50.000Z","area":"BM","event":"CA","desc":"1C04","from":"H987","to":"H989","trust_uid":null}
+{"ts":"2026-06-23T06:17:57.000Z","area":"BM","event":"CA","desc":"1C04","from":"H989","to":"A001","trust_uid":null}
+{"ts":"2026-06-23T06:18:40.000Z","area":"BM","event":"CA","desc":"1C04","from":"A001","to":"A003","trust_uid":null}
+{"ts":"2026-06-23T06:21:40.000Z","area":"BM","event":"CA","desc":"1C04","from":"A003","to":"A005","trust_uid":null}
+{"ts":"2026-06-23T06:21:40.000Z","area":"BM","event":"CC","desc":"1C04","from":null,"to":"TNEW","trust_uid":null}
+{"ts":"2026-06-23T06:21:41.000Z","area":"BM","event":"CC","desc":"1C04","from":null,"to":"TTMP","trust_uid":null}
+{"ts":"2026-06-23T06:21:41.000Z","area":"BM","event":"CA","desc":"1C04","from":"TTMP","to":"ARAP","trust_uid":null}
+{"ts":"2026-06-23T06:23:48.000Z","area":"BM","event":"CA","desc":"1C04","from":"A005","to":"A007","trust_uid":null}
+{"ts":"2026-06-23T06:24:37.000Z","area":"BM","event":"CA","desc":"1C04","from":"A007","to":"BH71","trust_uid":null}
+{"ts":"2026-06-23T06:24:37.000Z","area":"BM","event":"CB","desc":"1C04","from":"TNEW","to":null,"trust_uid":null}
+{"ts":"2026-06-23T06:24:37.000Z","area":"BM","event":"CB","desc":"1C04","from":"ARAP","to":null,"trust_uid":null}
+{"ts":"2026-06-23T06:27:51.000Z","area":"BM","event":"CA","desc":"1C04","from":"BH71","to":"BH73","trust_uid":null}
+{"ts":"2026-06-23T06:28:48.000Z","area":"BM","event":"CA","desc":"1C04","from":"BH73","to":"BH75","trust_uid":null}
+{"ts":"2026-06-23T06:29:55.000Z","area":"BM","event":"CA","desc":"1C04","from":"BH75","to":"BH77","trust_uid":null}

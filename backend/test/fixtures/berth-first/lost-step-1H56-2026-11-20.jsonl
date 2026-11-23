@@ -1,0 +1,23 @@
+{"note":"national log 20 Nov 20:40-21:02, TB+LA, 1H56 only: 0001>0003 at 20:55:49, then 0005>0007 at 20:58:18; the feed never sent 0003>0005"}
+{"rx":"2026-11-20T20:40:38.590Z","type":"CA_MSG","msg_type":"CA","area_id":"TB","time":"1795207238000","from":"0377","to":"0381","descr":"1H56"}
+{"rx":"2026-11-20T20:41:19.609Z","type":"CA_MSG","msg_type":"CA","area_id":"TB","time":"1795207279000","from":"0381","to":"0385","descr":"1H56"}
+{"rx":"2026-11-20T20:41:49.058Z","type":"CA_MSG","msg_type":"CA","area_id":"TB","time":"1795207308000","from":"0385","to":"0389","descr":"1H56"}
+{"rx":"2026-11-20T20:44:05.309Z","type":"CA_MSG","msg_type":"CA","area_id":"TB","time":"1795207445000","from":"0389","to":"0393","descr":"1H56"}
+{"rx":"2026-11-20T20:44:50.773Z","type":"CA_MSG","msg_type":"CA","area_id":"TB","time":"1795207490000","from":"0393","to":"0397","descr":"1H56"}
+{"rx":"2026-11-20T20:45:30.473Z","type":"CA_MSG","msg_type":"CA","area_id":"TB","time":"1795207530000","from":"0397","to":"0401","descr":"1H56"}
+{"rx":"2026-11-20T20:46:00.584Z","type":"CA_MSG","msg_type":"CA","area_id":"TB","time":"1795207560000","from":"0401","to":"0405","descr":"1H56"}
+{"rx":"2026-11-20T20:46:40.324Z","type":"CA_MSG","msg_type":"CA","area_id":"TB","time":"1795207600000","from":"0405","to":"0409","descr":"1H56"}
+{"rx":"2026-11-20T20:47:08.565Z","type":"CA_MSG","msg_type":"CA","area_id":"TB","time":"1795207628000","from":"0409","to":"0413","descr":"1H56"}
+{"rx":"2026-11-20T20:47:37.095Z","type":"CA_MSG","msg_type":"CA","area_id":"TB","time":"1795207656000","from":"0413","to":"0417","descr":"1H56"}
+{"rx":"2026-11-20T20:48:13.975Z","type":"CA_MSG","msg_type":"CA","area_id":"TB","time":"1795207693000","from":"0417","to":"0421","descr":"1H56"}
+{"rx":"2026-11-20T20:48:41.750Z","type":"CA_MSG","msg_type":"CA","area_id":"TB","time":"1795207721000","from":"0421","to":"0425","descr":"1H56"}
+{"rx":"2026-11-20T20:50:53.768Z","type":"CA_MSG","msg_type":"CA","area_id":"TB","time":"1795207853000","from":"0425","to":"0675","descr":"1H56"}
+{"rx":"2026-11-20T20:52:50.526Z","type":"CA_MSG","msg_type":"CA","area_id":"TB","time":"1795207970000","from":"0675","to":"0682","descr":"1H56"}
+{"rx":"2026-11-20T20:52:51.094Z","type":"CA_MSG","msg_type":"CA","area_id":"TB","time":"1795207970000","from":"0682","to":"0677","descr":"1H56"}
+{"rx":"2026-11-20T20:52:51.460Z","type":"CA_MSG","msg_type":"CA","area_id":"LA","time":"1795207971000","from":"T682","to":"T677","descr":"1H56"}
+{"rx":"2026-11-20T20:55:03.003Z","type":"CA_MSG","msg_type":"CA","area_id":"TB","time":"1795208102000","from":"0677","to":"N001","descr":"1H56"}
+{"rx":"2026-11-20T20:55:03.003Z","type":"CA_MSG","msg_type":"CA","area_id":"LA","time":"1795208102000","from":"T677","to":"0001","descr":"1H56"}
+{"rx":"2026-11-20T20:55:49.876Z","type":"CA_MSG","msg_type":"CA","area_id":"LA","time":"1795208149000","from":"0001","to":"0003","descr":"1H56"}
+{"rx":"2026-11-20T20:58:18.481Z","type":"CA_MSG","msg_type":"CA","area_id":"LA","time":"1795208298000","from":"0005","to":"0007","descr":"1H56"}
+{"rx":"2026-11-20T20:59:09.504Z","type":"CA_MSG","msg_type":"CA","area_id":"LA","time":"1795208349000","from":"0007","to":"0009","descr":"1H56"}
+{"rx":"2026-11-20T21:00:24.227Z","type":"CA_MSG","msg_type":"CA","area_id":"LA","time":"1795208423000","from":"0009","to":"0011","descr":"1H56"}
