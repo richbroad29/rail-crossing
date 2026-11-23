@@ -47,6 +47,7 @@ A crossing is always named the same way, so one crossing's taps add up across th
 | `county-link: <where>` | A link to a county's list of crossings: `homepage` (Crossings by county), `<crossing> page footer` |
 | `county-tap: <county> -> <crossing>` | A crossing tapped in a county list (`/crossings/<county>/`); names are page addresses |
 | `nearby-page-tap: <from> -> <to>` | A crossing tapped in a coming-soon page's Nearby crossings; names are page addresses |
+| `station-tap: <crossing> -> <CRS>` | A station tapped in a crossing page's Nearby stations (opens the live train map there) |
 | `menu-open: portslade page` | The burger menu opened |
 | `show-more: portslade page` | Show More pressed under the upcoming closures |
 | `refresh: portslade page` | The refresh button pressed |

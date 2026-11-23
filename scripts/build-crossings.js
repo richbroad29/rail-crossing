@@ -249,7 +249,8 @@ function page(id, d, r, template) {
   const station = d.ldb && d.ldb.station;
   const localMap = localMapHtml(id, d.name, d.road, r.town, station, p.stationName);
   const cp = COUNTY_PAGES[f.county];
-  const raw = { jsonLd: jsonLd(id, d, r, f), localMap,
+  const me = DIR.find(x => x.n === Number(d.crossingNumber));
+  const raw = { jsonLd: jsonLd(id, d, r, f), localMap, nearby: me ? nearbySections(id, me, DIR) : '',
     countyNav: cp ? `<a data-track="county-link: ${esc(id)} page footer" href="${esc(cp.path)}">${esc(f.county)} crossings</a>` : '',
     figuresRow: f.figures ? `<dt>Closures</dt><dd>${esc(f.figures)}</dd>` : '' };                   // {{{x}}}: inserted unescaped
   const body = template.replace(/^<!--[\s\S]*?-->\n/, '');     // drop the template's own header
@@ -540,6 +541,31 @@ function crossingRow(e, sub, track, dist) {
     `${e.id ? '<span class="pm-tag">Live</span>' : ''}<span class="pm-chev" aria-hidden="true">›</span></a>`;
 }
 
+// The station on each side of the crossing along its line, up side first, each "towards" where trains
+// going that way commonly finish (scripts/derive-crossing-stations.js, from the timetable). Rows look
+// like the nearby crossings'; each opens the live train map at that station.
+const NEAR_STATIONS = (() => {
+  const p = path.join(ROOT, 'scripts', 'data', 'crossing-stations.json');
+  return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf8')).crossings : {};
+})();
+const stationByCrs = new Map(STATIONS.map(st => [st.crs, st]));
+function nearbySections(slug, e, all) {
+  const ns = NEAR_STATIONS[e.n];
+  const stRows = ns ? ns.sides.map(sd => {
+    const st = stationByCrs.get(sd.station), to = sd.towards && stationByCrs.get(sd.towards);
+    if (!st || (!to && !sd.end)) return '';
+    const line2 = to ? `Towards ${to.name}` : 'End of the line';
+    const mi = fmtMiles(milesBetween(e.lat, e.lon, st.lat, st.lon)).replace(' miles', ' mi');
+    return `<a class="pm-row" data-track="station-tap: ${esc(slug)} -> ${esc(st.crs)}" href="/map/#s=${esc(st.crs)}"><span class="pm-row-main"><span class="pm-name">${esc(st.name)}</span><span class="pm-sub">${esc(line2)}</span></span><span class="pm-dist">${esc(mi)}</span><span class="pm-chev" aria-hidden="true">›</span></a>`;
+  }).join('') : '';
+  const stations = stRows ? `<section class="section" aria-labelledby="stnHdr">\n    <h2 class="about-hdr" id="stnHdr">Nearby stations</h2>\n    <div class="near-list">${stRows}</div>\n  </section>\n  ` : '';
+  // The three nearest other crossings, anywhere in Great Britain.
+  const nearRows = all.filter(o => o.n !== e.n).map(o => ({ o, d: milesBetween(e.lat, e.lon, o.lat, o.lon) }))
+    .sort((a, b) => a.d - b.d).slice(0, 3)
+    .map(({ o, d }) => crossingRow(o, placeOf(o), `nearby-page-tap: ${slug} -> ${o.id || o.pg}`, fmtMiles(d).replace(' miles', ' mi'))).join('');
+  return stations + `<section class="section" aria-labelledby="nearHdr">\n    <h2 class="about-hdr" id="nearHdr">Nearby crossings</h2>\n    <div class="near-list">${nearRows}</div>\n  </section>`;
+}
+
 function soonPage(e, r, all, rows, liveSentence, template) {
   const slug = e.pg, name = crossingName(e), place = placeOf(e), county = countyOf(r), url = `${SITE}/${slug}/`;
   const [typeCode, typeWords] = typeOf(slug, r);
@@ -548,11 +574,7 @@ function soonPage(e, r, all, rows, liveSentence, template) {
   const cp = COUNTY_PAGES[county];
   const pageTitle = `${name}, ${e.town} | railcrossing.uk`;        // the road is in the heading and description: titles past ~60 characters are cut off on a phone
   const description = `${name} is on ${place} (${county}). ${typeWords}. Nearest station: ${ns.st.name}. Live barrier times are coming soon: request them for this crossing.`;
-  // The three nearest other crossings, anywhere in Great Britain.
-  const nearRows = all.filter(o => o.n !== e.n).map(o => ({ o, d: milesBetween(e.lat, e.lon, o.lat, o.lon) }))
-    .sort((a, b) => a.d - b.d).slice(0, 3)
-    .map(({ o, d }) => crossingRow(o, placeOf(o), `nearby-page-tap: ${slug} -> ${o.id || o.pg}`, fmtMiles(d).replace(' miles', ' mi'))).join('');
-  const nearby = `<section class="section" aria-labelledby="nearHdr">\n    <h2 class="about-hdr" id="nearHdr">Nearby crossings</h2>\n    <div class="near-list">${nearRows}</div>\n  </section>`;
+  const nearby = nearbySections(slug, e, all);
   const jsonLdText = JSON.stringify({
     '@context': 'https://schema.org',
     '@graph': [
@@ -581,7 +603,7 @@ function countyPage(county, entries, template) {
   const countText = `${n} road level crossing${n === 1 ? '' : 's'}${live.length ? `, ${live.length} live` : ''}`;
   const pageTitle = `Level crossings in ${county}: all ${n} | railcrossing.uk`;
   const description = `All ${n} road level crossings in ${county}, by town: where each one is, what type it is and which are nearby.` +
-    (live.length ? ` Live barrier times at ${andList(live.map(e => crossingName(e)))}.` : ' Live barrier times coming soon.');
+    (live.length ? ` Live barrier times at ${andList(live.map(e => crossingName(e)))}.` : '');
   const byTown = {};
   for (const e of entries) (byTown[e.town] = byTown[e.town] || []).push(e);
   const groups = `<section class="section county-list">` + Object.keys(byTown).sort((a, b) => a.localeCompare(b)).map(town =>
@@ -589,9 +611,9 @@ function countyPage(county, entries, template) {
     byTown[town].sort((a, b) => a.name.localeCompare(b.name))
       .map(e => crossingRow(e, e.road || e.town, `county-tap: ${slugify(county)} -> ${e.id || e.pg}`)).join('')).join('\n  ') +
     `</section>`;
+  // Only what is true today: the live ones by name. (No "coming soon" line: Rich, 2026-11-23.)
   const liveLine = live.length
-    ? `Live barrier times: ${andList(live.map(e => `<a href="/${esc(e.id)}/">${esc(crossingName(e))}</a>`))}. The rest are coming soon.`
-    : 'Live barrier times are coming soon for these crossings.';
+    ? `Live barrier times: ${andList(live.map(e => `<a href="/${esc(e.id)}/">${esc(crossingName(e))}</a>`))}.` : '';
   const jsonLdText = JSON.stringify({
     '@context': 'https://schema.org',
     '@graph': [

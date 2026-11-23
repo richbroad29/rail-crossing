@@ -155,6 +155,10 @@ Built from the burger-menu wayfinder map (`.scratch/burger-menu/`, local only; d
   a published address may never move, and a dark run in those counties stops the build (all three
   enforced by the build). Nearest stations come from `scripts/data/stations.json` (NaPTAN). Local map
   pictures: `node scripts/render-local-maps.mjs --missing`, then rebuild.
+- **Nearby stations** on every crossing page (the station each side along the line, "towards" where
+  trains going that way commonly finish) come from `scripts/data/crossing-stations.json`, made by
+  `node scripts/derive-crossing-stations.js <cif-full.json.gz>` from an archived timetable. Junction
+  crossings the geometry can't place are pinned by hand in `crossing-stations-overrides.json`.
 - **MapLibre will not draw in headless Chrome on this Mac, nor in a hidden/background tab** (2026-11-12:
   cost an hour). To see a map: a real Chrome window off-screen driven over DevTools (as
   `render-local-maps.mjs` does), or ask Rich to bring the Claude Chrome window to the front.

@@ -1,0 +1,4 @@
+{"_about":"Hand-checked station pairs for crossings at a junction, where scripts/derive-crossing-stations.js can't tell the lines apart by geometry. Crossing number -> the stations either side, as CRS codes. Check the crossing's railway on OpenStreetMap (its way carries the line name and ELR).",
+"crossings":{
+"1962":{"pair":["WVF","PMP"],"why":"Keymer: on the East Coastway (OSM way 307180159, ELR KJE1) just south of Keymer Junction, between Wivelsfield and Plumpton; the Brighton main line (Wivelsfield-Burgess Hill) passes 50 m away. Checked 2026-11-23."}
+}}
