@@ -2,8 +2,8 @@
   "_comment": "Seed for tools/learn-routes.js until Yapton has a definition (crossing-launch Stage 5). Not loaded by the backend (a dotted file name is not a definition). The clear steps come from the barrier: node tools/learn-routes.js yapton <from> <to> --find-clear. Direction slots: up = eastbound (Barnham -> Ford, towards Brighton), down = westbound.",
   "area": "BM",
   "directions": {
-    "up": { "clear": { "from": "BH72", "to": "AR12", "_provenance": "find-clear 2026-08-23..11-20: 9,177 of 11,208 steps followed by the barrier starting up within 60 s, median 16 s, p10 15, p90 24 (to confirm against the BM berth map)" } },
-    "down": { "clear": { "from": "BH73", "to": "BH75", "_provenance": "find-clear 2026-08-23..11-20: 8,827 of 11,142 steps followed by the barrier starting up within 60 s, median 15 s, p10 14, p90 25 (to confirm against the BM berth map)" } }
+    "up": { "clear": { "from": "BH72", "to": "AR12", "_provenance": "find-clear 2026-08-23..11-20: 9,177 of 11,208 steps followed by the barrier starting up within 60 s, median 16 s, p10 15, p90 24. SMART (19 Nov) agrees: Barnham up departures step into BH74, then BH74>BH72, crossing, AR12 = LA A012 before Ford's up platform A010" } },
+    "down": { "clear": { "from": "BH73", "to": "BH75", "_provenance": "find-clear 2026-08-23..11-20: 8,827 of 11,142 steps followed by the barrier starting up within 60 s, median 15 s, p10 14, p90 25. SMART (19 Nov) agrees: Ford down platform BH71 (A007>BH71 arrive Ford +53 s), BH71>BH73, crossing, BH75>BH39/BH77 arrive Barnham" } }
   },
   "schedule": {
     "between": ["BRHM", "FORD"],

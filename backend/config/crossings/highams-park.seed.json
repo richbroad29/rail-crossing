@@ -1,9 +1,9 @@
 {
-  "_comment": "Seed for tools/learn-routes.js until Highams Park has a definition. Not loaded by the backend (a dotted file name is not a definition). Highams Park (Larkshall Road, NR 2629, CCTV) has NO barrier bits in the signalling feed (Q4 scan 2026-11-21), so its clear steps cannot be found from data: both are GUESSES from the berth timings, to confirm against the Q4 berth map and field taps. Direction slots: up = towards Liverpool Street, down = towards Chingford.",
+  "_comment": "Seed for tools/learn-routes.js until Highams Park has a definition. Not loaded by the backend (a dotted file name is not a definition). Highams Park (Larkshall Road, NR 2629, CCTV) has NO barrier bits in the signalling feed (Q4 scan 2026-11-21), so its clear steps come from the berth map data (SMART) and the map, not from the barrier; the timings around them need field taps. Direction slots: up = towards Liverpool Street, down = towards Chingford.",
   "area": "Q4",
   "directions": {
-    "up": { "clear": { "from": "1432", "to": "1430", "_provenance": "GUESS: 1432 is the up platform berth (dwell ~70 s, 2T01 20 Nov 05:17:54-05:19:02); the crossing is taken to be at the London end of the platforms, so leaving 1432 = crossing the road. Confirm on the berth map." } },
-    "down": { "clear": { "from": "1427", "to": "1429", "_provenance": "GUESS: 1429 is the down platform berth (dwell ~100 s before Chingford); a down train crosses the road just before entering it. Confirm on the berth map." } }
+    "up": { "clear": { "from": "1432", "to": "1430", "_provenance": "From SMART (19 Nov) + OpenStreetMap, not barrier data: 1432 is the up platform berth (SMART: 1434>1432 arrive Highams Park plat 1 +43 s, 1432>1430 depart -12 s); the crossing (51.607888,-0.000393) is ~55 m south of the station's south entrance (51.60840), i.e. at the London end, so an up train crosses the road just after leaving 1432. The barrier-up lag after this step is unmeasured (no barrier bits): field taps needed." } },
+    "down": { "clear": { "from": "1427", "to": "1429", "_provenance": "From SMART (19 Nov) + OpenStreetMap, not barrier data: 1429 is the down platform berth (SMART: 1427>1429 arrive Highams Park plat 2 +40 s, 1429>1431 depart -34 s); with the crossing at the London end, a down train crosses the road between stepping into 1429 and stopping. The barrier-up lag after this step is unmeasured: field taps needed." } }
   },
   "schedule": {
     "station": "HGHMSPK",
