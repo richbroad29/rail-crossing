@@ -94,7 +94,9 @@ const berths = [
   { headcode: '1H96', ts: iso(T0 - 30000), area: 'TB', event: 'CA', from: '0682', to: '0677' },
   { headcode: '1N23', ts: iso(T0 - 20000), area: 'LA', event: 'CC', from: null, to: '0024' }
 ];
-const stable = api => JSON.stringify({ ...api, lastRefresh: null });
+// lastRefresh is the time of the call and lastStateChange the time the engine was built; neither is
+// a prediction, and the berth-first shadow takes a moment longer to build than the stub did.
+const stable = api => JSON.stringify({ ...api, lastRefresh: null, lastStateChange: null });
 
 console.log('\nNo shadow configured: exactly today\'s engine\n');
 {
@@ -111,14 +113,14 @@ console.log('\nNo shadow configured: exactly today\'s engine\n');
   check('nothing new is logged for a crossing without a shadow', logged.length, 0);
 }
 
-console.log('\nWith a berth-first shadow (the stub)\n');
+console.log('\nWith a berth-first shadow (routes file without learned routes: it tracks, it times nothing)\n');
 {
   const cfg = { portslade: withKeys({ shadowEngine: 'berth-first' }) };
   const routes = { portslade: { areas: ['LA', 'TB'] } };
   const logged = [];
   const e = new CrossingEngines(cfg, routes, { log: (c, d) => logged.push([c, d]) });
   const control = new CrossingState('portslade', cfg.portslade);
-  check('the shadow is the berth-first stub', e.shadows.portslade instanceof BerthFirstEngine, true);
+  check('the shadow is the berth-first engine', e.shadows.portslade instanceof BerthFirstEngine, true);
   const trains = board();
   e.ldb('portslade', trains); control.updateLdbTrains(board());
   for (const b of berths) { e.berth(b); control.recordTdEvent(b); }
@@ -127,8 +129,8 @@ console.log('\nWith a berth-first shadow (the stub)\n');
   check('the shadow holds its own copy of the board, not the serving engine\'s',
     e.shadows.portslade.ldbTrains !== e.serving.portslade.ldbTrains && e.shadows.portslade.ldbTrains[0] !== trains[0], true);
   check('  ...equal in content', JSON.stringify(e.shadows.portslade.ldbTrains), JSON.stringify(trains));
-  check('the shadow kept berth events from both its areas (LA 2, TB 1)',
-    JSON.stringify(e.shadows.portslade.eventCounts), JSON.stringify({ LA: { CA: 1, CC: 1 }, TB: { CA: 1 } }));
+  check('the shadow tracked berth events from both its areas (LA step + interpose, TB step)',
+    JSON.stringify([e.shadows.portslade.tracker.stats.steps, e.shadows.portslade.tracker.stats.interposes]), JSON.stringify([2, 1]));
   check('the classic engine ignored the TB step (not its area)', e.serving.portslade.ownsTdArea('TB'), false);
 
   e.logClosureChanges();
@@ -144,8 +146,8 @@ console.log('\nWith a berth-first shadow (the stub)\n');
   check('the serving closures changed: one serving line', logged.map(([c, d]) => d.role).join(), 'serving');
   logged.length = 0;
   e.logShadowSummary();
-  check('hourly summary: one line for the shadow, with its event counts',
-    logged.length === 1 && logged[0][0] === 'shadowSummary' && logged[0][1].detail.eventCounts.TB.CA === 1, true);
+  check('hourly summary: one line for the shadow, with its tracker counts',
+    logged.length === 1 && logged[0][0] === 'shadowSummary' && logged[0][1].detail.tracker.steps === 2, true);
 }
 
 console.log('\nA shadow that throws on every call\n');

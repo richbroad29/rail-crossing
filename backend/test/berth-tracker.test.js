@@ -54,7 +54,7 @@ const keys = e => e.path.map(p => p[0]);
 const trainsLabelled = (tr, label) => tr.trains().filter(e => e.label === label);
 const movedEver = (tr, label) => { const ids = new Set(); for (const ev of tr.events) if (ev.type === 'train' && ev.entry.label === label) ids.add(ev.entry.id); return ids; };
 
-console.log('\n-- kinds come from the fields, not the label (logs before 2026-11-21 have CB and CC swapped)');
+console.log('\n-- kinds come from the fields (the logged CB/CC labels agree with them)');
 check('from+to is a step, from a cancel, to an interpose', [kindOf({ from: 'A', to: 'B' }), kindOf({ from: 'A' }), kindOf({ to: 'B' })], ['step', 'cancel', 'interpose']);
 
 console.log('\n-- routes.js: the learned routes, for the engine');

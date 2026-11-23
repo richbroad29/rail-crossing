@@ -10,8 +10,8 @@
 //
 // Which log an area's day comes from: the national log when it covers the whole day (it is the only one
 // with true arrival order), else the area's own log, else whatever part of the national log there is.
-// The kind of a per-area message is rebuilt from its fields, not its label: logs written before
-// 2026-11-21 (73ca165) carry CB and CC swapped.
+// The kind of a per-area message is rebuilt from its fields (from+to CA, from CB, to CC). The logged
+// label agrees with them (the 2026-11-21 CB/CC fix was in td-listener's reading, not in the logs).
 
 const fs = require('fs');
 const path = require('path');

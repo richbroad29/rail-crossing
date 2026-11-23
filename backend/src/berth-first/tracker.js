@@ -51,8 +51,8 @@ const SKIP_MS = 20 * 60e3;           // a train that skipped a berth moved this 
 const HEADCODE_RE = /^[0-9][A-Z][0-9]{2}$/;
 const isHeadcode = d => typeof d === 'string' && HEADCODE_RE.test(d);
 
-// What a message is, from its fields (older logs carry swapped CB/CC labels; the fields were always
-// right): from+to a step, from alone a cancel, to alone an interpose.
+// What a message is, from its fields: from+to a step, from alone a cancel, to alone an interpose. The
+// feed's label says the same; the fields are what the tracker needs, so it reads those.
 function kindOf(evt) {
   if (evt.from && evt.to) return 'step';
   if (evt.from) return 'cancel';
@@ -155,7 +155,7 @@ class BerthTracker {
     e.labels.push(label);
     if (isHeadcode(label)) { e.headcode = label; e.unidentified = false; }
     else if (!e.headcode) e.unidentified = true;
-    this.onEvent({ type: 'relabel', entry: e, label });
+    this.onEvent({ type: 'relabel', entry: e, label, t: this.now });
   }
 
   _take(key, label, newest = false) {

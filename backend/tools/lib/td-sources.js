@@ -10,9 +10,10 @@
 // So an area's day is read from its per-area log when there is one (it covers the whole day), and
 // from td-all otherwise. Heartbeats (CT) exist only in td-all.
 //
-// What a message IS comes from its fields, never its label: from+to is a step, from alone a cancel,
-// to alone an interpose. The labels were swapped in td-listener until 2026-11-21 (73ca165), so the
-// older td logs say CB where they mean CC; the fields were always right.
+// What a message IS comes from its fields: from+to is a step, from alone a cancel, to alone an
+// interpose. The logs carry the feed's own label too, and it has always agreed (LA 20 Oct: every CB
+// from-only, every CC to-only); the CB/CC swap fixed on 2026-11-21 (73ca165) was in how td-listener
+// read the labels, never in what was logged.
 
 const fs = require('fs');
 const path = require('path');

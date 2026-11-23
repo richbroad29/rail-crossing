@@ -25,6 +25,9 @@ function compileRoutes(routes) {
   const clears = [];
   const steps = new Set();      // every berth-to-berth step on a learned route, as 'from>to'
   const toClear = {};           // dir → Map(berth → fewest berths to the clear step's from-berth)
+  const typical = {};           // dir → Map(berth → typical seconds in it: the median of its commonest class)
+  const nextOf = {};            // dir → Map(berth → the berth after it on the commonest route through it)
+  const stall = {};             // dir → Map(berth → stall threshold seconds: the routes file's p95, every class)
   for (const d of dirs) {
     const x = routes.directions[d];
     const c = x.clear;
@@ -34,6 +37,24 @@ function compileRoutes(routes) {
     const m = new Map([[from, 0], [to, -1]]);
     const paths = (x.routes || []).map(r => r.berths)
       .concat((x.startsPartWayIn || []).map(s => [s.berth]));       // a partial start is still on a route
+    const tm = new Map();
+    for (const [k, b] of Object.entries(x.berths || {})) {
+      const cls = Object.values(b.timeInBerth || {}).filter(c => typeof c.p50 === 'number').sort((a, b2) => b2.n - a.n)[0];
+      if (cls) tm.set(canon(k), cls.p50);
+    }
+    typical[d] = tm;
+    const st = new Map();
+    for (const [k, b] of Object.entries(x.berths || {})) {
+      const th = b.stall && b.stall.all && b.stall.all.thresholdSecs;
+      if (typeof th === 'number') st.set(canon(k), th);
+    }
+    stall[d] = st;
+    const nx = new Map();
+    for (const r of (x.routes || []).slice().sort((a, b) => b.trains - a.trains)) {
+      const ks = r.berths.map(canon);
+      for (let i = 0; i + 1 < ks.length; i++) if (!nx.has(ks[i])) nx.set(ks[i], ks[i + 1]);
+    }
+    nextOf[d] = nx;
     for (const p of paths) {
       const ks = p.map(canon);
       for (let i = 1; i < ks.length; i++) if (ks[i - 1] !== ks[i]) steps.add(`${ks[i - 1]}>${ks[i]}`);
@@ -66,6 +87,27 @@ function compileRoutes(routes) {
       for (const d of dirs) if (toClear[d] && toClear[d].has(k)) out[d] = toClear[d].get(k);
       return out;
     },
+    // Typical seconds from now until a train in `key` (there for `inBerthSecs`) makes direction d's clear
+    // step: what is left of its typical time in this berth, then the typical time in each berth after it
+    // on the commonest route. null when the berth is not on d's routes. An ESTIMATE for linking and for
+    // trains the classic timing cannot place yet, never a closure time on its own.
+    secsToClear(d, key, inBerthSecs = 0) {
+      const m = toClear[d], tm = typical[d], nx = nextOf[d];
+      if (!m) return null;
+      let k = canon(key);
+      if (!m.has(k) || m.get(k) < 0) return null;
+      let secs = Math.max(0, (tm.get(k) || 0) - inBerthSecs);
+      const clear = clears.find(c => c.dir === d);
+      for (let guard = 0; k !== clear.from && guard < 200; guard++) {
+        k = nx.get(k);
+        if (!k) return null;
+        secs += tm.get(k) || 0;
+      }
+      return secs;
+    },
+    // Seconds in `key` past which a train on direction d's routes is stalled (design §5.6; the routes
+    // file's p95 of normal time in the berth, every class together), or null with too few trains.
+    stallSecs(d, key) { const m = stall[d]; return m && m.has(canon(key)) ? m.get(canon(key)) : null; },
     // +1 if a step from → to moves towards the crossing on direction d's routes, -1 if away from it, 0 if
     // either berth is off them.
     heading(d, from, to) {
