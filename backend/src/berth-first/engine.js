@@ -17,8 +17,10 @@
 //                (a lost step left a copy behind: 3S93's stale copy in Portslade's 0005, 19 Nov) — STALE;
 //   CROSSED      made the clear step in the last few minutes: kept, the barrier may still be down for it;
 //   anything else (off the routes, backing out of the approach, a label that never stepped) is not timed.
-// A timetable or board train the berths have NOT seen is a forecast and never makes a closure (D14);
-// the forecast list itself is step 4b (forecast.js).
+// A timetable or board train the berths have NOT seen is a FORECAST and never makes a closure (D14). It is
+// listed on its own (api.berthFirst.forecast) with the time the timing would give it — "around HH:MM" — and
+// becomes NOT YET SEEN once it is past the latest moment the berths should have shown it (design §5.8; v1
+// has no status check, so that is the safe default and its berths still bring it back, D5).
 //
 // Inputs are its own copies (engines.js). It must never reach back into the serving engine.
 
@@ -31,6 +33,7 @@ const { trainTypeOf } = require('../train-type');
 const CROSSED_KEEP_MS = 10 * 60e3;     // a train is kept this long after its clear step (barrier-up lags are < 1 min)
 const STALL_DEFAULT_SECS = 300;        // a berth with too few trains for a measured stall threshold
 const HELD_MAX_MS = 10 * 60e3;         // a train past its trigger berth longer than this (and 3x the threshold) is a left-over label
+const DEADLINE_BUFFER_MS = 2 * 60e3;   // allowance past the latest a forecast train should have appeared
 const BEST_TIME_FLOOR_MS = 30e3;       // as the classic timing: never a crossing time in the past
 
 class BerthFirstEngine {
@@ -48,6 +51,7 @@ class BerthFirstEngine {
     });
     this.timing = new ClosureTiming(id, config);
     this.links = new Map();           // entry record → { id, expectedMs }
+    this.forecast = [];               // the timing's trains the berths have not seen, as last selected
     this.view = [];                   // the tracked trains as last classified
     const engine = this;
     this.timing.bf = {
@@ -157,6 +161,7 @@ class BerthFirstEngine {
   // 'fast'), or one whose entry the timing dropped. A train on the approach is never left untimed.
   _select(merged, now) {
     const kept = merged.filter(m => m.bfId != null);
+    this.forecast = merged.filter(m => m.bfId == null).map(m => this._forecastRow(m, now)).filter(Boolean);
     const have = new Set(kept.map(m => m.bfId));
     for (const v of this.view) {
       if (v.state !== 'approaching' || have.has(v.id)) continue;
@@ -174,10 +179,41 @@ class BerthFirstEngine {
     return kept;
   }
 
+  // A forecast row: the timing's own estimate for a train not on the berths, and whether it is overdue.
+  _forecastRow(m, now) {
+    const cross = m.bestTime instanceof Date ? m.bestTime.getTime() : Date.parse(m.bestTime);
+    if (!Number.isFinite(cross)) return null;
+    let close = null;
+    try { close = this.timing._computeCloseTime(m, now); } catch (e) { close = null; }
+    const due = cross - this._appearLeadMs(m.direction) + DEADLINE_BUFFER_MS;
+    return {
+      headcode: m.headcode || null, uid: m.uid || null, direction: m.direction, source: m.source,
+      expectedCrossing: new Date(cross).toISOString(), expectedClose: close ? new Date(close).toISOString() : null,
+      state: now.getTime() > due ? 'notYetSeen' : 'forecast', origin: m.origin || null, destination: m.destination || null
+    };
+  }
+
+  // How long before its crossing a train in direction d is on the berths at the latest: the shortest
+  // route's p10 from first sighting (a starting platform's from departure), at least 3 min.
+  _appearLeadMs(d) {
+    this._lead = this._lead || {};
+    if (d in this._lead) return this._lead[d];
+    const x = (this.routesFile.directions || {})[d];
+    let mins = Infinity;
+    for (const r of (x && x.routes) || []) {
+      const v = r.startingPlatform ? r.startingPlatform.minsFromDeparture && r.startingPlatform.minsFromDeparture.p10 : r.horizonMins && r.horizonMins.p10;
+      if (typeof v === 'number' && v < mins) mins = v;
+    }
+    this._lead[d] = Math.max(3, Number.isFinite(mins) ? mins : 3) * 60e3;
+    return this._lead[d];
+  }
+
   getApiState(limit) {
     const api = this.timing.getApiState(limit);
     api.engine = 'berth-first';
+    const now = Date.now();
     api.berthFirst = {
+      forecast: this.forecast.filter(f => Date.parse(f.expectedCrossing) > now - 10 * 60e3),
       trains: this.view.filter(v => v.state !== 'crossed').map(v => ({
         id: v.id, label: v.label, headcode: v.headcode, direction: v.dir, state: v.state, berth: v.berth,
         expected: v.expectedMs ? new Date(v.expectedMs).toISOString() : null, linked: !!v.linked,
