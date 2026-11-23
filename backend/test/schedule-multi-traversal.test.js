@@ -347,6 +347,32 @@ const portsladeCfg = crossingsConfig.portslade.schedule;
       s._freshClearStep(east, after).ts - tEast, 0);
     check('west now reads the west one', s._freshClearStep(west, after).ts - tEast, 300000);
 
+    // The guard above only works if the trains the engine actually times carry legCount. They
+    // are built by _mergeTrains from the timetable, and until 2026-11-23 the field was dropped
+    // there, so the guard never fired for a real train (3S97, 21 Nov: the west closure ended at
+    // the east leg's clear step + lag, before it began, and the crossing was missed).
+    {
+      const now = Date.now();
+      const sm = new CrossingState('t', clearCfg);
+      const legs = [
+        { uid: 'Q33333', headcode: '3S97', trainType: 'passenger', origin: 'X', destination: 'X', operator: 'ZZ',
+          callsAtStation: false, legCount: 2, direction: 'east', estimatedCrossingMins: 1, legIndex: 0 },
+        { uid: 'Q33333', headcode: '3S97', trainType: 'passenger', origin: 'X', destination: 'X', operator: 'ZZ',
+          callsAtStation: false, legCount: 2, direction: 'west', estimatedCrossingMins: 2, legIndex: 1 }
+      ];
+      sm._scheduleTimeToDate = mins => new Date(now + (mins === 1 ? -15 * 60000 : 3 * 60000));
+      sm.scheduleTrains = legs;
+      sm.recordTdSighting('3S97', new Date(now - 20 * 60000));
+      sm.recordTdClearStep({ headcode: '3S97', ts: new Date(now - 14 * 60000), from: '0004', to: '0002' });
+      const westM = sm._mergeTrains(new Date(now)).find(m => m.direction === 'west');
+      checkTruthy('through the merge: the west leg is in the list', westM);
+      check('  ...it carries its leg count', westM ? westM.legCount : null, 2);
+      check('  ...and does not borrow the east leg\'s clear step', westM ? sm._freshClearStep(westM, new Date(now)) : 'no train', null);
+      const periods = sm._computeClosures(sm._mergeTrains(new Date(now)), new Date(now));
+      const p = periods.find(pp => pp.trains.some(x => x.headcode === '3S97' && x.direction === 'west'));
+      checkTruthy('  ...so its closure ends after it starts', p && Date.parse(p.end) > Date.parse(p.start));
+    }
+
     // Regression: a single-traversal train with ONE reading uses it whichever way it
     // points — the "a missed direction join must not sideline the anchor" property.
     const s2 = new CrossingState('t', clearCfg);

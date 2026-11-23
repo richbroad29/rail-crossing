@@ -1176,6 +1176,13 @@ class CrossingState {
         recentRunApplicable: t.recentRunApplicable || 0,
         tdSeen: sightedToday,
         tdSeenAt: tdSighting ? tdSighting.toISOString() : null,
+        // Which traversal of the working this is (schedule-parser). _freshClearStep needs legCount
+        // to know a train crosses twice and must not borrow its other leg's clear step; until
+        // 2026-11-23 it was never copied here, so that guard never fired for a real train. 3S97
+        // out and back, 21 Nov: the west leg took its end from the east crossing 15 min earlier
+        // (22:52:08), the closure ended before it began, and the crossing at 23:09:51 was missed.
+        legIndex: t.legIndex || 0,
+        legCount: t.legCount || 1,
         dedupKey: `cif|${t.uid || t.headcode || ''}|${t.estimatedCrossingMins}`
       });
     }
