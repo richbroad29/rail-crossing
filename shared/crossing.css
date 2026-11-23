@@ -129,3 +129,10 @@ h1.hdr-title{margin:0}
 .footer-nav{display:flex;justify-content:center;gap:18px;font-size:11px;margin:4px 0 10px}
 .footer-nav a{color:#94A3B8;text-decoration:none}
 .footer-nav a:active{color:#E2E8F0}
+
+/* Section titles are real <h2>s (search engines and screen readers read the outline), styled as before */
+.sec-h2{font-size:inherit;font-weight:inherit}
+/* Placeholder closure cards, shown until the first data arrives (see the crossing-page template) */
+.closure-skel .closure-train{color:#64748B}
+/* Pinch-zoom is allowed (no user-scalable=no): a quick double tap on a control must not zoom instead */
+a,button{touch-action:manipulation}

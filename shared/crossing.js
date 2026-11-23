@@ -312,6 +312,11 @@ async function refreshData() {
 // note at the top of that file. This function now owns only what is specific to the public
 // app: which periods are relevant, and the Show More control.
 function renderClosures() {
+  // Before the first payload, leave the page's placeholder cards alone. The 1 s status tick
+  // starts before the first fetch returns, and rendering then wrote "No upcoming closures"
+  // (a claim with no data behind it) and collapsed the list, so the page jumped when the
+  // closures arrived. Periods set without a fetch (the audit replay harness) still render.
+  if (!lastPayloadAt && !closurePeriods.length) return;
   var now = new Date();
   var relevant = CLOSURE_CARD.relevant(closurePeriods, now);
   if (!relevant.length) {

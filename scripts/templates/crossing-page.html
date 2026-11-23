@@ -5,10 +5,10 @@
   overwrites them. Values are HTML-escaped by the generator.
 -->
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en-GB">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="{{appShortName}}">
@@ -45,7 +45,9 @@
     <button class="pm-burger" id="menuBtn" type="button" data-track="menu-open: {{id}} page" aria-label="Menu" aria-controls="menuDrawer" aria-expanded="false"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
   </div>
 
-  <div class="status-card" id="statusCard">
+  <!-- data-nosnippet on everything live: a search snippet or AI answer quoting "closed in 7 min" from
+       the moment of the crawl would be wrong by the time anyone read it. They quote the About block. -->
+  <div class="status-card" id="statusCard" data-nosnippet>
     <div class="status-title" id="statusTitle">LOADING...</div>
     <div class="status-msg" id="statusMsg">Fetching live train data...</div>
   </div>
@@ -99,7 +101,7 @@
        those two; it exists so the strip can be pushed along when one happens.
        Every line has an id because the audit harnesses drive this file through a stub DOM
        that implements getElementById and nothing else. -->
-  <div class="cards">
+  <div class="cards" data-nosnippet>
     <div class="cards-track" id="cardsTrack">
       <div class="card">
         <div class="card-label" id="c0label"></div>
@@ -138,10 +140,14 @@
 
   <div class="section">
     <div class="section-hdr">
-      <span>Upcoming Closures</span>
+      <h2 class="sec-h2">Upcoming Closures</h2>
       <button class="refresh-btn" id="refreshBtn" data-track="refresh: {{id}} page" onclick="refreshData()"></button>
     </div>
-    <div id="closureList"><div class="empty">Fetching live data...</div></div>
+    <!-- Placeholder cards the size of real ones, so the list doesn't push the page down when the
+         first closures arrive (that shift was 0.09 CLS on a phone; Google's limit is 0.1). The usual
+         first view is three closures and Show More, so three cards and a hidden Show More stand in;
+         renderClosures() replaces the lot. -->
+    <div id="closureList" data-nosnippet><div class="closure-card closure-skel" aria-hidden="true"><div class="closure-hdr"><div class="closure-time-group"><span class="closure-time">&nbsp;</span></div></div><div class="closure-train"><span class="closure-train-route">Fetching live data...</span></div></div><div class="closure-card closure-skel" aria-hidden="true"><div class="closure-hdr"><div class="closure-time-group"><span class="closure-time">&nbsp;</span></div></div><div class="closure-train">&nbsp;</div></div><div class="closure-card closure-skel" aria-hidden="true"><div class="closure-hdr"><div class="closure-time-group"><span class="closure-time">&nbsp;</span></div></div><div class="closure-train">&nbsp;</div></div><button class="show-more-btn" type="button" tabindex="-1" aria-hidden="true" disabled style="visibility:hidden">Show More</button></div>
     <button class="show-more-btn hidden" id="showMoreBtn" data-track="show-more: {{id}} page" onclick="showMoreClosures()">Show More</button>
   </div>
 
@@ -161,7 +167,7 @@
   </section>
 
   <div class="section">
-    <div style="font-size:12px;font-weight:600;margin-bottom:6px">How It Works</div>
+    <h2 style="font-size:12px;font-weight:600;margin-bottom:6px">How It Works</h2>
     <div class="info-text">
       Powered by live train times and real-time railway signalling. As trains approach, we forecast when the barriers will come down &mdash; and by detecting the exact moment each train clears the crossing, we give you a sharper estimate of when they'll lift again.
     </div>
@@ -169,7 +175,7 @@
   </div>
 
   <div class="section">
-    <div style="font-size:12px;font-weight:600;margin-bottom:8px">Quick Links</div>
+    <h2 style="font-size:12px;font-weight:600;margin-bottom:8px">Quick Links</h2>
     <div class="setup-row">
       <a class="setup-btn" data-track="request-from: {{id}} page" href="https://forms.gle/Tv3UcPDVcLygoG1D9" target="_blank" style="text-decoration:none">Request Your Local Crossing</a>
       <a class="setup-btn coffee-btn" data-track="gofundme: {{id}} page" href="https://www.gofundme.com/f/predict-level-crossing-closures-across-britain" target="_blank" rel="noopener" style="text-decoration:none">Support on GoFundMe</a>

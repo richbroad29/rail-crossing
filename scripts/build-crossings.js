@@ -186,6 +186,16 @@ function figuresLine(f) {
   return `50% of closures last between ${a} and ${b} minutes. About ${perDay} closures a day, typically ${f.busiestHour} in the busiest hour. (Recorded by this app, ${f.asOf}.)`;
 }
 
+// The site's identity, shared by every page's structured data: one name (the one in every title),
+// the other name it goes by, and the logo. Google uses the WebSite block for the site name it shows
+// in results and the Organization's logo where it shows one.
+const WEBSITE_ID = `${SITE}/#website`, ORG_ID = `${SITE}/#organization`;
+const SITE_NAME = 'railcrossing.uk', SITE_ALT_NAME = 'Rail Crossing';
+const websiteLd = () => ({ '@type': 'WebSite', '@id': WEBSITE_ID, name: SITE_NAME, alternateName: SITE_ALT_NAME,
+  url: `${SITE}/`, publisher: { '@id': ORG_ID } });
+const organizationLd = () => ({ '@type': 'Organization', '@id': ORG_ID, name: SITE_NAME, url: `${SITE}/`,
+  logo: { '@type': 'ImageObject', url: `${SITE}/shared/icon-512.png`, width: 512, height: 512 } });
+
 // Structured data (burger-menu ticket 12): the page is about a Place that is a level crossing
 // (schema.org has no such type; Wikidata Q171448 says it), plus the Home > crossing trail. Every
 // value is also visible on the page. `<` is escaped so no value can close the script tag.
@@ -195,11 +205,13 @@ function jsonLd(id, d, r, f) {
     '@context': 'https://schema.org',
     '@graph': [
       { '@type': 'WebPage', '@id': url, url, name: f.pageTitle, description: f.description,
-        isPartOf: { '@type': 'WebSite', name: 'railcrossing.uk', url: `${SITE}/` },
+        isPartOf: { '@id': WEBSITE_ID },
         about: { '@type': 'Place', name: d.name, additionalType: 'https://www.wikidata.org/wiki/Q171448',
           geo: { '@type': 'GeoCoordinates', latitude: Number(r.lat), longitude: Number(r.lon) },
           address: { '@type': 'PostalAddress', streetAddress: d.road, addressLocality: r.town,
             addressRegion: f.county, addressCountry: 'GB' } } },
+      websiteLd(),
+      organizationLd(),
       { '@type': 'BreadcrumbList', itemListElement: [
         { '@type': 'ListItem', position: 1, name: 'Home', item: `${SITE}/` },
         { '@type': 'ListItem', position: 2, name: d.name, item: url }] }
@@ -218,8 +230,9 @@ function page(id, d, r, template) {
     url: `${SITE}/${id}/`, where: f.where, stationName: p.stationName,
     typeCode: f.typeCode, typeWords: f.typeWords, figures: f.figures, directoryUrl: `../${directoryUrl}`, crossingNumber: d.crossingNumber
   };
-  // The local map picture, when scripts/render-local-maps.mjs has made one (ticket 12). Lazy-loaded;
-  // tapping it opens the live train map at the crossing's station.
+  // The local map picture, when scripts/render-local-maps.mjs has made one (ticket 12). NOT lazy: on a
+  // phone it is the largest thing in the first screen (Google's LCP element), and lazy-loading it
+  // delays exactly the paint Google times. Tapping it opens the live train map at the station.
   let localMap = '';
   const lmPath = path.join(ROOT, id, 'local-map.json');
   if (fs.existsSync(lmPath) && fs.existsSync(path.join(ROOT, id, 'local-map.webp'))) {
@@ -228,7 +241,7 @@ function page(id, d, r, template) {
     const alt = `Street map of about ${lm.widthMetres} metres around ${d.name} on ${d.road}, ${r.town}` +
       (near.length ? `, with ${andList(near)} nearby.` : '.');
     const station = d.ldb && d.ldb.station;
-    const img = `<img src="local-map.webp" width="360" height="240" loading="lazy" decoding="async" alt="${esc(alt)}">`;
+    const img = `<img src="local-map.webp" width="360" height="240" decoding="async" alt="${esc(alt)}">`;
     localMap = station
       ? `<a class="about-map" data-track="map-link: ${esc(id)} local map" href="/map/#s=${esc(station)}" aria-label="Open the live train map at ${esc(p.stationName)}">${img}</a>`
       : `<div class="about-map">${img}</div>`;
@@ -348,10 +361,11 @@ function homePage(defs, rows, dirText, dirUrl, template) {
   const jsonLd = JSON.stringify({
     '@context': 'https://schema.org',
     '@graph': [
-      { '@type': 'WebSite', name: 'railcrossing.uk', url: `${SITE}/` },
-      { '@type': 'WebApplication', name: 'railcrossing.uk', url: `${SITE}/`, applicationCategory: 'TravelApplication',
+      websiteLd(),
+      organizationLd(),
+      { '@type': 'WebApplication', name: SITE_NAME, url: `${SITE}/`, applicationCategory: 'TravelApplication',
         operatingSystem: 'Any', description, areaServed: { '@type': 'Country', name: 'United Kingdom' },
-        offers: { '@type': 'Offer', price: '0', priceCurrency: 'GBP' } }
+        offers: { '@type': 'Offer', price: '0', priceCurrency: 'GBP' }, publisher: { '@id': ORG_ID } }
     ]
   }, null, 1).replace(/</g, '\\u003c');
   const vals = { description, directoryUrl: dirUrl, liveCount: String(live.length), soonCountText: soonText,
@@ -381,10 +395,20 @@ const HOME_MANIFEST = `{
 }
 `;
 
-function sitemap(defs) {
-  const urls = [`${SITE}/`].concat(Object.entries(defs).filter(([, d]) => d.presentation.listed !== false).map(([id]) => `${SITE}/${id}/`));
+// <lastmod> is the day the page's content last changed, never the day of the build: Google uses
+// lastmod only from sites where it is consistently accurate. A page whose generated file is
+// unchanged keeps the date already in sitemap.xml; a changed (or new) page gets today, London time.
+function sitemap(defs, changedPages) {
+  const pages = [['index.html', `${SITE}/`]].concat(Object.entries(defs).filter(([, d]) => d.presentation.listed !== false)
+    .map(([id]) => [`${id}/index.html`, `${SITE}/${id}/`]));
+  const smPath = path.join(ROOT, 'sitemap.xml');
+  const old = fs.existsSync(smPath) ? fs.readFileSync(smPath, 'utf8') : '';
+  const kept = {};
+  for (const m of old.matchAll(/<loc>([^<]+)<\/loc><lastmod>(\d{4}-\d{2}-\d{2})<\/lastmod>/g)) kept[m[1]] = m[2];
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/London' });     // YYYY-MM-DD
   return '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
-    + urls.map(u => `  <url><loc>${u}</loc></url>`).join('\n') + '\n</urlset>\n';
+    + pages.map(([file, u]) => `  <url><loc>${u}</loc><lastmod>${changedPages.has(file) || !kept[u] ? today : kept[u]}</lastmod></url>`).join('\n')
+    + '\n</urlset>\n';
 }
 
 // ---- the crossing directory (burger-menu tickets 06, 07, 08) ------------------------------
@@ -442,12 +466,15 @@ writes['shared/directory.json'] = directoryText;
 const homeTemplate = fs.readFileSync(path.join(__dirname, 'templates', 'home-page.html'), 'utf8');
 writes['index.html'] = homePage(defs, rows, directoryText, directoryUrl, homeTemplate);
 writes['manifest.webmanifest'] = HOME_MANIFEST;
-writes['sitemap.xml'] = sitemap(defs);
 writes['robots.txt'] = ROBOTS;
 
 // Asset stamps: generated pages come out unstamped; give them the token already in use.
 const stamp = text => token ? text.replace(/((?:src|href)=")((?:\.\.\/)*(?:shared|map)\/[A-Za-z0-9._-]+\.(?:js|css))(?:\?v=[^"]*)?"/g, `$1$2?v=${token}"`) : text;
 for (const k of Object.keys(writes)) if (k.endsWith('.html')) writes[k] = stamp(writes[k]);
+
+// The sitemap last, once each page's final text is known: its dates say which pages changed.
+const differs = rel => { const full = path.join(ROOT, rel); return !fs.existsSync(full) || fs.readFileSync(full, 'utf8') !== writes[rel]; };
+writes['sitemap.xml'] = sitemap(defs, new Set(Object.keys(writes).filter(k => k.endsWith('index.html') && differs(k))));
 
 let changed = 0;
 for (const [rel, text] of Object.entries(writes)) {

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en-GB">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -23,16 +23,33 @@
 <meta name="twitter:card" content="summary">
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css"
       integrity="sha384-uTttxo/aOKbdE5RlD/SPzSDoDmNvGlUYPjONi2MN/b7c9HPSvW07OIuyP7uL6jxK" crossorigin="anonymous">
-<link rel="stylesheet" href="shared/menu.css?v=202611220712">
-<link rel="stylesheet" href="shared/home.css?v=202611220712">
+<link rel="stylesheet" href="shared/menu.css?v=202611231814">
+<link rel="stylesheet" href="shared/home.css?v=202611231814">
 <script type="application/ld+json">
 {
  "@context": "https://schema.org",
  "@graph": [
   {
    "@type": "WebSite",
+   "@id": "https://railcrossing.uk/#website",
    "name": "railcrossing.uk",
-   "url": "https://railcrossing.uk/"
+   "alternateName": "Rail Crossing",
+   "url": "https://railcrossing.uk/",
+   "publisher": {
+    "@id": "https://railcrossing.uk/#organization"
+   }
+  },
+  {
+   "@type": "Organization",
+   "@id": "https://railcrossing.uk/#organization",
+   "name": "railcrossing.uk",
+   "url": "https://railcrossing.uk/",
+   "logo": {
+    "@type": "ImageObject",
+    "url": "https://railcrossing.uk/shared/icon-512.png",
+    "width": 512,
+    "height": 512
+   }
   },
   {
    "@type": "WebApplication",
@@ -49,6 +66,9 @@
     "@type": "Offer",
     "price": "0",
     "priceCurrency": "GBP"
+   },
+   "publisher": {
+    "@id": "https://railcrossing.uk/#organization"
    }
   }
  ]
@@ -82,7 +102,7 @@
     </section>
 
     <section class="hp-copy">
-      <h1 class="hp-h1">Know when the barriers will come down</h1>
+      <h1 class="hp-h1">Find level crossings near you <span class="hp-h1-sub">and know when the barriers will come down</span></h1>
       <p>railcrossing.uk predicts when the barriers at a level crossing will close, and when they'll open again, for every train: passenger, freight and empty trains. It's free, works on any phone, and you can add it to your home screen like an app.</p>
       <button class="add-app-btn hidden hp-app-inline js-add-app" type="button"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M12 8v6M9.5 11.5 12 14l2.5-2.5"/></svg>Add as app</button>
 
@@ -140,10 +160,10 @@
   </div>
 </div>
 
-<script src="shared/track.js?v=202611220712"></script>
-<script src="shared/finder.js?v=202611220712"></script>
-<script src="map/style.js?v=202611220712"></script>
-<script src="shared/home.js?v=202611220712"></script>
+<script src="shared/track.js?v=202611231814"></script>
+<script src="shared/finder.js?v=202611231814"></script>
+<script src="map/style.js?v=202611231814"></script>
+<script src="shared/home.js?v=202611231814"></script>
 <script data-goatcounter="https://richbroad29.goatcounter.com/count"
         async src="//gc.zgo.at/count.js"></script>
 </body>
