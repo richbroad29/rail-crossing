@@ -1,0 +1,51 @@
+{
+  "_generated": "scripts/render-local-maps.mjs; do not edit",
+  "made": "2026-11-23",
+  "zoom": 15,
+  "widthMetres": 550,
+  "stations": [
+    "Rye"
+  ],
+  "businesses": [
+    {
+      "name": "Rye Community Fire Station",
+      "kind": "fire station",
+      "metres": 99
+    },
+    {
+      "name": "The Old Shed Off License",
+      "kind": "off-licence",
+      "metres": 124
+    },
+    {
+      "name": "Hot Wok Express",
+      "kind": "restaurant",
+      "metres": 129
+    },
+    {
+      "name": "Rye DIY",
+      "kind": "DIY store",
+      "metres": 140
+    },
+    {
+      "name": "Swan Cottage Tea Rooms",
+      "kind": "café",
+      "metres": 153
+    },
+    {
+      "name": "Cafe des Fleurs",
+      "kind": "café",
+      "metres": 166
+    },
+    {
+      "name": "Diamond Köz",
+      "kind": "restaurant",
+      "metres": 180
+    },
+    {
+      "name": "Cinque Ports",
+      "kind": "pub",
+      "metres": 207
+    }
+  ]
+}

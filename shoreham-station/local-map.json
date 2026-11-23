@@ -1,0 +1,46 @@
+{
+  "_generated": "scripts/render-local-maps.mjs; do not edit",
+  "made": "2026-11-23",
+  "zoom": 15,
+  "widthMetres": 550,
+  "stations": [
+    "Shoreham-by-Sea (Sussex)"
+  ],
+  "businesses": [
+    {
+      "name": "Shoreham Fish Bar",
+      "kind": "takeaway",
+      "metres": 64
+    },
+    {
+      "name": "Shoreham Free Church",
+      "kind": "church",
+      "metres": 100
+    },
+    {
+      "name": "Shoreham Police Station",
+      "kind": "police station",
+      "metres": 103
+    },
+    {
+      "name": "Co-op Food",
+      "kind": "supermarket",
+      "metres": 120
+    },
+    {
+      "name": "Shoreham Library",
+      "kind": "library",
+      "metres": 179
+    },
+    {
+      "name": "Esteem",
+      "kind": "community centre",
+      "metres": 202
+    },
+    {
+      "name": "The Shoreham Centre",
+      "kind": "community centre",
+      "metres": 214
+    }
+  ]
+}

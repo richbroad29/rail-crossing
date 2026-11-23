@@ -1,0 +1,21 @@
+{
+  "_generated": "scripts/render-local-maps.mjs; do not edit",
+  "made": "2026-11-23",
+  "zoom": 15,
+  "widthMetres": 550,
+  "stations": [
+    "Cooksbridge"
+  ],
+  "businesses": [
+    {
+      "name": "Covers Timber & Builders Merchants",
+      "kind": "hardware shop",
+      "metres": 123
+    },
+    {
+      "name": "Hamsey Community Primary School",
+      "kind": "school",
+      "metres": 162
+    }
+  ]
+}

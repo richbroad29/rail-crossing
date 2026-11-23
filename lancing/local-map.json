@@ -1,0 +1,41 @@
+{
+  "_generated": "scripts/render-local-maps.mjs; do not edit",
+  "made": "2026-11-23",
+  "zoom": 15,
+  "widthMetres": 550,
+  "stations": [
+    "Lancing"
+  ],
+  "businesses": [
+    {
+      "name": "Joe's Burger House",
+      "kind": "takeaway",
+      "metres": 48
+    },
+    {
+      "name": "Crispy Cod",
+      "kind": "takeaway",
+      "metres": 53
+    },
+    {
+      "name": "Andreas Takeaway",
+      "kind": "takeaway",
+      "metres": 79
+    },
+    {
+      "name": "Boots",
+      "kind": "pharmacy",
+      "metres": 97
+    },
+    {
+      "name": "Adur West Family Hub",
+      "kind": "community centre",
+      "metres": 132
+    },
+    {
+      "name": "West Sussex Alternative Provision College",
+      "kind": "school",
+      "metres": 149
+    }
+  ]
+}

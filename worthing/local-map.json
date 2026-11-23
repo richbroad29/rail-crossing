@@ -1,0 +1,41 @@
+{
+  "_generated": "scripts/render-local-maps.mjs; do not edit",
+  "made": "2026-11-23",
+  "zoom": 15,
+  "widthMetres": 550,
+  "stations": [
+    "Worthing"
+  ],
+  "businesses": [
+    {
+      "name": "Cost L£ss Express",
+      "kind": "shop",
+      "metres": 60
+    },
+    {
+      "name": "Inside Magazines",
+      "kind": "newsagent",
+      "metres": 72
+    },
+    {
+      "name": ":Wing Wah Oriental",
+      "kind": "supermarket",
+      "metres": 87
+    },
+    {
+      "name": "All In Onez",
+      "kind": "shop",
+      "metres": 101
+    },
+    {
+      "name": "New Thai Spice",
+      "kind": "restaurant",
+      "metres": 101
+    },
+    {
+      "name": "Ajisai Bubble Tea",
+      "kind": "café",
+      "metres": 107
+    }
+  ]
+}

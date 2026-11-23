@@ -1,0 +1,46 @@
+{
+  "_generated": "scripts/render-local-maps.mjs; do not edit",
+  "made": "2026-11-23",
+  "zoom": 15,
+  "widthMetres": 550,
+  "stations": [
+    "Hampden Park (Sussex)"
+  ],
+  "businesses": [
+    {
+      "name": "The Filling Station",
+      "kind": "takeaway",
+      "metres": 92
+    },
+    {
+      "name": "Hampden Park Library",
+      "kind": "library",
+      "metres": 111
+    },
+    {
+      "name": "Park Express Grill",
+      "kind": "restaurant",
+      "metres": 136
+    },
+    {
+      "name": "RAW Convenience Store",
+      "kind": "shop",
+      "metres": 181
+    },
+    {
+      "name": "Mandy's Kitchen",
+      "kind": "café",
+      "metres": 187
+    },
+    {
+      "name": "Morrisons Daily",
+      "kind": "shop",
+      "metres": 206
+    },
+    {
+      "name": "Aldi",
+      "kind": "supermarket",
+      "metres": 208
+    }
+  ]
+}

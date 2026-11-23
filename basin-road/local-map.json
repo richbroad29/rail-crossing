@@ -1,0 +1,31 @@
+{
+  "_generated": "scripts/render-local-maps.mjs; do not edit",
+  "made": "2026-11-23",
+  "zoom": 15,
+  "widthMetres": 550,
+  "stations": [
+    "Chichester"
+  ],
+  "businesses": [
+    {
+      "name": "Foxwood",
+      "kind": "café",
+      "metres": 124
+    },
+    {
+      "name": "The Foundry",
+      "kind": "pub",
+      "metres": 165
+    },
+    {
+      "name": "Santorini Restaurant",
+      "kind": "restaurant",
+      "metres": 169
+    },
+    {
+      "name": "St. Richard's R.C. Church",
+      "kind": "church",
+      "metres": 220
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "_generated": "scripts/render-local-maps.mjs; do not edit",
+  "made": "2026-11-23",
+  "zoom": 15,
+  "widthMetres": 550,
+  "stations": [],
+  "businesses": [
+    {
+      "name": "Shin Mai",
+      "kind": "restaurant",
+      "metres": 60
+    },
+    {
+      "name": "Kamsons Pharmacy",
+      "kind": "pharmacy",
+      "metres": 67
+    },
+    {
+      "name": "Leo's tapas",
+      "kind": "restaurant",
+      "metres": 105
+    },
+    {
+      "name": "Grange Hotel",
+      "kind": "hotel",
+      "metres": 119
+    },
+    {
+      "name": "McDonald's",
+      "kind": "takeaway",
+      "metres": 155
+    },
+    {
+      "name": "Balti BLVD",
+      "kind": "restaurant",
+      "metres": 166
+    },
+    {
+      "name": "Saint Francis and Saint Anthony's",
+      "kind": "church",
+      "metres": 217
+    }
+  ]
+}

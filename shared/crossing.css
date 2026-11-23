@@ -136,3 +136,16 @@ h1.hdr-title{margin:0}
 .closure-skel .closure-train{color:#64748B}
 /* Pinch-zoom is allowed (no user-scalable=no): a quick double tap on a control must not zoom instead */
 a,button{touch-action:manipulation}
+
+/* Coming-soon crossing pages and county lists (scripts/templates/soon-page.html, county-page.html).
+   Their rows are the burger menu's (shared/menu.css), so a crossing looks the same everywhere. */
+.soon-card{background:#1E293B;border:1px solid #334155;border-radius:12px;padding:16px 14px;margin:14px 0 16px;text-align:center}
+.soon-title{font-size:16px;font-weight:700;color:#E2E8F0}
+.soon-msg{font-size:12px;color:#94A3B8;line-height:1.5;margin:6px 0 12px}
+.soon-btn{display:block;padding:12px;border-radius:8px;background:#3B82F6;color:#FFF;font-size:13px;font-weight:600;text-decoration:none}
+.soon-btn:active{background:#2563EB}
+.near-list .pm-row,.county-list .pm-row{padding:8px 4px;min-height:46px}
+.county-town{font-size:11px;font-weight:650;text-transform:uppercase;letter-spacing:1px;color:#64748B;margin:14px 4px 2px}
+.county-town:first-child{margin-top:2px}
+.info-text a,.about-list a{color:#93C5FD}
+.footer-credit{margin-top:6px;padding-bottom:calc(20px + env(safe-area-inset-bottom,0px))}

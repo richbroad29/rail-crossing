@@ -222,7 +222,12 @@ ships they are still code work.
 - **In:** everything above.
 - **Do:**
   1. Write `backend/config/crossings/<id>.json` on `backend-v2` (copy `portslade.json`; the file name is
-     the id). Include `presentation` with **`listed: false`**.
+     the id). Include `presentation` with **`listed: false`**. **The id must be the crossing's page
+     address** (its coming-soon page, e.g. `yapton` → `/yapton/`): `build-crossings.js` stops otherwise,
+     so the page search engines know becomes the live page. **If its county has coming-soon pages**
+     (`SOON_COUNTIES` in `build-crossings.js`; Sussex since 2026-11), a dark run at `/<id>/` would
+     replace that public page with the unvalidated app, so the build stops: decide with Rich where the
+     dark run lives (e.g. a separate unlisted address) before this step.
   2. Run the backend tests, push, deploy per CLAUDE.md (`merge --ff-only`, restart, verify).
   3. On `main`: `git fetch`, `node scripts/build-crossings.js`, then `--check` must pass. Commit the
      generated files and push. The page now exists at `/<id>/` but is not listed or in the sitemap.

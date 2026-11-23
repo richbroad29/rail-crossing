@@ -1,0 +1,19 @@
+{
+  "_generated": "scripts/render-local-maps.mjs; do not edit",
+  "made": "2026-11-23",
+  "zoom": 15,
+  "widthMetres": 550,
+  "stations": [],
+  "businesses": [
+    {
+      "name": "Sea Spray",
+      "kind": "takeaway",
+      "metres": 78
+    },
+    {
+      "name": "On Your Doorstep Sandwich Bar",
+      "kind": "café",
+      "metres": 103
+    }
+  ]
+}

@@ -1,22 +1,36 @@
 {
   "_generated": "scripts/render-local-maps.mjs; do not edit",
-  "made": "2026-11-12",
-  "widthMetres": 400,
+  "made": "2026-11-23",
+  "zoom": 15,
+  "widthMetres": 550,
+  "stations": [
+    "Portslade"
+  ],
   "businesses": [
     {
-      "name": "Al Medina",
-      "kind": "shop",
-      "metres": 50
+      "name": "Teba Sweetland",
+      "kind": "bakery",
+      "metres": 69
     },
     {
-      "name": "Cherry News",
-      "kind": "newsagent",
-      "metres": 55
+      "name": "Aldi",
+      "kind": "supermarket",
+      "metres": 69
     },
     {
-      "name": "Little Bruce Coffee",
+      "name": "Greggs",
+      "kind": "takeaway",
+      "metres": 100
+    },
+    {
+      "name": "Spice Lounge",
+      "kind": "takeaway",
+      "metres": 111
+    },
+    {
+      "name": "Pickles",
       "kind": "café",
-      "metres": 60
+      "metres": 119
     }
   ]
 }

@@ -1,0 +1,19 @@
+{
+  "_generated": "scripts/render-local-maps.mjs; do not edit",
+  "made": "2026-11-23",
+  "zoom": 15,
+  "widthMetres": 550,
+  "stations": [],
+  "businesses": [
+    {
+      "name": "St Andrew's Church",
+      "kind": "church",
+      "metres": 173
+    },
+    {
+      "name": "Rider Hall",
+      "kind": "community centre",
+      "metres": 190
+    }
+  ]
+}

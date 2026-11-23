@@ -148,6 +148,13 @@ Built from the burger-menu wayfinder map (`.scratch/burger-menu/`, local only; d
   the one implementation of search and nearest** — like predict.js, never add a second copy.
   `node scripts/finder-test.js` checks it.
 - **`index.html` is generated whole** from `scripts/templates/home-page.html`. Edit the template.
+- **Coming-soon pages and county lists (search plan, 2026-11).** `build-crossings.js` also writes a
+  page of fixed facts for every coming-soon crossing in `SOON_COUNTIES` (Sussex pilot) at `/<slug>/`
+  (`scripts/templates/soon-page.html`) and `/crossings/<county>/` lists (`county-page.html`). The
+  slug is the address the crossing KEEPS when it goes live: a live definition's id must equal it,
+  a published address may never move, and a dark run in those counties stops the build (all three
+  enforced by the build). Nearest stations come from `scripts/data/stations.json` (NaPTAN). Local map
+  pictures: `node scripts/render-local-maps.mjs --missing`, then rebuild.
 - **MapLibre will not draw in headless Chrome on this Mac, nor in a hidden/background tab** (2026-11-12:
   cost an hour). To see a map: a real Chrome window off-screen driven over DevTools (as
   `render-local-maps.mjs` does), or ask Rich to bring the Claude Chrome window to the front.

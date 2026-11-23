@@ -151,7 +151,22 @@ const TYPE_WORDS = {
   'AHB-X':  ['AHB', 'Automatic half barriers, lowered by approaching trains'],
   'ABCL':   ['ABCL', 'Automatic barriers, checked by the train driver'],
   'ABCL-X': ['ABCL', 'Automatic barriers, checked by the train driver'],
+  'AOCLB':  ['AOCL+B', 'Automatic half barriers, checked by the train driver'],
   'AFBCL':  ['AFBCL', 'Automatic full barriers, checked by the train driver']
+};
+// What happens at each type, for coming-soon pages (keyed by the short code above). General facts
+// only: no timings, because none are measured for these types yet. A type that is measured at a
+// live crossing gets that crossing's figures added (sameTypeFigures). A coming-soon page of a type
+// not listed here stops the build, so the words are written (and checked) when its county gets pages.
+const TYPE_HOW = {
+  'MCB-CCTV': 'A signaller watches the crossing on CCTV, lowers full barriers across the whole road and checks it is clear before the train is allowed through. The barriers come down well before the train arrives, so closures last longer than at an automatic crossing.',
+  'MCB':      'A signaller who can see the crossing lowers full barriers across the whole road and checks it is clear before the train is allowed through, so closures last longer than at an automatic crossing.',
+  'MCB-R':    'A signaller who can see the crossing lowers full barriers across the whole road and checks it is clear before the train is allowed through, so closures last longer than at an automatic crossing.',
+  'MCB-OD':   'A signaller lowers full barriers across the whole road, and radar or laser obstacle detection checks it is clear before the train is allowed through, so closures last longer than at an automatic crossing.',
+  'AHB':      'The approaching train lowers the barriers automatically. Half barriers close the left-hand side of the road on each side, and the red lights flash until the train has passed. The barriers come down only shortly before the train arrives.',
+  'ABCL':     'The approaching train lowers half barriers automatically, and the train driver checks the crossing is clear, so trains slow down on the approach.',
+  'AOCL+B':   'The approaching train lowers half barriers automatically, and the train driver checks the crossing is clear, so trains slow down on the approach.',
+  'AFBCL':    'The approaching train lowers full barriers automatically, and the train driver checks the crossing is clear.'
 };
 function typeOf(id, r) {
   const t = TYPE_WORDS[r.type];
@@ -201,6 +216,7 @@ const organizationLd = () => ({ '@type': 'Organization', '@id': ORG_ID, name: SI
 // value is also visible on the page. `<` is escaped so no value can close the script tag.
 function jsonLd(id, d, r, f) {
   const url = `${SITE}/${id}/`;
+  const cp = COUNTY_PAGES[f.county];
   return JSON.stringify({
     '@context': 'https://schema.org',
     '@graph': [
@@ -212,12 +228,12 @@ function jsonLd(id, d, r, f) {
             addressRegion: f.county, addressCountry: 'GB' } } },
       websiteLd(),
       organizationLd(),
-      { '@type': 'BreadcrumbList', itemListElement: [
-        { '@type': 'ListItem', position: 1, name: 'Home', item: `${SITE}/` },
-        { '@type': 'ListItem', position: 2, name: d.name, item: url }] }
+      breadcrumbLd([['Home', `${SITE}/`], cp && [`${f.county} crossings`, `${SITE}${cp.path}`], [d.name, url]])
     ]
   }, null, 1).replace(/</g, '\\u003c');
 }
+const breadcrumbLd = items => ({ '@type': 'BreadcrumbList', itemListElement: items.filter(Boolean)
+  .map(([name, item], i) => ({ '@type': 'ListItem', position: i + 1, name, item })) });
 
 // ---- outputs ---------------------------------------------------------------------------
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -230,23 +246,11 @@ function page(id, d, r, template) {
     url: `${SITE}/${id}/`, where: f.where, stationName: p.stationName,
     typeCode: f.typeCode, typeWords: f.typeWords, figures: f.figures, directoryUrl: `../${directoryUrl}`, crossingNumber: d.crossingNumber
   };
-  // The local map picture, when scripts/render-local-maps.mjs has made one (ticket 12). NOT lazy: on a
-  // phone it is the largest thing in the first screen (Google's LCP element), and lazy-loading it
-  // delays exactly the paint Google times. Tapping it opens the live train map at the station.
-  let localMap = '';
-  const lmPath = path.join(ROOT, id, 'local-map.json');
-  if (fs.existsSync(lmPath) && fs.existsSync(path.join(ROOT, id, 'local-map.webp'))) {
-    const lm = JSON.parse(fs.readFileSync(lmPath, 'utf8'));
-    const near = lm.businesses.map(b => b.name);
-    const alt = `Street map of about ${lm.widthMetres} metres around ${d.name} on ${d.road}, ${r.town}` +
-      (near.length ? `, with ${andList(near)} nearby.` : '.');
-    const station = d.ldb && d.ldb.station;
-    const img = `<img src="local-map.webp" width="360" height="240" decoding="async" alt="${esc(alt)}">`;
-    localMap = station
-      ? `<a class="about-map" data-track="map-link: ${esc(id)} local map" href="/map/#s=${esc(station)}" aria-label="Open the live train map at ${esc(p.stationName)}">${img}</a>`
-      : `<div class="about-map">${img}</div>`;
-  }
+  const station = d.ldb && d.ldb.station;
+  const localMap = localMapHtml(id, d.name, d.road, r.town, station, p.stationName);
+  const cp = COUNTY_PAGES[f.county];
   const raw = { jsonLd: jsonLd(id, d, r, f), localMap,
+    countyNav: cp ? `<a data-track="county-link: ${esc(id)} page footer" href="${esc(cp.path)}">${esc(f.county)} crossings</a>` : '',
     figuresRow: f.figures ? `<dt>Closures</dt><dd>${esc(f.figures)}</dd>` : '' };                   // {{{x}}}: inserted unescaped
   const body = template.replace(/^<!--[\s\S]*?-->\n/, '');     // drop the template's own header
   return body
@@ -258,6 +262,23 @@ function page(id, d, r, template) {
       if (!(k in vals)) throw new Error(`template value {{${k}}} has no source`);
       return esc(vals[k]);
     });
+}
+
+// The local map picture, when scripts/render-local-maps.mjs has made one (ticket 12). NOT lazy: on a
+// phone it is the largest thing in the first screen (Google's LCP element), and lazy-loading it
+// delays exactly the paint Google times. Tapping it opens the live train map at the station.
+function localMapHtml(slug, name, road, town, stationCrs, stationName) {
+  const lmPath = path.join(ROOT, slug, 'local-map.json');
+  if (!fs.existsSync(lmPath) || !fs.existsSync(path.join(ROOT, slug, 'local-map.webp'))) return '';
+  const lm = JSON.parse(fs.readFileSync(lmPath, 'utf8'));
+  // Stations first, then up to six landmarks, nearest first (as drawn on the picture).
+  const near = (lm.stations || []).map(st => `${st} station`).concat(lm.businesses.slice(0, 6).map(b => b.name));
+  const alt = `Street map of about ${lm.widthMetres} metres around ${name}${road ? ` on ${road}` : ''}, ${town}` +
+    (near.length ? `, with ${andList(near)} nearby.` : '.');
+  const img = `<img src="local-map.webp" width="360" height="240" decoding="async" alt="${esc(alt)}">`;
+  return stationCrs
+    ? `<a class="about-map" data-track="map-link: ${esc(slug)} local map" href="/map/#s=${esc(stationCrs)}" aria-label="Open the live train map at ${esc(stationName)}">${img}</a>`
+    : `<div class="about-map">${img}</div>`;
 }
 
 function manifest(id, d, r) {
@@ -335,7 +356,7 @@ function inPlace(r) {           // "in Brighton and Hove (East Sussex)" / "in Gw
   return r.local_authority && r.local_authority !== c ? `in ${r.local_authority} (${c})` : `in ${c}`;
 }
 const andList = xs => xs.length < 2 ? xs.join('') : xs.slice(0, -1).join(', ') + ' and ' + xs[xs.length - 1];
-function homePage(defs, rows, dirText, dirUrl, template) {
+function homePage(defs, rows, dirText, dirUrl, template, countyList) {
   const crossings = JSON.parse(dirText).crossings;
   const live = Object.entries(defs).filter(([, d]) => d.presentation.listed !== false);
   const soon = crossings.filter(e => !e.id).length;
@@ -370,7 +391,7 @@ function homePage(defs, rows, dirText, dirUrl, template) {
   }, null, 1).replace(/</g, '\\u003c');
   const vals = { description, directoryUrl: dirUrl, liveCount: String(live.length), soonCountText: soonText,
     liveSentence, requestUrl: REQUEST_URL };
-  const raw = { liveList, jsonLd };
+  const raw = { liveList, jsonLd, countyList };
   return template.replace(/^<!--[\s\S]*?-->\n/, '')
     .replace(/\{\{\{(\w+)\}\}\}/g, (m, k) => { if (!(k in raw)) throw new Error(`home template {{{${k}}}} has no source`); return raw[k]; })
     .replace(/\{\{(\w+)\}\}/g, (m, k) => { if (!(k in vals)) throw new Error(`home template {{${k}}} has no source`); return esc(vals[k]); });
@@ -398,9 +419,7 @@ const HOME_MANIFEST = `{
 // <lastmod> is the day the page's content last changed, never the day of the build: Google uses
 // lastmod only from sites where it is consistently accurate. A page whose generated file is
 // unchanged keeps the date already in sitemap.xml; a changed (or new) page gets today, London time.
-function sitemap(defs, changedPages) {
-  const pages = [['index.html', `${SITE}/`]].concat(Object.entries(defs).filter(([, d]) => d.presentation.listed !== false)
-    .map(([id]) => [`${id}/index.html`, `${SITE}/${id}/`]));
+function sitemap(pages, changedPages) {         // pages: [[file, url]]
   const smPath = path.join(ROOT, 'sitemap.xml');
   const old = fs.existsSync(smPath) ? fs.readFileSync(smPath, 'utf8') : '';
   const kept = {};
@@ -414,11 +433,12 @@ function sitemap(defs, changedPages) {
 // ---- the crossing directory (burger-menu tickets 06, 07, 08) ------------------------------
 // One entry per crossing number. Shown fields: n (number), name, road (null = unnamed: the app
 // shows "Name, Town" instead), town, la (council), cc (ceremonial county), country, county (the
-// one locals use), lat, lon, id (only on a LISTED live crossing: its page). Search-only: alt, the
+// one locals use), lat, lon, id (only on a LISTED live crossing: its page), pg (a coming-soon
+// crossing's page where it has one: /<pg>/, the address it keeps when it goes live). Search-only: alt, the
 // other names the road goes by (the list's own road where a definition overrides it, its number,
 // the other source's name, its Welsh name). A live crossing takes its name and road from its
 // definition (ticket 07); an unlisted one stays coming soon.
-function directory(defs, rows, list) {
+function directory(defs, rows, list, soonSlugs) {
   const live = {};
   for (const [id, d] of Object.entries(defs)) live[d.crossingNumber] = { id, d };
   const out = [];
@@ -434,6 +454,7 @@ function directory(defs, rows, list) {
       lat: Number(Number(r.lat).toFixed(5)), lon: Number(Number(r.lon).toFixed(5)) };
     if (alt.length) e.alt = alt;
     if (L && L.d.presentation.listed !== false) e.id = L.id;
+    else if (!L && soonSlugs[r.uid]) e.pg = soonSlugs[r.uid];   // its coming-soon page (not live)
     out.push(e);
   }
   out.sort((a, b) => a.n - b.n);
@@ -446,16 +467,188 @@ const directoryVersion = text => crypto.createHash('sha1').update(text).digest('
 
 const ROBOTS = `User-agent: *\nAllow: /\nSitemap: ${SITE}/sitemap.xml\n`;
 
+// ---- pages for coming-soon crossings, and county lists (search plan, 2026-11) -----------------
+// Searches are for places, and a crossing without a page can't be found. So each coming-soon
+// crossing in SOON_COUNTIES gets a page of fixed facts (where, type, what happens there, nearest
+// station, nearby crossings, local map) and a request button, and each county with pages gets a
+// list. A crossing's page lives at /<slug>/ from its first day, coming soon or live: a launch must
+// never move it, or what search engines have learned about it is lost.
+const SOON_COUNTIES = ['East Sussex', 'West Sussex'];      // the pilot. null = every county
+const RESERVED = new Set(['shared', 'map', 'scripts', 'docs', 'crossings', 'backend', 'map-service', 'analysis-data', 'observe']);
+const slugify = s => String(s).toLowerCase().replace(/&/g, ' and ').replace(/['’]/g, '')
+  .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+// Every crossing's slug, over the WHOLE list (so it never depends on which counties have pages):
+// its name ("keymer"); where two share a name, name + town ("carlton-nottingham"); then + number.
+function pageSlugs(list) {
+  const rs = Object.values(list).filter(r => r.excluded !== 'yes');
+  const tally = f => rs.reduce((m, r) => (m[f(r)] = (m[f(r)] || 0) + 1, m), {});
+  const one = r => slugify(r.display_name.replace(/\s+level crossing$/i, ''));
+  const n1 = tally(one);
+  const two = r => n1[one(r)] > 1 || RESERVED.has(one(r)) ? `${one(r)}-${slugify(r.town)}` : one(r);
+  const n2 = tally(two);
+  const out = {};
+  for (const r of rs) out[r.uid] = n2[two(r)] > 1 ? `${two(r)}-${r.uid}` : two(r);
+  return out;
+}
+// A published address must never change. The last build's directory says which coming-soon pages
+// exist (pg); a list edit that would move one (say a new crossing now shares its name) stops the build.
+function checkSlugsStable(slugs) {
+  const p = path.join(ROOT, 'shared', 'directory.json');
+  if (!fs.existsSync(p)) return;
+  for (const e of JSON.parse(fs.readFileSync(p, 'utf8')).crossings)
+    if (e.pg && slugs[e.n] && slugs[e.n] !== e.pg)
+      throw new Error(`crossing ${e.n} (${e.name}) is published at /${e.pg}/ but would now be /${slugs[e.n]}/. Keep its address (special-case it in pageSlugs) rather than move a page search engines know.`);
+}
+
+const STATIONS = JSON.parse(fs.readFileSync(path.join(ROOT, 'scripts', 'data', 'stations.json'), 'utf8')).stations;
+function milesBetween(aLat, aLon, bLat, bLon) {
+  const R = 3958.8, rad = x => x * Math.PI / 180;
+  const dLat = rad(bLat - aLat), dLon = rad(bLon - aLon);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(aLat)) * Math.cos(rad(bLat)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+const fmtMiles = m => m < 0.1 ? 'under 0.1 miles' : `${m < 10 ? m.toFixed(1) : Math.round(m)} miles`;
+function nearestStation(lat, lon) {
+  let best = null;
+  for (const st of STATIONS) { const d = milesBetween(lat, lon, st.lat, st.lon); if (!best || d < best.d) best = { st, d }; }
+  return best;
+}
+const crossingName = e => /level crossing$/i.test(e.name) ? e.name : `${e.name} Level Crossing`;
+const placeOf = e => e.road ? `${e.road}, ${e.town}` : e.town;
+const requestUrlFor = e => `${REQUEST_URL}?usp=pp_url&entry.310342749=${encodeURIComponent(e.town || '')}` +
+  (e.road ? `&entry.330374812=${encodeURIComponent(e.road)}` : '');    // as shared/finder.js requestUrl()
+const pageOf = e => e.id || e.pg ? `/${e.id || e.pg}/` : null;
+
+// " At Portslade, a crossing of the same type, half of all closures last between 2 and 3¾ minutes
+// (recorded by this app, November 2026)." — from a listed live crossing of the type with figures.
+function sameTypeFigures(typeCode, rows) {
+  for (const [id, d] of Object.entries(defs)) {
+    const f = d.presentation.figures;
+    if (!f || d.presentation.listed === false || TYPE_WORDS[rows[id].type][0] !== typeCode) continue;
+    return ` At <a href="/${esc(id)}/">${esc(shortName(d))}</a>, a crossing of the same type, half of all closures last between ${esc(minutesWords(f.downP25Secs))} and ${esc(minutesWords(f.downP75Secs))} minutes (recorded by this app, ${esc(f.asOf)}).`;
+  }
+  return '';
+}
+
+// One row: a crossing with a page is a link (live ones tagged), one without is plain text.
+function crossingRow(e, sub, track, dist) {
+  const main = `<span class="pm-row-main"><span class="pm-name">${esc(crossingName(e))}</span><span class="pm-sub">${esc(sub)}</span></span>` +
+    (dist ? `<span class="pm-dist">${esc(dist)}</span>` : '');
+  const href = pageOf(e);
+  if (!href) return `<div class="pm-row pm-soon">${main}</div>`;
+  return `<a class="pm-row${e.id ? ' pm-live' : ''}" data-track="${esc(track)}" href="${esc(href)}">${main}` +
+    `${e.id ? '<span class="pm-tag">Live</span>' : ''}<span class="pm-chev" aria-hidden="true">›</span></a>`;
+}
+
+function soonPage(e, r, all, rows, liveSentence, template) {
+  const slug = e.pg, name = crossingName(e), place = placeOf(e), county = countyOf(r), url = `${SITE}/${slug}/`;
+  const [typeCode, typeWords] = typeOf(slug, r);
+  if (!TYPE_HOW[typeCode]) throw new Error(`${slug}: no "what happens" words for type ${typeCode}; add it to TYPE_HOW`);
+  const ns = nearestStation(e.lat, e.lon);
+  const cp = COUNTY_PAGES[county];
+  const pageTitle = `${name}, ${e.town} | railcrossing.uk`;        // the road is in the heading and description: titles past ~60 characters are cut off on a phone
+  const description = `${name} is on ${place} (${county}). ${typeWords}. Nearest station: ${ns.st.name}. Live barrier times are coming soon: request them for this crossing.`;
+  // The three nearest other crossings, anywhere in Great Britain.
+  const nearRows = all.filter(o => o.n !== e.n).map(o => ({ o, d: milesBetween(e.lat, e.lon, o.lat, o.lon) }))
+    .sort((a, b) => a.d - b.d).slice(0, 3)
+    .map(({ o, d }) => crossingRow(o, placeOf(o), `nearby-page-tap: ${slug} -> ${o.id || o.pg}`, fmtMiles(d).replace(' miles', ' mi'))).join('');
+  const nearby = `<section class="section" aria-labelledby="nearHdr">\n    <h2 class="about-hdr" id="nearHdr">Nearby crossings</h2>\n    <div class="near-list">${nearRows}</div>\n  </section>`;
+  const jsonLdText = JSON.stringify({
+    '@context': 'https://schema.org',
+    '@graph': [
+      { '@type': 'WebPage', '@id': url, url, name: pageTitle, description, isPartOf: { '@id': WEBSITE_ID },
+        about: { '@type': 'Place', name, additionalType: 'https://www.wikidata.org/wiki/Q171448',
+          geo: { '@type': 'GeoCoordinates', latitude: e.lat, longitude: e.lon },
+          address: { '@type': 'PostalAddress', ...(e.road ? { streetAddress: e.road } : {}), addressLocality: e.town,
+            addressRegion: county, addressCountry: 'GB' } } },
+      websiteLd(), organizationLd(),
+      breadcrumbLd([['Home', `${SITE}/`], cp && [`${county} crossings`, `${SITE}${cp.path}`], [name, url]])
+    ]
+  }, null, 1).replace(/</g, '\\u003c');
+  return fill(template,
+    { slug, name, shortName: e.name, place, n: String(e.n), pageTitle, description, url,
+      directoryUrl: `../${directoryUrl}`, requestUrl: requestUrlFor(e), where: whereLine(e.road, r),
+      typeCode, typeWords, county, countyUrl: cp ? cp.path : '/' },
+    { jsonLd: jsonLdText, nearby, liveSentence,
+      typeHow: esc(TYPE_HOW[typeCode]) + sameTypeFigures(typeCode, rows),
+      localMap: localMapHtml(slug, name, e.road, e.town, ns.st.crs, ns.st.name),
+      stationRow: `<dt>Nearest station</dt><dd>${esc(ns.st.name)}, ${esc(fmtMiles(ns.d))} in a straight line</dd>` });
+}
+
+function countyPage(county, entries, template) {
+  const cp = COUNTY_PAGES[county], url = `${SITE}${cp.path}`;
+  const n = entries.length, live = entries.filter(e => e.id);
+  const countText = `${n} road level crossing${n === 1 ? '' : 's'}${live.length ? `, ${live.length} live` : ''}`;
+  const pageTitle = `Level crossings in ${county}: all ${n} | railcrossing.uk`;
+  const description = `All ${n} road level crossings in ${county}, by town: where each one is, what type it is and which are nearby.` +
+    (live.length ? ` Live barrier times at ${andList(live.map(e => crossingName(e)))}.` : ' Live barrier times coming soon.');
+  const byTown = {};
+  for (const e of entries) (byTown[e.town] = byTown[e.town] || []).push(e);
+  const groups = `<section class="section county-list">` + Object.keys(byTown).sort((a, b) => a.localeCompare(b)).map(town =>
+    `<h2 class="county-town">${esc(town)}</h2>` +
+    byTown[town].sort((a, b) => a.name.localeCompare(b.name))
+      .map(e => crossingRow(e, e.road || e.town, `county-tap: ${slugify(county)} -> ${e.id || e.pg}`)).join('')).join('\n  ') +
+    `</section>`;
+  const liveLine = live.length
+    ? `Live barrier times: ${andList(live.map(e => `<a href="/${esc(e.id)}/">${esc(crossingName(e))}</a>`))}. The rest are coming soon.`
+    : 'Live barrier times are coming soon for these crossings.';
+  const jsonLdText = JSON.stringify({
+    '@context': 'https://schema.org',
+    '@graph': [
+      { '@type': 'CollectionPage', '@id': url, url, name: pageTitle, description, isPartOf: { '@id': WEBSITE_ID } },
+      websiteLd(), organizationLd(),
+      breadcrumbLd([['Home', `${SITE}/`], [`${county} crossings`, url]])
+    ]
+  }, null, 1).replace(/</g, '\\u003c');
+  return fill(template, { county, countySlug: slugify(county), countText, pageTitle, description, url },
+    { jsonLd: jsonLdText, groups, liveLine });
+}
+
+// {{x}} values are escaped, {{{x}}} blocks inserted as HTML; the template's own header comment goes.
+function fill(template, vals, raw) {
+  return template.replace(/^<!--[\s\S]*?-->\n/, '')
+    .replace(/\{\{\{(\w+)\}\}\}/g, (m, k) => { if (!(k in raw)) throw new Error(`template value {{{${k}}}} has no source`); return raw[k]; })
+    .replace(/\{\{(\w+)\}\}/g, (m, k) => { if (!(k in vals)) throw new Error(`template value {{${k}}} has no source`); return esc(vals[k]); });
+}
+
+// The homepage's way in to the county lists.
+function countyListHtml(counts) {
+  const names = Object.keys(COUNTY_PAGES).sort((a, b) => a.localeCompare(b));
+  if (!names.length) return '';
+  return `    <section class="hp-sec" id="countyList" aria-labelledby="countyHdr">\n      <h2 class="hp-h2" id="countyHdr">Crossings by county</h2>\n      <div>` +
+    names.map(c => `<a class="pm-row" data-track="county-link: homepage" href="${esc(COUNTY_PAGES[c].path)}"><span class="pm-row-main"><span class="pm-name">${esc(c)}</span><span class="pm-sub">${counts[c]} crossings</span></span><span class="pm-chev" aria-hidden="true">›</span></a>`).join('') +
+    `</div>\n    </section>`;
+}
+
 // ---- main ------------------------------------------------------------------------------
 const defs = loadDefinitions();
 for (const [id, d] of Object.entries(defs)) check(id, d);
 const LIST = loadList();
 const rows = joinList(defs, LIST);
-const directoryText = directory(defs, rows, LIST);
+// Page addresses. A live crossing's id IS its slug, so its coming-soon page becomes its live page.
+const SLUGS = pageSlugs(LIST);
+for (const [id, d] of Object.entries(defs))
+  if (SLUGS[d.crossingNumber] !== id) throw new Error(`${id}: crossing ${d.crossingNumber}'s page address is /${SLUGS[d.crossingNumber]}/ (its coming-soon page). Name its definition ${SLUGS[d.crossingNumber]}.json so the address doesn't change when it goes live.`);
+checkSlugsStable(SLUGS);
+// A dark run (listed: false) writes the unvalidated live app at /<id>/. Where the crossing has a
+// public coming-soon page that search engines know, that would swap it in silently: stop instead.
+for (const [id, d] of Object.entries(defs))
+  if (d.presentation.listed === false && (!SOON_COUNTIES || SOON_COUNTIES.includes(countyOf(rows[id]))))
+    throw new Error(`${id}: its dark run (listed: false) would replace its public coming-soon page at /${id}/. Decide where the dark run lives before building (crossing-launch skill, Stage 6).`);
+const liveNumbers = new Set(Object.values(defs).map(d => String(d.crossingNumber)));
+const soonSlugs = {};
+for (const r of Object.values(LIST))
+  if (r.excluded !== 'yes' && !liveNumbers.has(r.uid) && (!SOON_COUNTIES || SOON_COUNTIES.includes(countyOf(r)))) soonSlugs[r.uid] = SLUGS[r.uid];
+const directoryText = directory(defs, rows, LIST, soonSlugs);
 const directoryUrl = `shared/directory.json?v=${directoryVersion(directoryText)}`;
 const template = fs.readFileSync(path.join(__dirname, 'templates', 'crossing-page.html'), 'utf8');
 
 const token = (fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8').match(/shared\/[A-Za-z0-9._-]+\.css\?v=(\d+)/) || [])[1];
+// County lists, for every county with at least one crossing page (coming soon or live, listed).
+const DIR = JSON.parse(directoryText).crossings;
+const COUNTY_PAGES = {}, countyCounts = {};
+for (const e of DIR) countyCounts[e.county] = (countyCounts[e.county] || 0) + 1;
+for (const e of DIR) if (e.id || e.pg) COUNTY_PAGES[e.county] = { path: `/crossings/${slugify(e.county)}/` };
 const writes = {};
 for (const [id, d] of Object.entries(defs)) {
   writes[`${id}/index.html`] = page(id, d, rows[id], template);
@@ -464,7 +657,15 @@ for (const [id, d] of Object.entries(defs)) {
 writes['shared/crossings.json'] = websiteSettings(defs);
 writes['shared/directory.json'] = directoryText;
 const homeTemplate = fs.readFileSync(path.join(__dirname, 'templates', 'home-page.html'), 'utf8');
-writes['index.html'] = homePage(defs, rows, directoryText, directoryUrl, homeTemplate);
+writes['index.html'] = homePage(defs, rows, directoryText, directoryUrl, homeTemplate, countyListHtml(countyCounts));
+const soonTemplate = fs.readFileSync(path.join(__dirname, 'templates', 'soon-page.html'), 'utf8');
+const countyTemplate = fs.readFileSync(path.join(__dirname, 'templates', 'county-page.html'), 'utf8');
+const listedLive = Object.entries(defs).filter(([, d]) => d.presentation.listed !== false);
+const liveSentence = listedLive.length
+  ? `It's live at ${andList(listedLive.map(([id, d]) => `<a href="/${esc(id)}/">${esc(d.name)}</a>`))} now.` : '';
+for (const e of DIR) if (e.pg) writes[`${e.pg}/index.html`] = soonPage(e, LIST[e.n], DIR, rows, liveSentence, soonTemplate);
+for (const c of Object.keys(COUNTY_PAGES))
+  writes[`crossings/${slugify(c)}/index.html`] = countyPage(c, DIR.filter(e => e.county === c), countyTemplate);
 writes['manifest.webmanifest'] = HOME_MANIFEST;
 writes['robots.txt'] = ROBOTS;
 
@@ -474,7 +675,11 @@ for (const k of Object.keys(writes)) if (k.endsWith('.html')) writes[k] = stamp(
 
 // The sitemap last, once each page's final text is known: its dates say which pages changed.
 const differs = rel => { const full = path.join(ROOT, rel); return !fs.existsSync(full) || fs.readFileSync(full, 'utf8') !== writes[rel]; };
-writes['sitemap.xml'] = sitemap(defs, new Set(Object.keys(writes).filter(k => k.endsWith('index.html') && differs(k))));
+const sitemapPages = [['index.html', `${SITE}/`]]
+  .concat(listedLive.map(([id]) => [`${id}/index.html`, `${SITE}/${id}/`]))
+  .concat(DIR.filter(e => e.pg).map(e => [`${e.pg}/index.html`, `${SITE}/${e.pg}/`]))
+  .concat(Object.keys(COUNTY_PAGES).sort().map(c => [`crossings/${slugify(c)}/index.html`, `${SITE}${COUNTY_PAGES[c].path}`]));
+writes['sitemap.xml'] = sitemap(sitemapPages, new Set(Object.keys(writes).filter(k => k.endsWith('index.html') && differs(k))));
 
 let changed = 0;
 for (const [rel, text] of Object.entries(writes)) {

@@ -1,0 +1,21 @@
+{
+  "_generated": "scripts/render-local-maps.mjs; do not edit",
+  "made": "2026-11-23",
+  "zoom": 15,
+  "widthMetres": 550,
+  "stations": [
+    "Etchingham"
+  ],
+  "businesses": [
+    {
+      "name": "Bistro @ the Station",
+      "kind": "café",
+      "metres": 119
+    },
+    {
+      "name": "The Assumption of Blessed Mary & St Nicholas",
+      "kind": "church",
+      "metres": 172
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "_generated": "scripts/render-local-maps.mjs; do not edit",
+  "made": "2026-11-23",
+  "zoom": 15,
+  "widthMetres": 550,
+  "stations": [],
+  "businesses": [
+    {
+      "name": "Webbes Fish Cafe",
+      "kind": "restaurant",
+      "metres": 134
+    },
+    {
+      "name": "Rye Sports Centre",
+      "kind": "sports centre",
+      "metres": 136
+    },
+    {
+      "name": "Langate Bar",
+      "kind": "café",
+      "metres": 139
+    },
+    {
+      "name": "Anatolian Kebab Takeaway",
+      "kind": "takeaway",
+      "metres": 149
+    },
+    {
+      "name": "The Cricketers",
+      "kind": "pub",
+      "metres": 165
+    },
+    {
+      "name": "Rye College",
+      "kind": "school",
+      "metres": 177
+    },
+    {
+      "name": "Costcutter",
+      "kind": "shop",
+      "metres": 235
+    }
+  ]
+}

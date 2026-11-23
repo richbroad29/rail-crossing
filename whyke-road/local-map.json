@@ -1,0 +1,24 @@
+{
+  "_generated": "scripts/render-local-maps.mjs; do not edit",
+  "made": "2026-11-23",
+  "zoom": 15,
+  "widthMetres": 550,
+  "stations": [],
+  "businesses": [
+    {
+      "name": "St George's",
+      "kind": "church",
+      "metres": 104
+    },
+    {
+      "name": "Geoff's Garden Ornaments",
+      "kind": "garden centre",
+      "metres": 129
+    },
+    {
+      "name": "Rumboldswhyke Church of England Primary School",
+      "kind": "school",
+      "metres": 154
+    }
+  ]
+}

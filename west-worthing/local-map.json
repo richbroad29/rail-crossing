@@ -1,0 +1,56 @@
+{
+  "_generated": "scripts/render-local-maps.mjs; do not edit",
+  "made": "2026-11-23",
+  "zoom": 15,
+  "widthMetres": 550,
+  "stations": [
+    "West Worthing"
+  ],
+  "businesses": [
+    {
+      "name": "The Green Man Ale & Cider House",
+      "kind": "pub",
+      "metres": 48
+    },
+    {
+      "name": "The Grizzly Bear",
+      "kind": "bar",
+      "metres": 110
+    },
+    {
+      "name": "Mr Chippy",
+      "kind": "takeaway",
+      "metres": 112
+    },
+    {
+      "name": "Bodhi's Kitchen",
+      "kind": "bakery",
+      "metres": 116
+    },
+    {
+      "name": "Shaan Indian Cuisine",
+      "kind": "restaurant",
+      "metres": 137
+    },
+    {
+      "name": "Sussex Tools Ltd",
+      "kind": "hardware shop",
+      "metres": 143
+    },
+    {
+      "name": "Rincon de Pepe",
+      "kind": "restaurant",
+      "metres": 156
+    },
+    {
+      "name": "West Worthing Baptist Church",
+      "kind": "church",
+      "metres": 163
+    },
+    {
+      "name": "The New Italian Kitchen",
+      "kind": "takeaway",
+      "metres": 194
+    }
+  ]
+}

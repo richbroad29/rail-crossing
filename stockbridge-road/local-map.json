@@ -1,0 +1,36 @@
+{
+  "_generated": "scripts/render-local-maps.mjs; do not edit",
+  "made": "2026-11-23",
+  "zoom": 15,
+  "widthMetres": 550,
+  "stations": [
+    "Chichester"
+  ],
+  "businesses": [
+    {
+      "name": "Smith & Western",
+      "kind": "restaurant",
+      "metres": 131
+    },
+    {
+      "name": "The Foundry",
+      "kind": "pub",
+      "metres": 145
+    },
+    {
+      "name": "Foxwood",
+      "kind": "café",
+      "metres": 152
+    },
+    {
+      "name": "Santorini Restaurant",
+      "kind": "restaurant",
+      "metres": 183
+    },
+    {
+      "name": "Waitrose",
+      "kind": "supermarket",
+      "metres": 203
+    }
+  ]
+}

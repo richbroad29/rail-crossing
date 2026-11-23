@@ -1,0 +1,31 @@
+{
+  "_generated": "scripts/render-local-maps.mjs; do not edit",
+  "made": "2026-11-23",
+  "zoom": 15,
+  "widthMetres": 550,
+  "stations": [
+    "Polegate"
+  ],
+  "businesses": [
+    {
+      "name": "Snack Attack",
+      "kind": "takeaway",
+      "metres": 90
+    },
+    {
+      "name": "Procter Health Care",
+      "kind": "pharmacy",
+      "metres": 114
+    },
+    {
+      "name": "Calamar",
+      "kind": "takeaway",
+      "metres": 119
+    },
+    {
+      "name": "The Dinkum",
+      "kind": "pub",
+      "metres": 157
+    }
+  ]
+}
