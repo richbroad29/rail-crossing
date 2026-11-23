@@ -17,7 +17,10 @@
 //          berth-first estimate from where the tracker has it, not a stale booked time;
 //        - the finished list is what bf.select() keeps: trains on the approach (and just crossed),
 //          plus trains the berths saw that no timetable or board has. Forecast-only trains are left
-//          out: a forecast never makes a closure (D14).
+//          out: a forecast never makes a closure (D14);
+//        - the queued rule's "train ahead" is the run the berths are tracking, in the same direction
+//          (_trainByHeadcode), and a tracked train never borrows the other direction's clear step
+//          (_freshClearStep).
 //
 const fs = require('fs');
 const path = require('path');
@@ -1231,6 +1234,7 @@ class CrossingState {
       const kept = this.bf.select(merged, now);
       merged.length = 0;
       merged.push(...kept);
+      this._bfMerged = merged;
     }
 
     merged.sort((a, b) => a.bestTime - b.bestTime);
@@ -1622,7 +1626,7 @@ class CrossingState {
     const withQueuedEstimate = (info, ahead) => {
       const q = this._queuedEstimate(t, now);
       if (!q || q.close < now.getTime()) return null;
-      const blocker = ahead ? this._trainByHeadcode(ahead.headcode) : null;
+      const blocker = ahead ? this._trainByHeadcode(ahead.headcode, t) : null;
       const floor = blocker ? this._openPred(blocker, now).getTime() : 0;
       if (floor > q.close) return null;
       if (info.held) return info.at.getTime() >= q.close ? null : { at: new Date(q.close), held: false };
@@ -1678,7 +1682,7 @@ class CrossingState {
       // Still short of the protecting berth: the barrier cannot come DOWN for this train
       // before it has come UP for the one in front, so floor there too. Not circular — it
       // reads the blocker's open, not the grouping — and max() can only ever defer.
-      const blocker = this._trainByHeadcode(ahead.headcode);
+      const blocker = this._trainByHeadcode(ahead.headcode, t);
       const floor = blocker ? this._openPred(blocker, now).getTime() : 0;
       return { at: new Date(Math.max(info.at.getTime(), now.getTime(), floor)), held: true,
                heldReason: heldReasons(info, 'queued') };
@@ -1820,8 +1824,16 @@ class CrossingState {
   // last-known list the feedback picker falls back on, so it still resolves for a train
   // that has just left the LDB board. Null when nothing is known — the caller then simply
   // skips the floor rather than guessing a direction.
-  _trainByHeadcode(headcode) {
+  _trainByHeadcode(headcode, near = null) {
     if (!headcode) return null;
+    // BERTH-FIRST (3): the train ahead is the run the berths are tracking now, in the same direction —
+    // not the first entry with its headcode anywhere in the day. 3S93 runs several times a day: on
+    // 20 Nov 1H11, queued behind it at 07:42, had its close floored on 3S93's run five hours later and
+    // was shown closing at 12:40 (a closure ending before it began). Falls back to the original lookup.
+    if (this.bf && this._bfMerged && near) {
+      const m = this._bfMerged.find(x => x.headcode === headcode && x.bfId != null && x.direction === near.direction);
+      if (m) return m;
+    }
     const known = this.knownTrains && this.knownTrains.get(headcode);
     if (known && known.train) return known.train;
     for (const t of (this.ldbTrains || [])) if (t.headcode === headcode) return t;
