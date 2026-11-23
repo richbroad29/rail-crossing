@@ -50,6 +50,11 @@ const SKIP_MS = 20 * 60e3;           // a train that skipped a berth moved this 
 
 const HEADCODE_RE = /^[0-9][A-Z][0-9]{2}$/;
 const isHeadcode = d => typeof d === 'string' && HEADCODE_RE.test(d);
+// What may become a train by stepping: a headcode, or "****" / blank (a train with no description, design
+// §5.2). Other labels are signallers' reminders or unit lengths ("-LB-", "-T3A", "4CAR", "*X**"): measured
+// in LA, 1 Oct - 18 Nov, 41 of their movements, none crossed Portslade, against 6 of 35 for "****". -T3A
+// stepped T677>0001 at 02:14:37 on 22 Nov and sat there until 04:36: no train.
+const mayBeTrain = d => isHeadcode(d) || !d || /^\*+$/.test(d);
 
 // What a message is, from its fields: from+to a step, from alone a cancel, to alone an interpose. The
 // feed's label says the same; the fields are what the tracker needs, so it reads those.
@@ -209,9 +214,9 @@ class BerthTracker {
     if (kept !== e) return kept;
     const copy = this._lateCopyOf(e, toKey, t);
     if (copy) return this._absorb(e, copy, t);
-    const becameTrain = !e.isTrain;
-    e.isTrain = true;
-    if (becameTrain) this.onEvent({ type: 'train', entry: e, t });
+    const becameTrain = !e.isTrain && e.labels.some(mayBeTrain);
+    if (becameTrain) { e.isTrain = true; this.onEvent({ type: 'train', entry: e, t }); }
+    if (!e.isTrain) return e;
     this.onEvent({ type: 'move', entry: e, from: fromKey, to: toKey, t });
     return e;
   }
@@ -333,4 +338,4 @@ class BerthTracker {
   }
 }
 
-module.exports = { BerthTracker, kindOf, isHeadcode, PAIR_MS, STALE_MS };
+module.exports = { BerthTracker, kindOf, isHeadcode, mayBeTrain, PAIR_MS, STALE_MS };

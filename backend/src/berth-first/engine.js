@@ -15,6 +15,8 @@
 //                At or after that berth the barrier is already down, so it stays timed ("Train held"),
 //                unless it has not moved for HELD_MAX_MS and 3x the threshold: then it is a left-over label
 //                (a lost step left a copy behind: 3S93's stale copy in Portslade's 0005, 19 Nov) — STALE;
+//   POSSIBLE     on a route but outside its last junction, with no timetable or board entry saying it will
+//                cross (design §5.1, D13): not timed; it becomes APPROACHING once inside the junction;
 //   CROSSED      made the clear step in the last few minutes: kept, the barrier may still be down for it;
 //   anything else (off the routes, backing out of the approach, a label that never stepped) is not timed.
 // A timetable or board train the berths have NOT seen is a FORECAST and never makes a closure (D14). It is
@@ -153,6 +155,9 @@ class BerthFirstEngine {
     this.links = linkEntries(timed, this.timing.ldbTrains, this.timing.scheduleTrains);
     const linkedIds = new Set([...this.links.values()].map(l => l.id));
     for (const v of this.view) v.linked = linkedIds.has(v.id);
+    // Outside the last junction a train is only POSSIBLE unless its timetable or board says it crosses
+    // (design §5.1, D13): TB's main line carries every train for Brighton, few of which come to Portslade.
+    for (const v of this.view) if (v.state === 'approaching' && !v.linked && !this.routes.isCertain(v.dir, v.berth)) v.state = 'possible';
   }
 
   // The timing's merged list, cut to the trains the berths have (linked entries), plus a train made from

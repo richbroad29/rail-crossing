@@ -28,6 +28,7 @@ function compileRoutes(routes) {
   const typical = {};           // dir → Map(berth → typical seconds in it: the median of its commonest class)
   const nextOf = {};            // dir → Map(berth → the berth after it on the commonest route through it)
   const stall = {};             // dir → Map(berth → stall threshold seconds: the routes file's p95, every class)
+  const certain = {};           // dir → Set of berths from a route's last junction inward: every train there crosses
   for (const d of dirs) {
     const x = routes.directions[d];
     const c = x.clear;
@@ -49,6 +50,14 @@ function compileRoutes(routes) {
       if (typeof th === 'number') st.set(canon(k), th);
     }
     stall[d] = st;
+    const cs = new Set();
+    for (const r of x.routes || []) {
+      const ks = r.berths.map(canon);
+      const from0 = r.lastJunction && r.lastJunction.certainFrom ? ks.indexOf(canon(r.lastJunction.certainFrom)) : -1;
+      const iFrom = ks.lastIndexOf(canon(`${c.area}:${c.from}`));
+      if (from0 >= 0 && iFrom >= from0) for (let i = from0; i <= iFrom; i++) cs.add(ks[i]);
+    }
+    certain[d] = cs;
     const nx = new Map();
     for (const r of (x.routes || []).slice().sort((a, b) => b.trains - a.trains)) {
       const ks = r.berths.map(canon);
@@ -107,6 +116,9 @@ function compileRoutes(routes) {
     },
     // Seconds in `key` past which a train on direction d's routes is stalled (design §5.6; the routes
     // file's p95 of normal time in the berth, every class together), or null with too few trains.
+    // Inside the last junction on direction d's routes: every train there goes on to cross (design §5.1).
+    // Outside it a train counts only if its timetable or board entry says it will (D13).
+    isCertain(d, key) { return !!(certain[d] && certain[d].has(canon(key))); },
     stallSecs(d, key) { const m = stall[d]; return m && m.has(canon(key)) ? m.get(canon(key)) : null; },
     // +1 if a step from → to moves towards the crossing on direction d's routes, -1 if away from it, 0 if
     // either berth is off them.

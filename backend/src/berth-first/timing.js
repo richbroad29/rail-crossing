@@ -655,6 +655,11 @@ class CrossingState {
     // leg's reading — that is the whole point, and legCount is the only thing that can
     // tell "the other leg has cleared and I have not" from "my direction join is wrong".
     if (t.legCount > 1) return null;
+    // BERTH-FIRST (3): a train the berths are tracking has a known direction, so the other direction's
+    // clear step is never its own. (The merged train carries no legCount, so the guard above never fires
+    // for timetable trains: 3S97 out and back, 21 Nov, took its westbound closure's end from its eastbound
+    // crossing 15 min earlier, and the closure ended before it began. Live has the same; not fixed there.)
+    if (this.bf && t.bfId != null) return null;
     return fresh.length === 1 ? fresh[0] : null;
   }
 
