@@ -20,6 +20,16 @@ var closuresVisible = 3;
 var closureTotal = 0;
 var lastPayloadAt = 0;
 var payloadAgeMs = Infinity;
+// Whether the page has live data to describe (2026-11-23). An empty closure list means one of
+// two things: the backend says no train is due, or the page has nothing from the backend at
+// all. Only the first may be drawn as CROSSING CLEAR. Before this, a page still waiting for its
+// first poll (the 1 s tick beats a slow connection) or whose last poll failed (weak signal, a
+// backend restart) showed CROSSING CLEAR · "No more closures expected today" off the empty list.
+//   'n/a'      not a live page: the audit replay harness sets periods itself and never fetches,
+//              so it must behave exactly as before
+//   'loading'  from initCrossing() until the first poll returns: the page's LOADING markup stands
+//   'ok' / 'failed'  the outcome of the latest poll
+var liveData = 'n/a';
 
 var isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) ||
   (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1); // iPadOS 13+ reports as a Mac
@@ -226,10 +236,12 @@ async function fetchNationalRail() {
     closureTotal = typeof data.closureCount === 'number' ? data.closureCount : vpsClosures.length;
     payloadAgeMs = 0;
     lastPayloadAt = Date.now();
+    liveData = 'ok';
     return parseVpsResponse(data);
   } catch(e) {
     console.error('VPS API error:', e);
     lastError = e.message;
+    liveData = 'failed';
     return [];
   }
 }
@@ -312,11 +324,15 @@ async function refreshData() {
 // note at the top of that file. This function now owns only what is specific to the public
 // app: which periods are relevant, and the Show More control.
 function renderClosures() {
-  // Before the first payload, leave the page's placeholder cards alone. The 1 s status tick
-  // starts before the first fetch returns, and rendering then wrote "No upcoming closures"
-  // (a claim with no data behind it) and collapsed the list, so the page jumped when the
-  // closures arrived. Periods set without a fetch (the audit replay harness) still render.
-  if (!lastPayloadAt && !closurePeriods.length) return;
+  // Before the first poll returns, leave the page's placeholder cards alone: rendering an empty
+  // list then wrote "No upcoming closures" with no data behind it, and collapsed the list so the
+  // page jumped when the closures arrived. After a failed poll, say there is no data (see liveData).
+  if (liveData === 'loading') return;
+  if (liveData === 'failed') {
+    $('closureList').innerHTML = '<div class="empty">No live data right now</div>';
+    $('showMoreBtn').classList.add('hidden');
+    return;
+  }
   var now = new Date();
   var relevant = CLOSURE_CARD.relevant(closurePeriods, now);
   if (!relevant.length) {
@@ -355,7 +371,31 @@ function showMoreClosures() {
   refreshData();
 }
 
+// No data to describe (see liveData): say so in the status card, and put the rest back to the
+// page's own LOADING look — grey booms as drawn in the markup, no lights, no countdowns.
+function showNoLiveData() {
+  var c = getColors('NONE');
+  var card = $('statusCard');
+  card.classList.remove('pulse');
+  card.style.background = c.bg; card.style.color = c.text; card.style.boxShadow = c.glow;
+  $('statusTitle').textContent = 'NO LIVE DATA';
+  $('statusMsg').textContent = 'Can\u2019t reach the train data. Retrying\u2026';
+  $('barrierArmL').style.transform = '';
+  $('barrierArmR').style.transform = '';
+  document.querySelectorAll('.arm-bar').forEach(function(b) { b.setAttribute('fill', '#475569'); });
+  document.querySelectorAll('.stripe').forEach(function(s) { s.setAttribute('fill', '#94A3B8'); });
+  ['lightA', 'lightB'].forEach(function(id) { $(id).setAttribute('opacity', '0'); $(id).setAttribute('class', ''); });
+  for (var i = 0; i < 2; i++) {
+    $('c' + i + 'label').textContent = '';
+    $('c' + i + 'value').textContent = '--'; $('c' + i + 'value').style.color = '#475569';
+    $('c' + i + 'sub').textContent = '';
+  }
+  cardLeftKind = null;   // so the first good poll fills the cards in place, not with a slide
+}
+
 function updateStatus() {
+  if (liveData === 'loading') return;
+  if (liveData === 'failed') { showNoLiveData(); renderClosures(); return; }
   var now = new Date();
   var t = now.getTime();
   payloadAgeMs = lastPayloadAt ? (t - lastPayloadAt) : Infinity;
@@ -791,6 +831,7 @@ async function initCrossing(id) {
   setRefreshState('idle');
   fbFetchTriggers();   // static per deploy, and only the feedback picker reads it — fire
                        // and forget, never blocking the first render on it
+  liveData = 'loading';
   refreshData();
   setInterval(updateStatus, 1000);
   // 10s, not 30s. A berth strike can move a predicted close by over a minute (one measured
