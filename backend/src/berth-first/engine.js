@@ -238,7 +238,22 @@ class BerthFirstEngine {
     return this._trig[d];
   }
 
+  // After a gap in the crossing's own area, the copied timing's position memory (liveTrains: headcode -> berth) still
+  // holds every train where it was last placed, including trains that crossed unseen. Those would count as a train
+  // ahead and hold the next train's BARRIERS DOWN (the queued gate). Forget every position placed before the gap; a
+  // train that moves again is placed again by its step. Once per gap.
+  _forgetBeforeBlind() {
+    const area = this.config.td && this.config.td.area;
+    const blind = area ? this.health.blindOf(area) : null;
+    if (!blind || blind === this._forgotFor) return;
+    this._forgotFor = blind;
+    let n = 0;
+    for (const [hc, v] of this.timing.liveTrains) if (v.lastSeen <= blind.fromFeed) { this.timing.liveTrains.delete(hc); n++; }
+    this.forgotten = (this.forgotten || 0) + n;
+  }
+
   _relink(now) {
+    this._forgetBeforeBlind();
     this.view = this._classify(now);
     const timed = this.view.filter(v => v.state === 'approaching' || v.state === 'crossed');
     this.links = linkEntries(timed, this.timing.ldbTrains, this.timing.scheduleTrains);

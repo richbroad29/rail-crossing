@@ -117,6 +117,9 @@ class FeedHealth {
     return best;
   }
 
+  // The latest blind span of `area`, or null.
+  blindOf(area) { const a = this.areas.get(area); return (a && a.blind) || null; }
+
   // Was a tracked entry in `area`, which last moved at feed time lastMoveFeed, placed before that area's latest
   // blind span? Then it may have moved anywhere unseen.
   placedBeforeBlind(area, lastMoveFeed) {

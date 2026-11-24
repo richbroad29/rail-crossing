@@ -129,6 +129,7 @@ console.log('\nC. Recovery: a settling time; a train placed before the gap count
   check('120 s later: predicting again', a2.unavailable, undefined);
   check('  ...1N43, last placed before the gap, is not timed or listed', [a2.upcomingClosures.length, a2.berthFirst.trains.length], [0, 0]);
   check('  ...its view state says why', d.e.view.map(v => `${v.label}:${v.state}`), ['1N43:unconfirmed']);
+  check('  ...and the copied timing no longer holds its position (it cannot count as a train ahead)', d.e.timing.liveTrains.has('1N43'), false);
   // Suppose it had been held at a signal and now moves on: its own step out of 0010 picks it up again.
   quiet(() => { d.e.recordTdEvent({ ...stepEvt(['0010', '0008', '17:42:40']) }); });
   d.to(at('17:42:40'));
