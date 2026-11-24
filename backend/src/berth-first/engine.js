@@ -78,7 +78,10 @@ class BerthFirstEngine {
       preferArea: this.routes ? this.routes.preferArea : null,
       knownSteps: this.routes ? this.routes.steps : [],
       approachSteps: approachStepsOf(config),
-      onEvent: ev => { if (ev.type === 'skip') this._inferredStep(ev); }
+      onEvent: ev => {
+        if (ev.type === 'skip') this._inferredStep(ev);
+        else if (ev.type === 'merge' && ev.dropped) this.timing.reownBerthRecords(ev.dropped.id, ev.entry.id);
+      }
     });
     this.timing = new ClosureTiming(id, config);
     this.links = new Map();           // entry record → { id, expectedMs }
@@ -94,7 +97,8 @@ class BerthFirstEngine {
     const engine = this;
     this.timing.bf = {
       entry: rec => engine.links.get(rec) || null,
-      select: (merged, now) => engine._select(merged, now)
+      select: (merged, now) => engine._select(merged, now),
+      lost: id => !engine.tracker.has(id)
     };
     // Every recompute of the timing, however it was triggered (a poll, its own TD events, the hold tick),
     // first brings the links up to date with the tracker.
@@ -122,10 +126,17 @@ class BerthFirstEngine {
     return this._takeEvent(evt);
   }
 
+  // A step is given to the copied timing with the tracked train that made it (bfId): it files strikes and clear steps
+  // under that train as well as under the headcode, so a second train with the same headcode never reads them.
   _takeEvent(evt) {
     let taken = false;
-    if (this.ownsTdArea(evt.area)) { this.tracker.event(evt); taken = true; this.timing._markDirty(); }
-    if (this.timing.recordTdEvent(evt)) taken = true;
+    let owner = null;
+    if (this.ownsTdArea(evt.area)) {
+      this.tracker.event(evt); taken = true; this.timing._markDirty();
+      const ls = this.tracker.lastStep;
+      if (ls && ls.entry) owner = ls.entry.id;
+    }
+    if (this.timing.recordTdEvent(owner != null ? { ...evt, bfId: owner } : evt)) taken = true;
     return taken;
   }
 
@@ -139,7 +150,7 @@ class BerthFirstEngine {
     const [fa, from] = String(ev.from || '').split(':'), [ta, to] = String(ev.to || '').split(':');
     if (!area || fa !== area || ta !== area || !from || !to) return;
     this.inferredSteps = (this.inferredSteps || 0) + 1;
-    this.timing.recordTdEvent({ headcode: ev.entry.label, ts: new Date(ev.t).toISOString(), area, event: 'CA', from, to, inferred: true });
+    this.timing.recordTdEvent({ headcode: ev.entry.label, ts: new Date(ev.t).toISOString(), area, event: 'CA', from, to, inferred: true, bfId: ev.entry.id });
   }
 
   // An area's heartbeat (td-listener 'heartbeat', every 30 s per area): proof the feed is alive when no train moves.

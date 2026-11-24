@@ -249,6 +249,13 @@ class CrossingState {
     // reused headcode can't match a stale approach from earlier in the day.
     this.closeStrikeSeen = new Map();
 
+    // BERTH-FIRST: the same strikes and clear steps filed by the tracked train that made them (the step's owner,
+    // engine.js), `${id}|${berth}` and `${id}|${direction}`. Two trains can carry one headcode — a stale label that
+    // steps on with the next train (1H15, 19 Nov 08:46), a second working — and each must read only its own. See
+    // _freshStrike. Empty without the adapter.
+    this.closeStrikeByEntry = new Map();
+    this.clearStepByEntry = new Map();
+
     // headcode → { train, sourceSeenMs } — the last record we held for a train while one
     // of its SOURCES (LDB board / CIF schedule) still reported it.
     //
@@ -515,7 +522,9 @@ class CrossingState {
     // 3S97 crossing east at ~17:26 and west at ~17:31 — five minutes apart, inside the TTL.
     // With a single slot the west leg read the east leg's clear step and placed its own
     // barrier-up BEFORE its close, which is register #12's open-before-close all over again.
-    this.clearStepSeen.set(`${evt.headcode}|${direction}`, { ts: ms, direction, headcode: evt.headcode });
+    const rec = { ts: ms, direction, headcode: evt.headcode };
+    if (evt.bfId != null) { rec.bfId = evt.bfId; this.clearStepByEntry.set(`${evt.bfId}|${direction}`, rec); }
+    this.clearStepSeen.set(`${evt.headcode}|${direction}`, rec);
     this._pruneClearSteps(ms);
     this._noteCrossingMade(evt.headcode, direction, ms);
     this._markDirty();
@@ -632,6 +641,36 @@ class CrossingState {
     for (const [key, s] of this.clearStepSeen) {
       if (nowMs - s.ts > CLEAR_STEP_TTL_MS) this.clearStepSeen.delete(key);
     }
+    for (const [key, s] of this.clearStepByEntry) {
+      if (nowMs - s.ts > CLEAR_STEP_TTL_MS) this.clearStepByEntry.delete(key);
+    }
+  }
+
+  // BERTH-FIRST: may a train read a strike that tracked train `id` made? Only if that train has left the berths
+  // without crossing: a description lost and written again is the same train under a new entry (the tracker cannot
+  // join them across a cancel), and it has always kept its strike. One still on the berths, or one that has made its
+  // clear step, is another train.
+  _mayBorrow(id) {
+    if (!this.bf || !this.bf.lost || !this.bf.lost(id)) return false;
+    for (const d of this.slots) if (this.clearStepByEntry.has(`${id}|${d}`)) return false;
+    return true;
+  }
+
+  // BERTH-FIRST: the tracker joined two entries into one train (a hand-over split across a second, an advance
+  // description, a late copy): what the dropped one made, the kept one made.
+  reownBerthRecords(fromId, toId) {
+    if (fromId == null || toId == null || fromId === toId) return;
+    for (const map of [this.closeStrikeByEntry, this.clearStepByEntry]) {
+      for (const [key, s] of [...map]) {
+        const bar = key.indexOf('|');
+        if (key.slice(0, bar) !== String(fromId)) continue;
+        map.delete(key);
+        s.bfId = toId;                                  // the headcode-keyed copy is the same record
+        const to = `${toId}${key.slice(bar)}`;
+        const have = map.get(to);
+        if (!have || have.ts < s.ts) map.set(to, s);
+      }
+    }
   }
 
   // This train's own fresh clear step, or null. The single reader of clearStepSeen, so the
@@ -647,10 +686,19 @@ class CrossingState {
   _freshClearStep(t, now) {
     if (!t || !t.headcode) return null;
     const nowMs = now instanceof Date ? now.getTime() : (now || Date.now());
+    // BERTH-FIRST: a tracked train's clear step is the one it made. Another train's with the same headcode is that
+    // train's crossing, never this one's (1H15, 19 Nov: a stale label stepping in at 08:46 read the real 1H15's
+    // 08:45:32). A reading whose maker is not known is still matched by headcode, as below.
+    const tracked = this.bf && t.bfId != null;
+    if (tracked) {
+      const own = this.clearStepByEntry.get(`${t.bfId}|${t.direction}`);
+      if (own && nowMs - own.ts <= CLEAR_STEP_TTL_MS) return own;
+    }
     const fresh = [];
     for (const s of this.clearStepSeen.values()) {
       if (s.headcode !== t.headcode) continue;
       if (nowMs - s.ts > CLEAR_STEP_TTL_MS) continue;
+      if (tracked && s.bfId != null && s.bfId !== t.bfId) continue;
       fresh.push(s);
     }
     if (!fresh.length) return null;
@@ -709,6 +757,7 @@ class CrossingState {
       const blk = this._blockedByAhead({ headcode: evt.headcode, direction: dir }, new Date(ms));
       strike.ahead = blk ? blk.steps : null;
     }
+    if (evt.bfId != null) { strike.bfId = evt.bfId; this.closeStrikeByEntry.set(`${evt.bfId}|${evt.to}`, strike); }
     this.closeStrikeSeen.set(this._strikeKey(evt.headcode, evt.to), strike);
     this._pruneCloseStrikes(ms);
     if (this._isAnchorBerth(dir, evt.to)) this._markDirty();
@@ -762,6 +811,9 @@ class CrossingState {
   _pruneCloseStrikes(nowMs) {
     for (const [key, s] of this.closeStrikeSeen) {          // key is `headcode|berth`
       if (nowMs - s.ts > CLOSE_STRIKE_TTL_MS) this.closeStrikeSeen.delete(key);
+    }
+    for (const [key, s] of this.closeStrikeByEntry) {
+      if (nowMs - s.ts > CLOSE_STRIKE_TTL_MS) this.closeStrikeByEntry.delete(key);
     }
   }
 
@@ -1544,10 +1596,22 @@ class CrossingState {
   // berth given, falls back to the legacy per-headcode key (crossings without a chain).
   _freshStrike(t, now, berth) {
     if (!t.headcode) return null;
+    // BERTH-FIRST: a tracked train's own strike first; another tracked train's, filed under the same headcode, only
+    // if that train was lost before it crossed (_mayBorrow). 19 Nov 08:46: a stale 1H15 label stepping in behind the
+    // real 1H15 read its 0008 strike, closed 08:42:46, joined 1N09's closure and held BARRIERS DOWN until 1N09 had
+    // gone. Without the adapter, or for a strike whose maker is not known, the headcode rule as before.
+    const tracked = this.bf && t.bfId != null && berth;
+    if (tracked) {
+      const own = this.closeStrikeByEntry.get(`${t.bfId}|${berth}`);
+      if (own && own.direction === t.direction && (now.getTime() - own.ts) <= CLOSE_STRIKE_TTL_MS) return own;
+    }
     const key = berth ? this._strikeKey(t.headcode, berth) : t.headcode;
     const struck = this.closeStrikeSeen.get(key);
     if (struck && struck.direction === t.direction &&
-        (now.getTime() - struck.ts) <= CLOSE_STRIKE_TTL_MS) return struck;
+        (now.getTime() - struck.ts) <= CLOSE_STRIKE_TTL_MS) {
+      if (tracked && struck.bfId != null && struck.bfId !== t.bfId && !this._mayBorrow(struck.bfId)) return null;
+      return struck;
+    }
     return null;
   }
 

@@ -111,12 +111,15 @@ class BerthTracker {
   entries() { const out = []; for (const l of this.occ.values()) out.push(...l); return out; }
   trains() { return this.entries().filter(e => e.isTrain); }
   at(key) { return (this.occ.get(this.canon(key)) || []).slice(); }
+  // Is entry `id` still on the berths (not cancelled, merged away or cleared as stale)?
+  has(id) { for (const l of this.occ.values()) for (const e of l) if (e.id === id) return true; return false; }
 
   // ---- feeding ----
   // A berth event as td-listener emits it: { headcode, ts, area, event, from, to }. Its time is the
   // feed's own (ts, to the second).
   event(evt) {
     const kind = kindOf(evt);
+    this.lastStep = null;
     if (!kind || !evt.area) return;
     const t = Date.parse(evt.ts);
     if (!Number.isFinite(t)) return;
@@ -271,7 +274,7 @@ class BerthTracker {
       // The other area's report of a step already made.
       const there = (this.occ.get(toKey) || []).find(x => t - x.lastMove <= PAIR_MS && x.path.length > 1 &&
         (x.label === label || x.path[x.path.length - 2][0] === fromKey));
-      if (there) { this.stats.echoes++; return; }
+      if (there) { this.stats.echoes++; this.lastStep = { entry: there, t }; return; }
       // A train cancelled just now elsewhere, whose hand-over is this step's other report.
       const w = this._fromLimbo(label, t, null);
       const behind = w ? null : this._skipped(fromKey, label, t);
@@ -287,7 +290,9 @@ class BerthTracker {
     }
     if (!this.into.has(toKey)) this.into.set(toKey, new Set());
     this.into.get(toKey).add(fromKey);
-    this._move(e, toKey, t, label);
+    // Which entry this step moved (or, for an echo, had already moved): read by engine.js straight after event(),
+    // so the copied timing can file the step's strike or clear step under the train that made it.
+    this.lastStep = { entry: this._move(e, toKey, t, label), t };
   }
 
   // A same-label entry one or two berths behind `key` (by steps seen so far) that moved recently.
