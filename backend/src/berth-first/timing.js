@@ -522,7 +522,7 @@ class CrossingState {
     // 3S97 crossing east at ~17:26 and west at ~17:31 — five minutes apart, inside the TTL.
     // With a single slot the west leg read the east leg's clear step and placed its own
     // barrier-up BEFORE its close, which is register #12's open-before-close all over again.
-    const rec = { ts: ms, direction, headcode: evt.headcode };
+    const rec = { ts: ms, direction, headcode: evt.headcode, from: evt.from };
     if (evt.bfId != null) { rec.bfId = evt.bfId; this.clearStepByEntry.set(`${evt.bfId}|${direction}`, rec); }
     this.clearStepSeen.set(`${evt.headcode}|${direction}`, rec);
     this._pruneClearSteps(ms);
@@ -646,12 +646,20 @@ class CrossingState {
     }
   }
 
-  // BERTH-FIRST: may a train read a strike that tracked train `id` made? Only if that train has left the berths
-  // without crossing: a description lost and written again is the same train under a new entry (the tracker cannot
-  // join them across a cancel), and it has always kept its strike. One still on the berths, or one that has made its
-  // clear step, is another train.
-  _mayBorrow(id) {
-    if (!this.bf || !this.bf.lost || !this.bf.lost(id)) return false;
+  // BERTH-FIRST: may train `t` read a strike or clear step `rec` that tracked train `id` made? Two cases are the same
+  // train under another entry, and keep what the headcode rule gave before:
+  //   - `t` has stood since before the step in the berth the step was made OUT of. The step was its own, credited to a
+  //     same-named copy (19 Nov 12:36:02: a stale 3S93 label had sat in Portslade's 0005 since 12:12; the train
+  //     running as 3S93 stepped in beside it and crossed, and the tracker moved the older entry);
+  //   - `id` left the berths without crossing: a description lost and written again (the tracker cannot join them
+  //     across a cancel).
+  // Anything else made by another tracked train is that train's (1H15, 19 Nov 08:46: a label stepping in after the
+  // real 1H15 had crossed).
+  _mayBorrow(id, t, rec) {
+    if (!this.bf) return false;
+    const area = this.config && this.config.td && this.config.td.area;
+    if (rec && rec.from && area && this.bf.stoodIn && this.bf.stoodIn(t.bfId, `${area}:${rec.from}`, rec.ts)) return true;
+    if (!this.bf.lost || !this.bf.lost(id)) return false;
     for (const d of this.slots) if (this.clearStepByEntry.has(`${id}|${d}`)) return false;
     return true;
   }
@@ -688,7 +696,8 @@ class CrossingState {
     const nowMs = now instanceof Date ? now.getTime() : (now || Date.now());
     // BERTH-FIRST: a tracked train's clear step is the one it made. Another train's with the same headcode is that
     // train's crossing, never this one's (1H15, 19 Nov: a stale label stepping in at 08:46 read the real 1H15's
-    // 08:45:32). A reading whose maker is not known is still matched by headcode, as below.
+    // 08:45:32), unless the step was this train's own credited to a copy (_mayBorrow). A reading whose maker is not
+    // known is still matched by headcode, as below.
     const tracked = this.bf && t.bfId != null;
     if (tracked) {
       const own = this.clearStepByEntry.get(`${t.bfId}|${t.direction}`);
@@ -698,7 +707,7 @@ class CrossingState {
     for (const s of this.clearStepSeen.values()) {
       if (s.headcode !== t.headcode) continue;
       if (nowMs - s.ts > CLEAR_STEP_TTL_MS) continue;
-      if (tracked && s.bfId != null && s.bfId !== t.bfId) continue;
+      if (tracked && s.bfId != null && s.bfId !== t.bfId && !this._mayBorrow(s.bfId, t, s)) continue;
       fresh.push(s);
     }
     if (!fresh.length) return null;
@@ -745,7 +754,7 @@ class CrossingState {
     if (!dir) return;
     const ms = evt.ts ? new Date(evt.ts).getTime() : Date.now();
     if (!Number.isFinite(ms)) return;
-    const strike = { ts: ms, direction: dir, headcode: evt.headcode, berth: evt.to };
+    const strike = { ts: ms, direction: dir, headcode: evt.headcode, berth: evt.to, from: evt.from || null };
     // Step 2 (2026-10-26): how many berths ahead the nearest same-direction train was AT THIS
     // STRIKE — the quantity the table's queued cells are conditioned on (lib/td-runs.markAhead
     // builds them with the same definition), read once here because it cannot be recovered
@@ -1609,7 +1618,7 @@ class CrossingState {
     const struck = this.closeStrikeSeen.get(key);
     if (struck && struck.direction === t.direction &&
         (now.getTime() - struck.ts) <= CLOSE_STRIKE_TTL_MS) {
-      if (tracked && struck.bfId != null && struck.bfId !== t.bfId && !this._mayBorrow(struck.bfId)) return null;
+      if (tracked && struck.bfId != null && struck.bfId !== t.bfId && !this._mayBorrow(struck.bfId, t, struck)) return null;
       return struck;
     }
     return null;

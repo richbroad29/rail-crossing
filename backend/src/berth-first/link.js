@@ -13,6 +13,11 @@
 //
 // Board (LDB) and timetable (CIF) entries are linked separately: the classic timing merges a board entry
 // and its timetable twin itself, so both may point at the same tracked train.
+//
+// A train that has CROSSED keeps the entries it had and takes no new one (opts.had). Its earlier names are still
+// on it, and once its own entry has gone, an old name can match the next train's: 1N34 stood in Brighton's F661
+// on 21 Nov while the signaller wrote the next departure, 1S18, over it for 15 s; after 1N34 crossed, the board's
+// 1S18 was linked to it, timed from 1N34's strikes, and held BARRIERS DOWN for a train still in Brighton.
 
 const { londonMinsToDate } = require('../time-utils');
 
@@ -32,7 +37,14 @@ const entryTime = (rec, kind) => {
  * @param ldb     the board entries; @param cif the timetable entries (classic engine shapes)
  * @returns Map(entry record → { id, expectedMs }) — what timing.js's adapter answers for each entry
  */
-function linkEntries(trains, ldb, cif) {
+// An entry's identity across board polls (the board's records are new objects every poll).
+const entryKey = (rec, kind) => `${kind}|${rec.uid || ''}|${rec.headcode}|${rec.direction || ''}|` +
+  (kind === 'ldb' ? String(rec.scheduledTime instanceof Date ? rec.scheduledTime.toISOString() : rec.scheduledTime) : rec.estimatedCrossingMins);
+
+// opts.had: Map(train id → Set of entryKey) — the entries each train was linked to before. A train whose state is
+// 'crossed' is linked only to one of those.
+function linkEntries(trains, ldb, cif, opts = {}) {
+  const had = opts.had || null;
   const out = new Map();
   for (const [kind, list] of [['ldb', ldb || []], ['cif', cif || []]]) {
     const pairs = [];
@@ -48,6 +60,7 @@ function linkEntries(trains, ldb, cif) {
       if (!byHd.has(hc)) return;
       for (const rec of byHd.get(hc)) {
         if (rec.direction && tr.dir && rec.direction !== tr.dir) continue;
+        if (had && tr.state === 'crossed' && !(had.get(tr.id) || new Set()).has(entryKey(rec, kind))) continue;
         const at = entryTime(rec, kind);
         if (at === null || tr.expectedMs === null) continue;
         const late = tr.expectedMs - at;                 // + = the train is behind its entry's time
@@ -71,4 +84,4 @@ function linkEntries(trains, ldb, cif) {
   return out;
 }
 
-module.exports = { linkEntries, LATE_MS, EARLY_MS };
+module.exports = { linkEntries, entryKey, LATE_MS, EARLY_MS };

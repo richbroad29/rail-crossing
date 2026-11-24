@@ -34,7 +34,7 @@
 
 const { BerthTracker, isHeadcode } = require('./tracker');
 const { compileRoutes } = require('./routes');
-const { linkEntries } = require('./link');
+const { linkEntries, entryKey } = require('./link');
 const ClosureTiming = require('./timing');
 const { trainTypeOf } = require('../train-type');
 const { parseLondonWallClock } = require('../time-utils');
@@ -85,6 +85,7 @@ class BerthFirstEngine {
     });
     this.timing = new ClosureTiming(id, config);
     this.links = new Map();           // entry record → { id, expectedMs }
+    this.linkedKeys = new Map();      // tracked train id → Set of the entries (link.js entryKey) it has been linked to
     this.forecast = [];               // the timing's trains the berths have not seen, as last selected
     this.view = [];                   // the tracked trains as last classified
     // Outage and restart (step 5). Until restoreFromLog has run (index.js, at startup, before the feed) and a
@@ -98,7 +99,9 @@ class BerthFirstEngine {
     this.timing.bf = {
       entry: rec => engine.links.get(rec) || null,
       select: (merged, now) => engine._select(merged, now),
-      lost: id => !engine.tracker.has(id)
+      lost: id => !engine.tracker.has(id),
+      // Has tracked train `id` stood in `berthKey` since `ts` or before (it is there now and entered no later)?
+      stoodIn: (id, berthKey, ts) => { const e = engine.tracker.byId(id); return !!e && e.key === engine.tracker.canon(berthKey) && e.enteredAt <= ts; }
     };
     // Every recompute of the timing, however it was triggered (a poll, its own TD events, the hold tick),
     // first brings the links up to date with the tracker.
@@ -284,7 +287,14 @@ class BerthFirstEngine {
     this._forgetBeforeBlind();
     this.view = this._classify(now);
     const timed = this.view.filter(v => v.state === 'approaching' || v.state === 'crossed');
-    this.links = linkEntries(timed, this.timing.ldbTrains, this.timing.scheduleTrains);
+    this.links = linkEntries(timed, this.timing.ldbTrains, this.timing.scheduleTrains, { had: this.linkedKeys });
+    // Remember every entry each train is linked to (a crossed train keeps only these); forget trains no longer in view.
+    const inView = new Set(this.view.map(v => v.id));
+    for (const id of [...this.linkedKeys.keys()]) if (!inView.has(id)) this.linkedKeys.delete(id);
+    for (const [rec, l] of this.links) {
+      if (!this.linkedKeys.has(l.id)) this.linkedKeys.set(l.id, new Set());
+      this.linkedKeys.get(l.id).add(entryKey(rec, l.kind));
+    }
     const linkedIds = new Set([...this.links.values()].map(l => l.id));
     for (const v of this.view) v.linked = linkedIds.has(v.id);
     // Outside the last junction a train is only POSSIBLE unless its timetable or board says it crosses

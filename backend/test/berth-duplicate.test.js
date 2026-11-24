@@ -143,5 +143,69 @@ console.log('\nC. two trains with one headcode on the approach at once');
   check("B steps into 0008: A's 0008 strike is still 08:42:26, B's is 08:44:50", out.strikes, ['08:42:26', '08:44:50']);
 }
 
+console.log("\nD. 21 Nov: a train that has crossed does not take a new entry by an old name");
+{
+  // 1N34 stood in Brighton's F661; the signaller wrote 1S18 (the next departure) over it for 15 s. Its tracked train
+  // carries both names. Once it had crossed (13:20:16) and the board had dropped 1N34, the linker gave it the board's
+  // 1S18 by that old name, and 1S18 took 1N34's 0003 strike: BARRIERS DOWN from 13:22 for a train still in Brighton.
+  const at21 = s => RealDate.parse(`2026-11-21T${s}Z`);
+  const ev = fs.readFileSync(path.join(__dirname, 'fixtures', 'berth-first', 'old-name-1N34-1S18-2026-11-21.jsonl'), 'utf8')
+    .trim().split('\n').map(l => JSON.parse(l)).filter(x => x.ts);
+  const board = (hc, best, dest) => ({ origin: 'Brighton', destination: dest, operator: 'SN', scheduledTime: best, bestTime: best, direction: 'west',
+    delayMins: 0, isUncertain: false, timeSource: 'forecast', etaText: '', headcode: hc, uid: null, trainType: 'passenger', source: 'ldbsv', dedupKey: `${best}|${dest}` });
+  const e = engineAt(at21('12:54:00'), [
+    { uid: 'G26694', headcode: '1N34', direction: 'west', estimatedCrossingMins: 799.3, callsAtStation: true, callsAtApproach: true, origin: 'BRGHTN', destination: 'BOGNORR', daysPattern: '0000010' },
+    { uid: 'G26986', headcode: '1S18', direction: 'west', estimatedCrossingMins: 814.6, callsAtStation: true, callsAtApproach: true, origin: 'BRGHTN', destination: 'BOGNORR', daysPattern: '0000010' },
+    { uid: 'G88619', headcode: '1N27', direction: 'east', estimatedCrossingMins: 808.4, callsAtStation: true, callsAtApproach: true, origin: 'BOGNORR', destination: 'BRGHTN', daysPattern: '0000010' }]);
+  const n27 = { ...board('1N27', '2026-11-21T13:27:00.000Z', 'Brighton'), origin: 'Bognor Regis', direction: 'east' };
+  const boards = [[at21('12:55:00'), [board('1N34', '2026-11-21T13:20:00.000Z', 'Bognor Regis'), n27, board('1S18', '2026-11-21T13:36:00.000Z', 'Bognor Regis')]],
+    [at21('13:21:00'), [n27, board('1S18', '2026-11-21T13:36:00.000Z', 'Bognor Regis')]],
+    [at21('13:26:30'), [board('1S18', '2026-11-21T13:36:00.000Z', 'Bognor Regis')]]];
+  let i = 0, bi = 0;
+  const closed = [];
+  let crossedLinks = null;
+  for (let t = at21('12:55:00'); t <= at21('13:37:00'); t += 1000) {
+    NOW = t; e.beat();
+    while (bi < boards.length && boards[bi][0] <= t) quiet(() => e.updateLdbTrains(boards[bi++][1]));
+    while (i < ev.length && RealDate.parse(ev[i].ts) <= t) feed(e, ev[i++]);
+    const api = page(e);
+    if (api.state === 'CLOSED') closed.push(t);
+    if (t === at21('13:22:30')) {
+      const v = e.view.find(x => x.state === 'crossed' && (x.headcodes || []).includes('1N34'));
+      crossedLinks = v ? [...e.links.entries()].filter(([, l]) => l.id === v.id).map(([r]) => r.headcode) : null;
+    }
+  }
+  const spans = []; for (const t of closed) { const s = spans[spans.length - 1]; if (s && t - s[1] === 1000) s[1] = t; else spans.push([t, t]); }
+  check('1N34 (crossed 13:20:16) carries no entry but its own after crossing', crossedLinks, ['1N34']);
+  check('BARRIERS DOWN for 1N34 (0003 13:17:59 + 61 s), 1N27 (0006 13:22:01 + 100 s) and 1S18 (0003 13:33:27 + 61 s) only',
+    spans.map(([a, b]) => `${hms(a)}-${hms(b)}`), ['13:19:00-13:20:34', '13:23:41-13:26:04', '13:34:28-13:36:33']);
+}
+
+console.log("\nE. 19 Nov: a step credited to a same-named copy is still the train's own");
+{
+  // A 3S93 label was written into Portslade's platform 0005 at 12:12:55 and never moved. The train running as 3S93
+  // stepped into 0005 at 12:33:58 and crossed 0005>0007 at 12:36:02, but the tracker moved the older 3S93 entry and
+  // left the train standing in 0005 without its clear step: its closure was held open into 2Y29's, BARRIERS DOWN
+  // through the real gap 12:36:20-12:37:56. A train that has not moved since a step made OUT OF ITS OWN BERTH made it.
+  const at19 = s => RealDate.parse(`2026-11-19T${s}Z`);
+  const ev = fs.readFileSync(path.join(__dirname, 'fixtures', 'berth-first', 'copy-3S93-2026-11-19.jsonl'), 'utf8')
+    .trim().split('\n').map(l => JSON.parse(l)).filter(x => x.ts);
+  const e = engineAt(at19('12:09:00'), [
+    { uid: 'G25658', headcode: '3S93', direction: 'east', estimatedCrossingMins: 482, callsAtStation: false, callsAtApproach: false, legIndex: 0, legCount: 2, trainType: 'test', category: 'DD', runsAsRequired: true, origin: 'HORSHUS', destination: 'HORSHUS' },
+    { uid: 'G25658', headcode: '3S93', direction: 'west', estimatedCrossingMins: 759.95, callsAtStation: false, callsAtApproach: false, legIndex: 1, legCount: 2, trainType: 'test', category: 'DD', runsAsRequired: true, origin: 'HORSHUS', destination: 'HORSHUS' },
+    { uid: 'G26994', headcode: '1S30', direction: 'west', estimatedCrossingMins: 754.6, callsAtStation: true, callsAtApproach: true, origin: 'BRGHTN', destination: 'PSEA' },
+    { uid: 'G27952', headcode: '2Y29', direction: 'east', estimatedCrossingMins: 763.5, callsAtStation: true, callsAtApproach: true, origin: 'CHCHSTR', destination: 'BRGHTN' }]);
+  let i = 0; const st = {};
+  for (let t = at19('12:09:30'); t <= at19('12:44:00'); t += 1000) {
+    NOW = t; e.beat();
+    while (i < ev.length && RealDate.parse(ev[i].ts) <= t) feed(e, ev[i++]);
+    st[hms(t)] = page(e).state;
+  }
+  const between = (a, b) => Object.entries(st).filter(([k]) => k >= a && k <= b).map(([, v]) => v);
+  check('BARRIERS DOWN as it crosses (12:36:00)', st['12:36:00'], 'CLOSED');
+  check('not DOWN while the barrier is up between the two (12:36:25-12:37:50)', between('12:36:25', '12:37:50').includes('CLOSED'), false);
+  check("BARRIERS DOWN for 2Y29 (0006 12:36:16 + 100 s)", st['12:38:00'], 'CLOSED');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

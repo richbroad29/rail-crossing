@@ -111,8 +111,9 @@ class BerthTracker {
   entries() { const out = []; for (const l of this.occ.values()) out.push(...l); return out; }
   trains() { return this.entries().filter(e => e.isTrain); }
   at(key) { return (this.occ.get(this.canon(key)) || []).slice(); }
-  // Is entry `id` still on the berths (not cancelled, merged away or cleared as stale)?
-  has(id) { for (const l of this.occ.values()) for (const e of l) if (e.id === id) return true; return false; }
+  // Entry `id` while it is on the berths (not cancelled, merged away or cleared as stale), else null.
+  byId(id) { for (const l of this.occ.values()) for (const e of l) if (e.id === id) return e; return null; }
+  has(id) { return !!this.byId(id); }
 
   // ---- feeding ----
   // A berth event as td-listener emits it: { headcode, ts, area, event, from, to }. Its time is the
