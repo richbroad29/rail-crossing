@@ -291,6 +291,41 @@ fs.writeFileSync(path.join(dirs.sclassDir, 'cclass-AA-2026-11-21.jsonl.gz'), zli
     check('summer: booked 08:40 London is 07:40 UTC (BST)', s && s.lateSecs, 60);
   }
 
+  console.log('\nRun-through: an earlier berth that already shows it (design §5.5)');
+  {
+    // Planted: route F > S > A > K (K holds the station, threshold 100 s). 40 booked stoppers stop (150 s in K) and
+    // stop at S too (140 s); 12 run through K (50 s), of which 10 also run through S (45 s) and 2 stop at S (140 s).
+    // A takes 60 s for everyone, so it separates nothing. F is each run's first berth, never timed.
+    const T0 = Date.parse('2026-11-20T08:00:00Z');
+    const mk = (n, sSecs, kSecs) => { const t0 = T0 + n * 3600e3; const seg = [['X:F', t0], ['X:S', t0 + 30e3], ['X:A', t0 + 30e3 + sSecs * 1e3], ['X:K', t0 + 30e3 + sSecs * 1e3 + 60e3]];
+      const tIn = seg[3][1]; return { secs: kSecs, tIn, run: { seg, t: tIn + kSecs * 1e3, descr: '1X' + String(n).padStart(2, '0') } }; };
+    const stoppers = [];
+    for (let i = 0; i < 40; i++) stoppers.push(mk(i, 140 + (i % 5), 150));
+    for (let i = 0; i < 10; i++) stoppers.push(mk(40 + i, 45 + (i % 3), 50));
+    for (let i = 0; i < 2; i++) stoppers.push(mk(50 + i, 140, 50));
+    const { earlySignalFor } = require('../tools/learn-routes');
+    const e = earlySignalFor('X:K', stoppers, 100);
+    check('the earlier berth is S (A separates nothing, F is never timed)', e.berth, 'X:S');
+    check('its threshold sits in the gap: slowest run-through caught 47 s, quickest stopper 140 s', e.thresholdSecs, 94);
+    check('caught 10 of 12 run-throughs, no stopper switched', [e.caught.count, e.caught.of, e.falseSwitches.count], [10, 12, 0]);
+    check('warning from leaving S: 60 s in A + 50 s in K', e.caught.medianSecsToClear, 110);
+    check('too few run-throughs: no signal', earlySignalFor('X:K', stoppers.slice(0, 45), 100).berth, null);
+    // A berth further out (F2, before S) that warns sooner: all 12 run-throughs 40 s, stoppers 120 s except 3 at
+    // 70-74 s. Its best cut catches 12 and switches none (threshold midway 40..70 = 55): net 12 beats S's 10, so F2
+    // wins here — the outer berth is right when it is as clean. Then make it switch 3 stoppers (30-34 s): S wins.
+    const withF2 = stoppers.map((x, i) => { const seg = [['X:F', x.run.seg[0][1] - 90e3], ['X:F2', x.run.seg[0][1] - 60e3], ...x.run.seg.slice(1)];
+      seg[2] = ['X:S', x.run.seg[0][1]];
+      const f2 = i < 40 ? (i < 3 ? 70 + 2 * i : 120) : 40;
+      seg[1] = ['X:F2', seg[2][1] - f2 * 1e3];
+      return { ...x, run: { ...x.run, seg } }; });
+    const e2 = earlySignalFor('X:K', withF2, 100);
+    check('an outer berth that is just as clean and catches more wins', [e2.berth, e2.thresholdSecs, e2.falseSwitches.count], ['X:F2', 55, 0]);
+    const withF2b = withF2.map((x, i) => { if (i >= 3) return x; const seg = x.run.seg.map(y => [...y]); seg[1] = ['X:F2', seg[2][1] - (30 + 2 * i) * 1e3]; return { ...x, run: { ...x.run, seg } }; });
+    const e3 = earlySignalFor('X:K', withF2b, 100);
+    check('...but not when it switches stoppers: the cleaner nearer berth wins', [e3.berth, e3.candidates.length], ['X:S', 2]);
+    check('...and the outer one is listed with what it would get wrong', e3.candidates.find(c => c.startsWith('X:F2')), 'X:F2 <80s caught 12/12 false 3/40');
+  }
+
   if (!process.env.KEEP) fs.rmSync(tmp, { recursive: true, force: true }); else console.log("kept", tmp);
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

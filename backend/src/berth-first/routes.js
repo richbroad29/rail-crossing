@@ -29,6 +29,7 @@ function compileRoutes(routes) {
   const nextOf = {};            // dir → Map(berth → the berth after it on the commonest route through it)
   const stall = {};             // dir → Map(berth → stall threshold seconds: the routes file's p95, every class)
   const certain = {};           // dir → Set of berths from a route's last junction inward: every train there crosses
+  const runThrough = {};        // dir → [{ station, berth, secs }]: less than `secs` in `berth` = running through `station`
   for (const d of dirs) {
     const x = routes.directions[d];
     const c = x.clear;
@@ -64,6 +65,16 @@ function compileRoutes(routes) {
       for (let i = 0; i + 1 < ks.length; i++) if (!nx.has(ks[i])) nx.set(ks[i], ks[i + 1]);
     }
     nextOf[d] = nx;
+    // Run-through tests (design §5.5): the station's own berth (left sooner than any stopper does), and the
+    // earlier berth learn-routes found that already shows it (Portslade east: Shoreham's 0010 for Southwick).
+    const rt = [];
+    for (const r of x.runThrough || []) {
+      if (typeof r.thresholdSecs !== 'number') continue;
+      rt.push({ station: r.station, berth: canon(r.berth), secs: r.thresholdSecs, kind: 'station' });
+      const e = r.earlySignal;
+      if (e && e.berth && typeof e.thresholdSecs === 'number') rt.push({ station: r.station, berth: canon(e.berth), secs: e.thresholdSecs, kind: 'earlier' });
+    }
+    runThrough[d] = rt;
     for (const p of paths) {
       const ks = p.map(canon);
       for (let i = 1; i < ks.length; i++) if (ks[i - 1] !== ks[i]) steps.add(`${ks[i - 1]}>${ks[i]}`);
@@ -119,6 +130,18 @@ function compileRoutes(routes) {
     // Inside the last junction on direction d's routes: every train there goes on to cross (design §5.1).
     // Outside it a train counts only if its timetable or board entry says it will (D13).
     isCertain(d, key) { return !!(certain[d] && certain[d].has(canon(key))); },
+    // The stations a train on direction d's routes has run through, from the berths it has left: its path
+    // [[key, enteredAt], ...] (the first entry is where it was first seen, not a running time, so never tested).
+    ranThrough(d, path) {
+      const out = new Set();
+      for (const t of runThrough[d] || []) {
+        for (let i = 1; i + 1 < path.length; i++) {
+          if (canon(path[i][0]) !== t.berth) continue;
+          if ((path[i + 1][1] - path[i][1]) / 1000 < t.secs) out.add(t.station);
+        }
+      }
+      return out;
+    },
     stallSecs(d, key) { const m = stall[d]; return m && m.has(canon(key)) ? m.get(canon(key)) : null; },
     // +1 if a step from → to moves towards the crossing on direction d's routes, -1 if away from it, 0 if
     // either berth is off them.

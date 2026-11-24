@@ -117,7 +117,8 @@ class BerthFirstEngine {
         }
         const secs = this.routes.secsToClear(pick.d, e.key, inBerth);
         out.push({ id: e.id, entry: e, headcode: e.headcode || null, headcodes: [...new Set(e.labels.filter(isHeadcode).reverse())], label: e.label, dir: pick.d, state,
-          berth: e.key, toCrossing: pick.n, inBerthSecs: Math.round(inBerth), expectedMs: secs === null ? null : t + secs * 1000 });
+          berth: e.key, toCrossing: pick.n, inBerthSecs: Math.round(inBerth), expectedMs: secs === null ? null : t + secs * 1000,
+          ranThrough: this._ranThrough(pick.d, e.path) });
         continue;
       }
       if (pick && pick.heading < 0) {
@@ -129,7 +130,8 @@ class BerthFirstEngine {
         for (let i = e.path.length - 1; i > 0; i--) {
           if (t - e.path[i][1] > CROSSED_KEEP_MS) break;
           if (e.path[i][0] === c.to && e.path[i - 1][0] === c.from) {
-            out.push({ id: e.id, entry: e, headcode: e.headcode || null, headcodes: [...new Set(e.labels.filter(isHeadcode).reverse())], label: e.label, dir: c.dir, state: 'crossed', berth: e.key, expectedMs: e.path[i][1] });
+            out.push({ id: e.id, entry: e, headcode: e.headcode || null, headcodes: [...new Set(e.labels.filter(isHeadcode).reverse())], label: e.label, dir: c.dir, state: 'crossed', berth: e.key, expectedMs: e.path[i][1],
+              ranThrough: this._ranThrough(c.dir, e.path.slice(0, i + 1)) });
             i = 0;
           }
         }
@@ -166,6 +168,7 @@ class BerthFirstEngine {
   // 'fast'), or one whose entry the timing dropped. A train on the approach is never left untimed.
   _select(merged, now) {
     const kept = merged.filter(m => m.bfId != null);
+    this._applyRunThrough(kept);
     this.forecast = merged.filter(m => m.bfId == null).map(m => this._forecastRow(m, now)).filter(Boolean);
     const have = new Set(kept.map(m => m.bfId));
     for (const v of this.view) {
@@ -182,6 +185,32 @@ class BerthFirstEngine {
       });
     }
     return kept;
+  }
+
+  // The stations the timing's class rule reads (below) that this path shows the train running through.
+  _ranThrough(d, path) {
+    const sch = this.config.schedule || {};
+    const read = [sch.tiploc_approach_call, sch.tiploc_station].filter(Boolean);
+    const all = read.length ? this.routes.ranThrough(d, path) : new Set();
+    return new Set(read.filter(x => all.has(x)));
+  }
+
+  // Run-through (design §5.5): a train booked to stop that the berths show running through is timed as not
+  // stopping there. Only the two stops the timing's class rule reads matter: the station inside the approach
+  // berth (schedule.tiploc_approach_call, Portslade's Southwick: stoppingLocal -> stopping, anchored at 0008
+  // instead of 0006 + 100 s) and the crossing's own station (schedule.tiploc_station -> fast). The berths that
+  // show it, and their thresholds, are learned (routes file runThrough, with its earlier berth). The merged
+  // trains are fresh copies every recompute, so the timetable and board entries themselves are never changed.
+  _applyRunThrough(kept) {
+    const sch = this.config.schedule || {};
+    const byId = new Map(this.view.map(v => [v.id, v]));
+    for (const m of kept) {
+      const v = byId.get(m.bfId);
+      if (!v || !v.ranThrough || !v.ranThrough.size || v.dir !== m.direction) continue;
+      m.ranThrough = [...v.ranThrough];
+      if (sch.tiploc_approach_call && v.ranThrough.has(sch.tiploc_approach_call)) m.callsAtApproach = false;
+      if (sch.tiploc_station && v.ranThrough.has(sch.tiploc_station)) { m.callsAtStation = false; m.runThroughStation = true; }
+    }
   }
 
   // A forecast row: the timing's own estimate for a train not on the berths, and whether it is overdue.
@@ -222,7 +251,7 @@ class BerthFirstEngine {
       trains: this.view.filter(v => v.state !== 'crossed').map(v => ({
         id: v.id, label: v.label, headcode: v.headcode, direction: v.dir, state: v.state, berth: v.berth,
         expected: v.expectedMs ? new Date(v.expectedMs).toISOString() : null, linked: !!v.linked,
-        unidentified: !!v.entry.unidentified
+        unidentified: !!v.entry.unidentified, ...(v.ranThrough && v.ranThrough.size ? { ranThrough: [...v.ranThrough] } : {})
       }))
     };
     return api;

@@ -62,6 +62,65 @@ const DIVERGE_MAX_RATE = 0.005;
 // ---------------------------------------------------------------- small statistics
 const sorted = a => a.slice().sort((x, y) => x - y);
 function q(a, p) { if (!a.length) return null; const s = sorted(a); return s[Math.min(s.length - 1, Math.max(0, Math.round((s.length - 1) * p)))]; }
+
+// Run-through, the berth BEFORE (design §5.5). Of the trains booked to stop at a station, those that ran through
+// it (less than `thr` in its berth `k`) are often already running non-stop a berth or more earlier: eastbound at
+// Portslade, trains that skip Southwick (in 0006) mostly skip Shoreham (in 0010) too, ~45 s there against ~145 s
+// for a stopper. For each berth the booked stoppers used before `k`, compare the two groups' time in it and take
+// the cut that times the most trains right: run-throughs below it minus stoppers below it (a stopper below it
+// would be switched by mistake and its barrier-down brought minutes early). The threshold sits in the gap at that
+// cut: midway between the slowest run-through caught and the quickest stopper above it. Not a midpoint of
+// percentiles: some run-throughs stop at the earlier station and skip only this one (Portslade 9 Nov, 1N43:
+// 122 s at Shoreham, 46 s at Southwick), and they drag any percentile of the run-throughs up into the stoppers.
+// A berth qualifies with at least EARLY_MIN_RAN run-throughs, 20 stoppers, and caught minus switched at least half
+// the run-throughs. Of the
+// qualifying berths the one that times the most trains right wins (then fewer false switches, then the sooner
+// warning). Not the soonest warning first: Lancing's 0016 warns sooner than 0010 but switches stoppers.
+// The first berth of a run is skipped (a start or a hand-in, not a running time), as for the berth times.
+// stoppers: [{ secs, tIn, run: { seg: [[key, t]], t, descr } }]. Returns the signal, or { berth: null, note }.
+const EARLY_MIN_RAN = 10;
+function earlySignalFor(k, stoppers, thr) {
+  const ran = stoppers.filter(x => x.secs < thr), stayed = stoppers.filter(x => x.secs >= thr);
+  if (ran.length < EARLY_MIN_RAN) return { berth: null, note: `only ${ran.length} booked stoppers ran through; at least ${EARLY_MIN_RAN} needed` };
+  const by = new Map();
+  for (const [grp, xs] of [['ran', ran], ['stayed', stayed]]) for (const x of xs) {
+    const s = x.run.seg, i = s.findIndex(([key, t]) => key === k && t === x.tIn);
+    for (let j = 1; j < i; j++) {
+      const u = s[j][0];
+      if (!by.has(u)) by.set(u, { ran: [], stayed: [] });
+      by.get(u)[grp].push({ secs: (s[j + 1][1] - s[j][1]) / 1000, toClear: (x.run.t - s[j + 1][1]) / 1000, run: x.run });
+    }
+  }
+  let best = null; const candidates = [];
+  for (const [u, g] of by) {
+    if (g.ran.length < EARLY_MIN_RAN || g.stayed.length < 20) continue;
+    const r = g.ran.map(y => y.secs), st = g.stayed.map(y => y.secs);
+    // best cut: just above each run-through's time, keep the one with most caught minus stoppers below it
+    let cut = null;
+    for (const v of r) {
+      const c = r.filter(x => x <= v).length, f = st.filter(x => x <= v).length;
+      if (!cut || c - f > cut.c - cut.f || (c - f === cut.c - cut.f && f < cut.f)) cut = { v, c, f };
+    }
+    if (!cut || cut.c - cut.f < 0.5 * r.length) continue;
+    const above = st.filter(x => x > cut.v);
+    const thrU = Math.round((cut.v + (above.length ? Math.min(...above) : cut.v + 2)) / 2);
+    const caught = g.ran.filter(y => y.secs < thrU), wrong = g.stayed.filter(y => y.secs < thrU);
+    const cand = {
+      berth: u, thresholdSecs: thrU,
+      rule: 'the cut with most run-throughs below it minus stoppers below it, placed midway between the slowest run-through caught and the quickest stopper above it; a booked stopper with less time than this here is running through the station',
+      ranThrough: dist(r), stopped: dist(st),
+      caught: { count: caught.length, of: g.ran.length, medianSecsToClear: Math.round(q(caught.map(y => y.toClear), 0.5)) },
+      falseSwitches: { count: wrong.length, of: g.stayed.length, examples: wrong.slice(0, 5).map(y => `${new Date(y.run.t).toISOString().slice(0, 16)}Z ${y.run.descr} ${Math.round(y.secs)}s`) },
+      ...prov(g.ran.concat(g.stayed).map(y => y.run))
+    };
+    candidates.push(`${u} <${thrU}s caught ${caught.length}/${g.ran.length} false ${wrong.length}/${g.stayed.length}`);
+    const net = c => c.caught.count - c.falseSwitches.count;
+    if (!best || net(cand) > net(best) || (net(cand) === net(best) && (cand.falseSwitches.count < best.falseSwitches.count
+      || (cand.falseSwitches.count === best.falseSwitches.count && cand.caught.medianSecsToClear > best.caught.medianSecsToClear)))) best = cand;
+  }
+  if (best) best.candidates = candidates;
+  return best || { berth: null, note: 'no earlier berth separates the run-throughs from the stoppers', candidates };
+}
 const r1 = x => x === null || x === undefined ? null : Math.round(x * 10) / 10;
 function dist(a) {
   if (!a.length) return { n: 0 };
@@ -611,6 +670,7 @@ function analyseDirection(spec, d, pass, cif, fringe, barrier) {
       rule: separable ? 'midpoint between p90 of passers and p10 of stoppers; less time than this in the berth = running through'
         : 'the two groups overlap: time in this berth alone does not separate them',
       bookedStoppersBelowThreshold: { count: ranThrough.length, examples: ranThrough.slice(0, 5).map(x => `${new Date(x.run.t).toISOString().slice(0, 16)}Z ${x.run.descr} ${Math.round(x.secs)}s`) },
+      earlySignal: thr === null ? null : earlySignalFor(k, st.stop, thr),
       ...prov(st.stop.concat(st.pass).map(x => x.run))
     };
   });
@@ -842,7 +902,8 @@ function summary(out) {
     const ex = Object.entries(x.berths || {}).filter(([, b]) => b.onePerBerth.value === 'exempt').map(([k]) => k);
     console.log(`  one train per berth: exempt at ${ex.length ? ex.join(', ') : 'none'}; overtakes on the same track ${x.overtaking ? x.overtaking.sameTrack.count : '-'}, on different tracks ${x.overtaking ? x.overtaking.differentTracks.count : '-'}`);
     if (x.seenMoreThan60minOut) console.log(`  first seen more than 60 min out: ${x.seenMoreThan60minOut.trains}`);
-    for (const rt of x.runThrough || []) console.log(`  run-through ${rt.station} (${rt.berth}): stop p10 ${rt.bookedToStop.p10}s / pass p90 ${rt.bookedToPass.p90}s → threshold ${rt.thresholdSecs}`);
+    for (const rt of x.runThrough || []) console.log(`  run-through ${rt.station} (${rt.berth}): stop p10 ${rt.bookedToStop.p10}s / pass p90 ${rt.bookedToPass.p90}s → threshold ${rt.thresholdSecs}`
+      + (rt.earlySignal && rt.earlySignal.berth ? `; earlier at ${rt.earlySignal.berth} < ${rt.earlySignal.thresholdSecs}s (caught ${rt.earlySignal.caught.count}/${rt.earlySignal.caught.of}, false ${rt.earlySignal.falseSwitches.count}/${rt.earlySignal.falseSwitches.of})` : ''));
     if (x.truth) console.log(`  truth: ${x.truth.clearStepsWhileBarrierDown.pct}% of clear steps with the barrier down; raise ${x.truth.clearStepToRaiseStartSecs.p50}s after`);
   }
   if (out.truth) console.log(`\nbarrier closures with no clear step: ${out.truth.closuresWithNoClearStep.withNoClearStep} of ${out.truth.closuresWithNoClearStep.closures}`);
@@ -850,4 +911,4 @@ function summary(out) {
 
 if (require.main === module) main().catch(e => { console.error(e.stack || e.message); process.exit(1); });
 
-module.exports = { learn, loadSpec, trackPass, discover, analyseDirection, buildTrie, clearVsBarrier, unexplained, feedHealth, readBarrier };
+module.exports = { learn, loadSpec, trackPass, discover, analyseDirection, buildTrie, clearVsBarrier, unexplained, feedHealth, readBarrier, earlySignalFor };

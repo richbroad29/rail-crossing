@@ -21,6 +21,8 @@
 //        - the queued rule's "train ahead" is the run the berths are tracking, in the same direction
 //          (_trainByHeadcode), and a tracked train never borrows the other direction's clear step
 //          (_freshClearStep).
+//        - a train the engine found running through the crossing's station is not stopping (_isStopping;
+//          design §5.5 — the engine also clears its booked approach stop on the merged copy).
 //
 const fs = require('fs');
 const path = require('path');
@@ -1269,6 +1271,9 @@ class CrossingState {
   //    non-stopping, which silently mislabelled any passenger service beyond the
   //    ~2 h LDB window. `null` (unknowable) keeps the old conservative answer.
   _isStopping(t) {
+    // BERTH-FIRST (3): the berth-first engine found this train running through the crossing's station (design
+    // §5.5), so it is not stopping whatever its booking or the board says.
+    if (this.bf && t.runThroughStation) return false;
     if (typeof t.source === 'string' && t.source.startsWith('ldb')) return true;
     return t.callsAtStation === true;
   }
