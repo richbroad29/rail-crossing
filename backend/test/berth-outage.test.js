@@ -178,6 +178,29 @@ console.log('\nD. Restart: the logged hour replayed puts the train back');
   check('downtime of 10 min: a gap — recovering, then 1N43 unconfirmed until it moves', [b.unavailable && b.unavailable.reason, e2.view.map(v => v.state)], ['recovering', ['unconfirmed']]);
 }
 
+console.log('\nD2. Restart losing a clear step: 1N14 west, 18 Nov — in Portslade\'s platform (0005) at the restart, its clear step');
+console.log('    0005>0007 at 08:20:06 inside the 10 s downtime, then 0007>0009 at 08:20:45');
+{
+  const N14 = { uid: 'G00014', headcode: '1N14', direction: 'west', estimatedCrossingMins: 8 * 60 + 19.5, callsAtStation: true, callsAtApproach: false,
+    origin: 'BRGHTN', destination: 'SOTON', category: 'XX', operator: 'SN', trainType: 'passenger', source: 'cif', legIndex: 0, legCount: 1, runsAsRequired: false, daysPattern: '1111100' };
+  const ev = (from, to, t) => ({ headcode: '1N14', ts: iso(at(t)), area: 'LA', event: 'CA', from, to });
+  NOW = at('08:20:00');
+  const e = quiet(() => new BerthFirstEngine('portslade', JSON.parse(JSON.stringify(def)), routes));
+  quiet(() => e.restoreFromLog([ev('T682', 'T677', '08:15:26'), ev('T677', '0001', '08:17:13'), ev('0001', '0003', '08:17:52'), ev('0003', '0005', '08:18:22')], { lastRxMs: at('08:19:59') }));
+  quiet(() => e.updateScheduleTrains([{ ...N14 }]));
+  const beat = t => { NOW = at(t); for (const a of routes.areas) e.recordTdHeartbeat({ area: a, ts: iso(NOW), event: 'CT' }); };
+  beat('08:20:10'); beat('08:20:40');
+  const down = () => { const api = quiet(() => { e._recompute(); return e.getApiState(10); }); const p = api.upcomingClosures.find(c => c.trains.some(x => x.headcode === '1N14'));
+    return p ? { state: api.state, end: p.end.slice(11, 19), held: !!p.holdingOpen } : { state: api.state }; };
+  check('08:20:40, back up, 1N14 still placed in the platform: BARRIERS DOWN, held', [down().state, down().held], ['CLOSED', true]);
+  NOW = at('08:20:45');
+  quiet(() => e.recordTdEvent(ev('0007', '0009', '08:20:45')));
+  check('its next step reveals the lost clear step: the tracker infers 0005>0007 and the timing is told', e.inferredSteps, 1);
+  check('  ...the closure now ends at that step + the open lag, not 10 min later', down().held, false);
+  beat('08:21:10'); NOW = at('08:21:30');
+  check('08:21:30: no BARRIERS DOWN for 1N14', down().state === 'CLOSED', false);
+}
+
 console.log('\nE. The log reader');
 {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bf-restart-'));

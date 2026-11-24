@@ -74,7 +74,8 @@ class BerthFirstEngine {
       sameBerths: this.routes ? this.routes.sameBerths : [],
       preferArea: this.routes ? this.routes.preferArea : null,
       knownSteps: this.routes ? this.routes.steps : [],
-      approachSteps: approachStepsOf(config)
+      approachSteps: approachStepsOf(config),
+      onEvent: ev => { if (ev.type === 'skip') this._inferredStep(ev); }
     });
     this.timing = new ClosureTiming(id, config);
     this.links = new Map();           // entry record → { id, expectedMs }
@@ -123,6 +124,19 @@ class BerthFirstEngine {
     if (this.ownsTdArea(evt.area)) { this.tracker.event(evt); taken = true; this.timing._markDirty(); }
     if (this.timing.recordTdEvent(evt)) taken = true;
     return taken;
+  }
+
+  // A step the tracker inferred (its skipped-berth rule: the train turned up one or two berths on, so the step between
+  // was never received — lost by the feed, or made while this process was restarting). The copied timing reads raw
+  // steps, so it is told of it too, at the time of the step that revealed it: otherwise a lost CLEAR step leaves the
+  // closure held until the train ages out (10 min; 1N14 18 Nov 08:20:06, during a restart's downtime), and a lost
+  // STRIKE leaves BARRIERS DOWN waiting for a strike that already happened. Only steps inside the timing's own area.
+  _inferredStep(ev) {
+    const area = this.config.td && this.config.td.area;
+    const [fa, from] = String(ev.from || '').split(':'), [ta, to] = String(ev.to || '').split(':');
+    if (!area || fa !== area || ta !== area || !from || !to) return;
+    this.inferredSteps = (this.inferredSteps || 0) + 1;
+    this.timing.recordTdEvent({ headcode: ev.entry.label, ts: new Date(ev.t).toISOString(), area, event: 'CA', from, to, inferred: true });
   }
 
   // An area's heartbeat (td-listener 'heartbeat', every 30 s per area): proof the feed is alive when no train moves.

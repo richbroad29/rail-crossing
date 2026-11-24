@@ -77,7 +77,7 @@ class BerthTracker {
    * @param {object} opts
    *   sameBerths: [[a, b], ...] — berth keys ("AREA:BERTH") that are one berth; a is the name kept
    *   preferArea: when a pair is given without an order, the area whose name is kept
-   *   onEvent(ev): told of what changed — { type: 'train'|'move'|'relabel'|'gone'|'merge', ... }
+   *   onEvent(ev): told of what changed — { type: 'train'|'move'|'relabel'|'gone'|'merge'|'skip', ... }
    */
   constructor({ sameBerths = [], preferArea = null, knownSteps = [], approachSteps = [], onEvent = () => {} } = {}) {
     this.preferArea = preferArea;
@@ -276,7 +276,13 @@ class BerthTracker {
       const w = this._fromLimbo(label, t, null);
       const behind = w ? null : this._skipped(fromKey, label, t);
       if (w) { e = w.e; e.path.push([fromKey, t]); e.key = fromKey; this.stats.handovers++; }
-      else if (behind) { e = behind; this._remove(e); e.path.push([fromKey, t]); e.key = fromKey; e.skipped = (e.skipped || 0) + 1; this.stats.skipped = (this.stats.skipped || 0) + 1; }
+      else if (behind) {
+        const was = behind.key;
+        e = behind; this._remove(e); e.path.push([fromKey, t]); e.key = fromKey; e.skipped = (e.skipped || 0) + 1; this.stats.skipped = (this.stats.skipped || 0) + 1;
+        // The step the feed never sent (or that came while we were not listening), as far as it can be known: from
+        // where the train was to where this step starts, at this step's time. Told before the move it explains.
+        this.onEvent({ type: 'skip', entry: e, from: was, to: fromKey, t });
+      }
       else { this.stats.fromEmpty++; e = this._new(fromKey, t, label, { kind: 'stepFromEmpty' }); this.recentEmpty.push(e); }
     }
     if (!this.into.has(toKey)) this.into.set(toKey, new Set());
