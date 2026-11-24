@@ -207,5 +207,28 @@ console.log("\nE. 19 Nov: a step credited to a same-named copy is still the trai
   check("BARRIERS DOWN for 2Y29 (0006 12:36:16 + 100 s)", st['12:38:00'], 'CLOSED');
 }
 
+console.log('\nF. 13 Nov: a train timed from the berths alone keeps its closure until its barrier is up');
+{
+  // 5E13 (ECS) with no timetable or board entry linked: berth-first times it from the berths. It crossed at 10:19:52;
+  // the barrier comes up 40 s after an eastbound passenger/ECS clear step (openLagSecs.east.passenger), 10:20:32. Its
+  // closure used to vanish at the clear step, because only APPROACHING trains were timed from the berths; a linked
+  // train keeps its entry while CROSSED. 14 days (10-23 Nov): 1.2 min a day of barrier down with the page OPEN.
+  const at13 = s => RealDate.parse(`2026-11-13T${s}Z`);
+  const ev = fs.readFileSync(path.join(__dirname, 'fixtures', 'berth-first', 'crossed-5E13-2026-11-13.jsonl'), 'utf8')
+    .trim().split('\n').map(l => JSON.parse(l)).filter(x => x.ts);
+  const e = engineAt(at13('09:59:00'), []);
+  let i = 0; const st = {}; let source = null;
+  for (let t = at13('09:59:30'); t <= at13('10:22:00'); t += 1000) {
+    NOW = t; e.beat();
+    while (i < ev.length && RealDate.parse(ev[i].ts) <= t) feed(e, ev[i++]);
+    const api = page(e); st[hms(t)] = api.state;
+    if (t === at13('10:19:00')) { const c = closureOf(api, '5E13'); source = c ? c.trains.find(x => x.headcode === '5E13').source : null; }
+  }
+  check('timed from the berths alone', source, 'berth');
+  check('BARRIERS DOWN as it crosses (10:19:50)', st['10:19:50'], 'CLOSED');
+  check('still DOWN after its clear step, until the barrier is up (10:20:00, 10:20:30)', [st['10:20:00'], st['10:20:30']], ['CLOSED', 'CLOSED']);
+  check('clear once the barrier is up (10:20:34)', st['10:20:34'] !== 'CLOSED', true);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

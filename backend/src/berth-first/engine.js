@@ -306,23 +306,35 @@ class BerthFirstEngine {
   // the berths for every approaching train the timing does not otherwise have: one no timetable or board
   // entry is (design §5.4: timed as the class that brings the barrier down earliest, the classic timing's
   // 'fast'), or one whose entry the timing dropped. A train on the approach is never left untimed.
+  //
+  // ...and for a train that has just CROSSED, until its barrier is up (its clear step + the class's open lag): a linked
+  // train keeps its entry while crossed, so its closure runs to barrier-up; one timed from the berths alone lost its
+  // closure at the clear step (5E13 13 Nov: OPEN from 10:19:52, barrier up 10:20:32; 1.2 min a day over 10-23 Nov). Only
+  // when the timing has its clear step, so the closure ends on it rather than being held open for a step to come.
   _select(merged, now) {
     const kept = merged.filter(m => m.bfId != null);
     this._applyRunThrough(kept);
     this.forecast = merged.filter(m => m.bfId == null).map(m => this._forecastRow(m, now)).filter(Boolean);
     const have = new Set(kept.map(m => m.bfId));
+    const berthRow = (v, best) => ({
+      origin: '', destination: '', operator: '', direction: v.dir, bestTime: best, scheduledTime: null,
+      headcode: v.headcode || v.label, uid: null, trainType: v.headcode ? trainTypeOf(v.headcode) : 'passenger',
+      delayMins: 0, isUncertain: true, etaText: 'Live (berths)', source: 'berth', callsAtStation: null,
+      callsAtApproach: null, confidence: 'medium', tdSeen: true, tdSeenAt: null,
+      unidentified: !v.headcode, bfId: v.id, dedupKey: `berth|${v.id}`
+    });
     for (const v of this.view) {
-      if (v.state !== 'approaching' || have.has(v.id)) continue;
-      const floor = now.getTime() + BEST_TIME_FLOOR_MS;
-      const best = new Date(Math.max(v.expectedMs || floor, floor));
-      const hc = v.headcode || v.label;
-      kept.push({
-        origin: '', destination: '', operator: '', direction: v.dir, bestTime: best, scheduledTime: null,
-        headcode: hc, uid: null, trainType: v.headcode ? trainTypeOf(v.headcode) : 'passenger',
-        delayMins: 0, isUncertain: true, etaText: 'Live (berths)', source: 'berth', callsAtStation: null,
-        callsAtApproach: null, confidence: 'medium', tdSeen: true, tdSeenAt: null,
-        unidentified: !v.headcode, bfId: v.id, dedupKey: `berth|${v.id}`
-      });
+      if (have.has(v.id)) continue;
+      if (v.state === 'approaching') {
+        const floor = now.getTime() + BEST_TIME_FLOOR_MS;
+        kept.push(berthRow(v, new Date(Math.max(v.expectedMs || floor, floor))));
+      } else if (v.state === 'crossed' && Number.isFinite(v.expectedMs)) {
+        const row = berthRow(v, new Date(v.expectedMs));       // expectedMs of a crossed train = its clear step
+        const lag = this.timing._getOpenLagSecs(v.dir, row.trainType);
+        if (lag == null || now.getTime() >= v.expectedMs + lag * 1000) continue;
+        if (!this.timing._freshClearStep(row, now)) continue;
+        kept.push(row);
+      }
     }
     return kept;
   }
