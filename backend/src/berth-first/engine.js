@@ -46,7 +46,10 @@ const HELD_MAX_MS = 10 * 60e3;         // a train past its trigger berth longer 
 const DEADLINE_BUFFER_MS = 2 * 60e3;   // allowance past the latest a forecast train should have appeared
 const BEST_TIME_FLOOR_MS = 30e3;       // as the classic timing: never a crossing time in the past
 // After a gap in the feed, how long predictions wait for the trains that entered unseen to make a step and show
-// themselves (an entry placed before the gap counts only once it moves). PROVISIONAL — set from the cut sweep.
+// themselves (an entry placed before the gap counts only once it moves). Measured 24 Nov (fixab/why/s5sweep.sh cut,
+// s5score.js): 84 ten-minute cuts of LA+TB, 6 a day over 10-23 Nov, scored on the 1 s page against the same engine
+// uncut. Crossings it then missed that the uncut engine caught, and seconds of BARRIERS DOWN missing, by settle:
+// 0 s 12 / 1,134 s; 60 s 1 / 310 s; 120 s 1 / 90 s; 180-300 s 1 / 75 s. The 1 left is the 19 Nov describer fault.
 const RECOVERY_SETTLE_MS = 120e3;
 
 // The steps in towards the crossing along each direction's approach chain (td.<dir>.approachChain, nearest last, then
