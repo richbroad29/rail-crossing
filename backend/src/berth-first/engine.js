@@ -39,6 +39,19 @@ const HELD_MAX_MS = 10 * 60e3;         // a train past its trigger berth longer 
 const DEADLINE_BUFFER_MS = 2 * 60e3;   // allowance past the latest a forecast train should have appeared
 const BEST_TIME_FLOOR_MS = 30e3;       // as the classic timing: never a crossing time in the past
 
+// The steps in towards the crossing along each direction's approach chain (td.<dir>.approachChain, nearest last, then
+// the clear step's from-berth), as AREA:BERTH pairs: a label moving along them is a train (tracker APPROACH_STEPS_TRAIN).
+function approachStepsOf(config) {
+  const td = (config && config.td) || {}, out = [];
+  for (const d of Object.keys(config.directions || {})) {
+    const c = td[d] || {};
+    const chain = (c.approachChain || []).slice();
+    if (c.clear && c.clear.from && chain[chain.length - 1] !== c.clear.from) chain.push(c.clear.from);
+    for (let i = 1; i < chain.length; i++) out.push([`${td.area}:${chain[i - 1]}`, `${td.area}:${chain[i]}`]);
+  }
+  return out;
+}
+
 class BerthFirstEngine {
   constructor(id, config, routesFile) {
     this.id = id;
@@ -50,7 +63,8 @@ class BerthFirstEngine {
     this.tracker = new BerthTracker({
       sameBerths: this.routes ? this.routes.sameBerths : [],
       preferArea: this.routes ? this.routes.preferArea : null,
-      knownSteps: this.routes ? this.routes.steps : []
+      knownSteps: this.routes ? this.routes.steps : [],
+      approachSteps: approachStepsOf(config)
     });
     this.timing = new ClosureTiming(id, config);
     this.links = new Map();           // entry record → { id, expectedMs }

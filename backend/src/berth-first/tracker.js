@@ -55,6 +55,13 @@ const isHeadcode = d => typeof d === 'string' && HEADCODE_RE.test(d);
 // in LA, 1 Oct - 18 Nov, 41 of their movements, none crossed Portslade, against 6 of 35 for "****". -T3A
 // stepped T677>0001 at 02:14:37 on 22 Nov and sat there until 04:36: no train.
 const mayBeTrain = d => isHeadcode(d) || !d || /^\*+$/.test(d);
+// ...unless it keeps moving in towards the crossing. A label of any kind that makes APPROACH_STEPS_TRAIN steps in a
+// row along the crossing's approach chain (td.<dir>.approachChain, given as approachSteps) is a train too, shown as
+// unidentified. 3W93 on 16 Nov ran Hove -> Portslade's platform under "-LB-" (T682>T677>0001>0003>0005) and was only
+// renamed 3W93 there, 18 s before it crossed. Over 182 days of LA (22 May - 24 Nov), 14 non-headcode labels stepped
+// along the approach chain: the 7 that never crossed all stopped after ONE step; 6 of the 7 that crossed made two or
+// more (fixab/why/labels.js, 24 Nov).
+const APPROACH_STEPS_TRAIN = 2;
 
 // What a message is, from its fields: from+to a step, from alone a cancel, to alone an interpose. The
 // feed's label says the same; the fields are what the tracker needs, so it reads those.
@@ -72,11 +79,12 @@ class BerthTracker {
    *   preferArea: when a pair is given without an order, the area whose name is kept
    *   onEvent(ev): told of what changed — { type: 'train'|'move'|'relabel'|'gone'|'merge', ... }
    */
-  constructor({ sameBerths = [], preferArea = null, knownSteps = [], onEvent = () => {} } = {}) {
+  constructor({ sameBerths = [], preferArea = null, knownSteps = [], approachSteps = [], onEvent = () => {} } = {}) {
     this.preferArea = preferArea;
     this.onEvent = onEvent;
     this.canonMap = new Map();
     for (const [a, b] of sameBerths) this._same(a, b);
+    this.approachSteps = new Set(approachSteps.map(([a, b]) => `${this.canon(a)}>${this.canon(b)}`));
     this.occ = new Map();          // berth → [entry], oldest first
     this.limbo = [];               // cancelled entries waiting PAIR_MS for the interpose half
     this.recent = [];              // entries started by an interpose in the last PAIR_MS (the other half)
@@ -214,7 +222,8 @@ class BerthTracker {
     if (kept !== e) return kept;
     const copy = this._lateCopyOf(e, toKey, t);
     if (copy) return this._absorb(e, copy, t);
-    const becameTrain = !e.isTrain && e.labels.some(mayBeTrain);
+    e.approachRun = this.approachSteps.has(`${fromKey}>${toKey}`) ? (e.approachRun || 0) + 1 : 0;
+    const becameTrain = !e.isTrain && (e.labels.some(mayBeTrain) || e.approachRun >= APPROACH_STEPS_TRAIN);
     if (becameTrain) { e.isTrain = true; this.onEvent({ type: 'train', entry: e, t }); }
     if (!e.isTrain) return e;
     this.onEvent({ type: 'move', entry: e, from: fromKey, to: toKey, t });
@@ -338,4 +347,4 @@ class BerthTracker {
   }
 }
 
-module.exports = { BerthTracker, kindOf, isHeadcode, mayBeTrain, PAIR_MS, STALE_MS };
+module.exports = { BerthTracker, kindOf, isHeadcode, mayBeTrain, APPROACH_STEPS_TRAIN, PAIR_MS, STALE_MS };
