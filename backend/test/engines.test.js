@@ -30,13 +30,18 @@ function check(label, actual, expected) {
 }
 const throws = fn => { try { fn(); return null; } catch (e) { return e.message; } };
 
-const crossings = defs.loadCrossings();
-const portslade = crossings.portslade;
+const shipped = defs.loadCrossings();
+// Portslade as shipped runs berth-first as a shadow (log only). The checks of today's engine alone use the same
+// definition without that key.
+const portslade = (() => { const d = JSON.parse(JSON.stringify(shipped.portslade)); delete d.shadowEngine; delete d._comment_shadowEngine; return d; })();
+const crossings = { ...shipped, portslade };
 const withKeys = extra => ({ ...JSON.parse(JSON.stringify(portslade)), ...extra });
 
 console.log('\nEngine setting\n');
 {
-  check('Portslade as shipped: engine classic', defs.engineOf(portslade), 'classic');
+  check('Portslade as shipped: engine classic, berth-first as its shadow', [defs.engineOf(shipped.portslade), defs.shadowEngineOf(shipped.portslade)].join(), 'classic,berth-first');
+  check('  ...no definition problems, and its routes load', [defs.definitionProblems(shipped.portslade).length, ...((defs.loadRoutesFor(shipped).portslade || {}).areas || [])].join(), '0,LA,TB');
+  check('Portslade without the shadow key: engine classic', defs.engineOf(portslade), 'classic');
   check('  ...no shadow', defs.shadowEngineOf(portslade), null);
   check('  ...does not use berth-first', defs.usesBerthFirst(portslade), false);
   check('  ...no definition problems', defs.definitionProblems(portslade).length, 0);
@@ -73,7 +78,8 @@ console.log('\nRoutes file\n');
 
 console.log('\nAreas the listener hears\n');
 {
-  check('Portslade as shipped: LA only, as before', crossingTdAreas(crossings).join(), 'LA');
+  check('Portslade without the shadow: LA only, as before', crossingTdAreas(crossings).join(), 'LA');
+  check('Portslade as shipped (berth-first shadow): LA and TB', crossingTdAreas(shipped, defs.loadRoutesFor(shipped)).join(), 'LA,TB');
   check('with berth-first routes: LA then the routes\' other areas',
     crossingTdAreas(crossings, { portslade: { areas: ['TB', 'LA'] } }).join(), 'LA,TB');
 }

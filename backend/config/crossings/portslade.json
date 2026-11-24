@@ -6,6 +6,9 @@
   "crossingType": "MCB-CCTV",
   "signalBox": "Lancing",
 
+  "_comment_shadowEngine": "The berth-first engine runs beside the serving one, fed the same inputs and only logged (cat:closures on change, shadowSummary hourly): berth-first-v1-plan steps 1-6, Rich's push and deploy. It is never served. Remove this key to stop it.",
+  "shadowEngine": "berth-first",
+
   "ldb": {
     "station": "PLD",
     "adjacentStations": ["FSG", "HOV"]
