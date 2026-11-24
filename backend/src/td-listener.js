@@ -349,6 +349,15 @@ function processMessage(body) {
         if (!crossingAreas.has(msg.area_id)) continue;
       }
 
+      // A crossing area's heartbeat (CT, every 30 s per area even when nothing moves): the berth-first engine's
+      // proof the area is alive (berth-first/feed-health.js, design §5.11). Not logged here (td-all has it).
+      if (type === 'CT_MSG' && msg && crossingAreas.has(msg.area_id)) {
+        const hms = Number(msg.time);
+        emitter.emit('heartbeat', { area: msg.area_id, event: 'CT',
+          ts: Number.isFinite(hms) && hms > 0 ? new Date(hms).toISOString() : rx });
+        continue;
+      }
+
       if (!RELEVANT_MSG_TYPES.has(type)) continue;
       if (!msg || !crossingAreas.has(msg.area_id)) continue;
       const ms = Number(msg.time);

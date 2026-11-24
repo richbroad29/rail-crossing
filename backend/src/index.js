@@ -3,6 +3,7 @@ const path = require('path');
 const { pollCrossing } = require('./ldb-poller');
 const { parseScheduleFile, applyUpdateExtract } = require('./schedule-parser');
 const { CrossingEngines } = require('./engines');
+const { readRecentBerthEvents } = require('./berth-first/restart-log');
 const { createApi } = require('./api');
 const logger = require('./logger');
 const tdListener = require('./td-listener');
@@ -299,7 +300,7 @@ function readTodaysTdEntries(area) {
 
 function seedSightingsFromLog(states) {
   const byArea = new Map();
-  for (const state of Object.values(states)) {
+  for (const state of states) {
     const area = state.config && state.config.td && state.config.td.area;
     if (!area) { console.log(`TD sighting seed: ${state.id} — no td.area, nothing to seed`); continue; }
     if (!byArea.has(area)) byArea.set(area, readTodaysTdEntries(area));
@@ -307,7 +308,7 @@ function seedSightingsFromLog(states) {
     if (got.error) { console.log(`TD sighting seed: no log for today (${got.error}) — starting cold`); continue; }
     const mine = got.entries.filter(e => state.ownsTdArea(e.area));
     const n = state.seedSightings(mine);
-    console.log(`TD sighting seed: ${state.id} — ${n} headcodes from ${mine.length} events`);
+    console.log(`TD sighting seed: ${state.id}${state.engine ? ` (${state.engine})` : ''} — ${n} headcodes from ${mine.length} events`);
   }
 }
 
@@ -341,14 +342,20 @@ async function main() {
   scheduleCifArchive();
 
   // Start API server
-  createApi(crossingStates, PORT);
+  createApi(crossingStates, PORT, { berthFirstHealth: () => engines.feedHealth() });
 
   // Start TD feed listener and daily log rotation (additive — does not affect LDB/state path).
   // Route every TD sighting into each crossing-state so that CIF-sourced freight
   // predictions can be marked tdSeen=true once the train enters our area.
   // Rebuild today's first-sighting map before the feed starts, so a restart doesn't
   // resurrect trains that ran hours ago (see CrossingState.seedSightings).
-  seedSightingsFromLog(crossingStates);
+  seedSightingsFromLog(Object.values(crossingStates));
+  // A shadow too (a berth-first engine seeds its copied timing the same way), with a shadow's fault guard.
+  engines.forShadows('sighting seed', sh => seedSightingsFromLog([sh]));
+  // Berth-first restart (design §5.12): replay the logged last hour of berth events into each berth-first engine,
+  // before the feed starts, so trains on the approach are where they were. Until it has run, and until the
+  // timetable is in and every area heard, a berth-first engine publishes "unavailable", never an empty list.
+  engines.restoreFromLogs(readRecentBerthEvents);
 
   // Each crossing takes only its own area's events (CrossingState.ownsTdArea) — berth codes
   // repeat across areas, so an unfiltered fan-out lets a distant train anchor a local closure.
@@ -356,6 +363,8 @@ async function main() {
   // is worth.
   // A shadow engine gets each event too, as its own copy (engines.js).
   tdListener.on('berth', (s) => engines.berth(s));
+  // Each crossing area's 30 s heartbeat, for berth-first's outage detection (design §5.11).
+  tdListener.on('heartbeat', (hb) => engines.heartbeat(hb));
   // The listener hears each crossing's td.area and, for a berth-first crossing, every area its
   // routes cross (td-paths.crossingTdAreas).
   tdListener.start({ areas: crossingTdAreas(crossingsConfig, routesById) });

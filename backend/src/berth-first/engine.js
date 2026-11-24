@@ -18,7 +18,13 @@
 //   POSSIBLE     on a route but outside its last junction, with no timetable or board entry saying it will
 //                cross (design §5.1, D13): not timed; it becomes APPROACHING once inside the junction;
 //   CROSSED      made the clear step in the last few minutes: kept, the barrier may still be down for it;
+//   UNCONFIRMED  last placed before a gap in the feed (an outage, or a restart whose downtime was as long): it
+//                may have moved anywhere unseen, so it is neither timed nor listed until it moves again;
 //   anything else (off the routes, backing out of the approach, a label that never stepped) is not timed.
+// OUTAGE AND RESTART (design §5.11, §5.12, D7, D23; step 5). While any area the routes cross is silent past its
+// limit (feed-health.js), while a fresh start has not yet replayed the logged last hour (restoreFromLog) and
+// loaded the timetable, and for a settling time after a gap, the engine publishes no closures, no countdowns and
+// no forecasts — only `unavailable`, with the agreed message. Its own state keeps updating underneath.
 // A timetable or board train the berths have NOT seen is a FORECAST and never makes a closure (D14). It is
 // listed on its own (api.berthFirst.forecast) with the time the timing would give it — "around HH:MM" — and
 // becomes NOT YET SEEN once it is past the latest moment the berths should have shown it (design §5.8; v1
@@ -32,12 +38,16 @@ const { linkEntries } = require('./link');
 const ClosureTiming = require('./timing');
 const { trainTypeOf } = require('../train-type');
 const { parseLondonWallClock } = require('../time-utils');
+const { FeedHealth, OUTAGE_MESSAGE } = require('./feed-health');
 
 const CROSSED_KEEP_MS = 10 * 60e3;     // a train is kept this long after its clear step (barrier-up lags are < 1 min)
 const STALL_DEFAULT_SECS = 300;        // a berth with too few trains for a measured stall threshold
 const HELD_MAX_MS = 10 * 60e3;         // a train past its trigger berth longer than this (and 3x the threshold) is a left-over label
 const DEADLINE_BUFFER_MS = 2 * 60e3;   // allowance past the latest a forecast train should have appeared
 const BEST_TIME_FLOOR_MS = 30e3;       // as the classic timing: never a crossing time in the past
+// After a gap in the feed, how long predictions wait for the trains that entered unseen to make a step and show
+// themselves (an entry placed before the gap counts only once it moves). PROVISIONAL — set from the cut sweep.
+const RECOVERY_SETTLE_MS = 120e3;
 
 // The steps in towards the crossing along each direction's approach chain (td.<dir>.approachChain, nearest last, then
 // the clear step's from-berth), as AREA:BERTH pairs: a label moving along them is a train (tracker APPROACH_STEPS_TRAIN).
@@ -70,6 +80,13 @@ class BerthFirstEngine {
     this.links = new Map();           // entry record → { id, expectedMs }
     this.forecast = [];               // the timing's trains the berths have not seen, as last selected
     this.view = [];                   // the tracked trains as last classified
+    // Outage and restart (step 5). Until restoreFromLog has run (index.js, at startup, before the feed) and a
+    // timetable has arrived, the engine is still starting and publishes nothing.
+    this.health = new FeedHealth(this.routesFile.areas || [], this.routesFile.feedHealth || {}, Date.now());
+    this.startedAt = Date.now();
+    this.rebuilt = null;              // { events, sources, from, to, lastRx } once the logged last hour is replayed
+    this.scheduleLoaded = false;
+    this.settleMs = RECOVERY_SETTLE_MS;
     const engine = this;
     this.timing.bf = {
       entry: rec => engine.links.get(rec) || null,
@@ -91,19 +108,65 @@ class BerthFirstEngine {
   // The board poll's cancelled services (design §5.5): a train the berths have whose stop at the crossing's station
   // is cancelled runs through it. Replaced on every poll, as the board itself is.
   updateLdbCancelled(services) { this.ldbCancelled = Array.isArray(services) ? services : []; }
-  updateScheduleTrains(trains) { this.timing.updateScheduleTrains(trains || []); }
+  updateScheduleTrains(trains) { this.scheduleLoaded = true; this.timing.updateScheduleTrains(trains || []); }
 
   // Every berth event the listener emits (index.js / engines.js fan each out to every engine): the
   // tracker takes those of the routes' areas, the copied timing those of the crossing's own area.
   recordTdEvent(evt) {
     if (!evt) return false;
+    if (this.ownsTdArea(evt.area)) this.health.heard(evt.area, Date.parse(evt.ts), Date.now());
+    return this._takeEvent(evt);
+  }
+
+  _takeEvent(evt) {
     let taken = false;
     if (this.ownsTdArea(evt.area)) { this.tracker.event(evt); taken = true; this.timing._markDirty(); }
     if (this.timing.recordTdEvent(evt)) taken = true;
     return taken;
   }
 
-  // Restart rebuild is step 5; until then the copied timing seeds its sightings as today's does.
+  // An area's heartbeat (td-listener 'heartbeat', every 30 s per area): proof the feed is alive when no train moves.
+  recordTdHeartbeat(hb) {
+    if (!hb || !this.ownsTdArea(hb.area)) return false;
+    this.health.heard(hb.area, Date.parse(hb.ts), Date.now());
+    return true;
+  }
+
+  // The areas whose logged last hour a restart replays (restart-log.js).
+  restoreAreas() { return [...this.areas]; }
+
+  // Restart (design §5.12): replay the logged berth events of the last hour (oldest first, as td-listener emitted
+  // them) through the live path, so every train on the approach is back where it was, before the feed is heard
+  // again. They are history, so they are not proof the feed is alive now. `lastRxMs`: when the previous process
+  // last heard the feed; a downtime past an area's silence limit is a gap like an outage (feed-health.js). An
+  // empty replay is a cold start, and is still a start: the engine then waits only for the timetable and the feed.
+  restoreFromLog(events, { lastRxMs = null, sources = {}, fromMs = null, toMs = null } = {}) {
+    const list = Array.isArray(events) ? events : [];
+    let last = null;
+    for (const e of list) { this._takeEvent(e); const t = Date.parse(e.ts); if (Number.isFinite(t) && (last === null || t > last)) last = t; }
+    // The old process heard the feed at least until its last logged event, whatever its national log says.
+    const from = Number.isFinite(lastRxMs) ? (last !== null ? Math.max(lastRxMs, last) : lastRxMs) : last;
+    if (from !== null) this.health.markRestart(from);
+    this.rebuilt = { events: list.length, sources, from: fromMs, to: toMs, lastRx: from };
+    return this.rebuilt;
+  }
+
+  // Why the engine cannot predict now, or null. In order: still starting (the logged hour not yet replayed, no
+  // timetable yet, or an area not yet heard since the start), an area silent past its limit, or the settling
+  // time after a gap. `since` is when this spell began (wall ms).
+  availability(nowMs = Date.now()) {
+    const fp = this.health.problem(nowMs);
+    if (fp && fp.reason === 'feed') return fp;
+    if (!this.rebuilt || !this.scheduleLoaded || fp) {
+      return { reason: 'starting', since: this.startedAt, ...(fp ? { areas: fp.areas } : {}),
+        waiting: [!this.rebuilt && 'restore', !this.scheduleLoaded && 'timetable', fp && 'feed'].filter(Boolean) };
+    }
+    const rec = this.health.lastRecovery();
+    if (rec && nowMs < rec.toWall + this.settleMs) return { reason: 'recovering', since: rec.fromWall, until: rec.toWall + this.settleMs, areas: [rec.area] };
+    return null;
+  }
+
+  // The copied timing seeds its day's sightings from the crossing area's log, as today's engine does (index.js).
   seedSightings(entries) { return this.timing.seedSightings(entries); }
 
   _recompute() { this.timing._recompute(); }
@@ -116,6 +179,12 @@ class BerthFirstEngine {
     this.tracker.tick(t);
     for (const e of this.tracker.trains()) {
       const on = this.routes.onRoute(e.key);
+      // Placed before a gap in the feed: it may have moved on, crossed or left unseen. It counts again when it
+      // moves (the tracker's step out of this berth, or its skipped-berth rule, picks it up).
+      if (Object.values(on).some(n => n >= 0) && this.health.placedBeforeBlind(e.key.split(':')[0], e.lastMove)) {
+        out.push({ id: e.id, entry: e, headcode: e.headcode || null, label: e.label, dir: null, state: 'unconfirmed', berth: e.key, expectedMs: null });
+        continue;
+      }
       const last = e.path.length > 1 ? e.path[e.path.length - 2][0] : null;
       let pick = null;
       for (const [d, n] of Object.entries(on)) {
@@ -286,9 +355,20 @@ class BerthFirstEngine {
     const api = this.timing.getApiState(limit);
     api.engine = 'berth-first';
     const now = Date.now();
+    const un = this.availability(now);
+    if (un) {
+      // Design §6 "Feed down or rebuilding": the message, and nothing else — no closure, countdown or forecast.
+      Object.assign(api, { state: 'UNAVAILABLE', currentClosure: null, nextClosure: null, upcomingClosures: [], closureCount: 0,
+        nextCloseTime: null, nextOpenTime: null });
+      api.unavailable = { reason: un.reason, since: new Date(un.since).toISOString(), message: OUTAGE_MESSAGE,
+        ...(un.areas && un.areas.length ? { areas: un.areas } : {}), ...(un.until ? { until: new Date(un.until).toISOString() } : {}),
+        ...(un.waiting ? { waiting: un.waiting } : {}) };
+      api.berthFirst = { forecast: [], trains: [] };
+      return api;
+    }
     api.berthFirst = {
       forecast: this.forecast.filter(f => Date.parse(f.expectedCrossing) > now - 10 * 60e3),
-      trains: this.view.filter(v => v.state !== 'crossed').map(v => ({
+      trains: this.view.filter(v => v.state !== 'crossed' && v.state !== 'unconfirmed').map(v => ({
         id: v.id, label: v.label, headcode: v.headcode, direction: v.dir, state: v.state, berth: v.berth,
         expected: v.expectedMs ? new Date(v.expectedMs).toISOString() : null, linked: !!v.linked,
         unidentified: !!v.entry.unidentified, ...(v.ranThrough && v.ranThrough.size ? { ranThrough: [...v.ranThrough] } : {})
@@ -301,7 +381,21 @@ class BerthFirstEngine {
   shadowDetail() {
     const counts = {};
     for (const v of this.view) counts[v.state] = (counts[v.state] || 0) + 1;
-    return { trains: counts, unlinkedApproaching: this.view.filter(v => v.state === 'approaching' && !v.linked).length, tracker: this.tracker.stats };
+    const un = this.availability(Date.now());
+    return { trains: counts, unlinkedApproaching: this.view.filter(v => v.state === 'approaching' && !v.linked).length, tracker: this.tracker.stats,
+      ...(un ? { unavailable: un.reason } : {}) };
+  }
+
+  // For GET /health: whether this engine can predict, why not, and each area's silence (design §5.11).
+  feedHealth(nowMs = Date.now()) {
+    const un = this.availability(nowMs);
+    return {
+      engine: 'berth-first', available: !un,
+      ...(un ? { reason: un.reason, since: new Date(un.since).toISOString() } : {}),
+      restored: this.rebuilt ? { events: this.rebuilt.events, sources: this.rebuilt.sources } : null,
+      timetable: this.scheduleLoaded,
+      areas: this.health.status(nowMs).areas
+    };
   }
 }
 

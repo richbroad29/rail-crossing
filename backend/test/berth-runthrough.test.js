@@ -32,6 +32,15 @@ function check(label, actual, expected) {
   else { console.log(`  FAIL  ${label}\n          got:      ${a}\n          expected: ${e}`); fail++; }
 }
 
+// Step 5: a healthy feed. The engine publishes only once it has replayed its logged hour (empty here: a cold start)
+// and heard every area of its routes; the heartbeats then come every 30 s, as the real feed's do.
+function healthyFeed(e) {
+  quiet(() => e.restoreFromLog([]));
+  let last = NOW - 30e3;
+  const beat = () => { const end = NOW; while (last + 30e3 <= end) { last += 30e3; NOW = last; for (const a of routes.areas) e.recordTdHeartbeat({ area: a, ts: new RealDate(last).toISOString(), event: 'CT' }); } NOW = end; };
+  beat();
+  return beat;
+}
 const hms = ms => new RealDate(ms).toISOString().slice(11, 19);
 const at = s => RealDate.parse(`2026-11-18T${s}Z`);
 const N43 = { uid: 'G88658', headcode: '1N43', direction: 'east', estimatedCrossingMins: 17 * 60 + 28.4, callsAtStation: true, callsAtApproach: true, origin: 'SOTON', destination: 'BRGHTN' };
@@ -41,11 +50,13 @@ function run(steps, tt = N43, cancelled = null) {
   NOW = at(steps[0][2]) - 60e3;
   const e = quiet(() => new BerthFirstEngine('portslade', JSON.parse(JSON.stringify(def)), routes));
   if (cancelled) e.updateLdbCancelled(cancelled);
+  const beat = healthyFeed(e);
   quiet(() => e.updateScheduleTrains([{ category: 'XX', operator: 'SN', trainType: 'passenger', source: 'cif', legIndex: 0, legCount: 1,
     runsAsRequired: false, daysPattern: '1111100', ...tt }]));
   const hc = tt.headcode, out = {};
   for (const [from, to, t] of steps) {
     NOW = at(t);
+    beat();
     quiet(() => { e.recordTdEvent({ headcode: hc, ts: new RealDate(NOW).toISOString(), area: 'LA', event: 'CA', from, to }); e._recompute(); });
     const m = (e.timing._bfMerged || []).find(x => x.headcode === hc);
     const api = quiet(() => e.getApiState(10));

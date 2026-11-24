@@ -2,7 +2,8 @@ const http = require('http');
 const tdListener = require('./td-listener');
 const feedLogger = require('./feed-logger');
 
-function createApi(crossingStates, port = 3000) {
+// opts.berthFirstHealth (optional): () => each berth-first engine's feed state, by crossing and role (engines.js).
+function createApi(crossingStates, port = 3000, opts = {}) {
   const server = http.createServer((req, res) => {
     // CORS headers
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -36,16 +37,22 @@ function createApi(crossingStates, port = 3000) {
         // threshold. Deliberately still HTTP 200 — this reports on a dependency, and a
         // non-200 would read as "the API is down", which it is not.
         const td = tdListener.feedHealth();
+        // Berth-first (design §5.11): an engine that cannot predict says so here too. A SERVING engine out on the
+        // feed degrades `status`; a shadow is reported only (it is logged, never served).
+        let berthFirst = null;
+        try { berthFirst = opts.berthFirstHealth ? opts.berthFirstHealth() : null; } catch (e) { berthFirst = { error: e.message }; }
+        const servingOut = !!berthFirst && Object.values(berthFirst).some(c => c && c.serving && c.serving.reason === 'feed');
         res.writeHead(200);
         res.end(JSON.stringify({
-          status: td.started && td.stale ? 'degraded' : 'ok',
+          status: (td.started && td.stale) || servingOut ? 'degraded' : 'ok',
           uptime: process.uptime(),
           crossings: Object.keys(crossingStates).length,
           memory: Math.round(process.memoryUsage().rss / 1024 / 1024) + 'MB',
           time: new Date().toISOString(),
           td,
           // Log-only feeds (VSTP, TRUST): reported, never part of `status` — nothing predicts from them.
-          feeds: feedLogger.feedHealth()
+          feeds: feedLogger.feedHealth(),
+          ...(berthFirst && Object.keys(berthFirst).length ? { berthFirst } : {})
         }));
         return;
       }

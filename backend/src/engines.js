@@ -94,6 +94,59 @@ class CrossingEngines {
     for (const id of Object.keys(this.shadows)) this._toShadow(id, 'berth', sh => sh.recordTdEvent({ ...evt }));
   }
 
+  // An area's heartbeat (td-listener 'heartbeat') to every engine that watches feed health (berth-first); the
+  // classic engine has no such method and is handed nothing.
+  heartbeat(hb) {
+    for (const st of Object.values(this.serving)) if (typeof st.recordTdHeartbeat === 'function') st.recordTdHeartbeat(hb);
+    for (const id of Object.keys(this.shadows)) this._toShadow(id, 'heartbeat', sh => {
+      if (typeof sh.recordTdHeartbeat === 'function') sh.recordTdHeartbeat({ ...hb });
+    });
+  }
+
+  // fn(shadow) for each crossing's shadow, under the shadow fault guard.
+  forShadows(what, fn) { for (const id of Object.keys(this.shadows)) this._toShadow(id, what, fn); }
+
+  // Every engine, serving and shadow, as [id, role, engine].
+  all() {
+    const out = Object.entries(this.serving).map(([id, e]) => [id, 'serving', e]);
+    for (const [id, e] of Object.entries(this.shadows)) out.push([id, 'shadow', e]);
+    return out;
+  }
+
+  // Restart (berth-first design §5.12): each engine that rebuilds from the log (restoreFromLog) is handed the
+  // logged berth events of the last hour for its areas, read by `read` (berth-first/restart-log.js), before the
+  // feed starts. One read per distinct set of areas. A shadow's failure is caught as any shadow call is.
+  restoreFromLogs(read) {
+    const cache = new Map();
+    for (const [id, role, eng] of this.all()) {
+      if (typeof eng.restoreFromLog !== 'function') continue;
+      const go = e => {
+        const areas = e.restoreAreas();
+        const key = areas.slice().sort().join('+');
+        if (!cache.has(key)) cache.set(key, read({ areas }));
+        const r = cache.get(key);
+        const got = e.restoreFromLog(r.events, { lastRxMs: r.lastRxMs, sources: r.sources, fromMs: r.fromMs, toMs: r.toMs });
+        console.log(`[${id}] ${role} ${e.engine}: restored ${got.events} berth events of the last hour (` +
+          Object.entries(r.sources).map(([a, s]) => `${a} from its ${s}`).join(', ') + `); feed last heard ` +
+          (got.lastRx ? new Date(got.lastRx).toISOString() : 'unknown') + (r.notes.length ? `; ${r.notes.join('; ')}` : ''));
+      };
+      if (role === 'serving') {
+        try { go(eng); } catch (e) { console.error(`[${id}] restore failed: ${e && e.stack || e}`); eng.restoreFromLog([]); }
+      } else this._toShadow(id, 'restore', sh => { try { go(sh); } catch (e) { sh.restoreFromLog([]); throw e; } });
+    }
+  }
+
+  // For GET /health: each berth-first engine's feed state (design §5.11), by crossing and role.
+  feedHealth() {
+    const out = {};
+    for (const [id, role, eng] of this.all()) {
+      if (typeof eng.feedHealth !== 'function') continue;
+      try { (out[id] = out[id] || {})[role] = eng.feedHealth(); }
+      catch (e) { (out[id] = out[id] || {})[role] = { error: e && e.message }; }
+    }
+    return out;
+  }
+
   // Shadow logging (berth-first-v1-plan §3): for each crossing that HAS a shadow, both engines'
   // published closures go into the daily log as cat:"closures" whenever they change, with an
   // `engine` and `role` field, so the two can be compared from logs alone. The page state is derived
@@ -112,12 +165,15 @@ class CrossingEngines {
   _logIfChanged(id, role, engine) {
     const api = engine.getApiState(40);
     const closures = (api.upcomingClosures || []).map(closureSummary);
-    const sig = JSON.stringify(closures);
+    // An engine that cannot predict (berth-first outage or restart) publishes no closures: logged as its own change.
+    const unavailable = api.unavailable ? api.unavailable.reason : null;
+    const sig = JSON.stringify([closures, unavailable]);
     const key = `${id}|${role}`;
     if (this._lastSig[key] === sig) return;
     this._lastSig[key] = sig;
     this._log('closures', {
       crossing: id, role, engine: engine.engine || 'classic', state: api.state, closures,
+      ...(api.unavailable ? { unavailable: { reason: api.unavailable.reason, since: api.unavailable.since, ...(api.unavailable.areas ? { areas: api.unavailable.areas } : {}) } } : {}),
       ...(role === 'shadow' && typeof engine.shadowDetail === 'function' ? { detail: engine.shadowDetail() } : {})
     });
   }

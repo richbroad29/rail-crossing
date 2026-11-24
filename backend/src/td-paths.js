@@ -27,13 +27,14 @@ function isValidArea(area) {
   return typeof area === 'string' && AREA_RE.test(area);
 }
 
-function tdLogDir(area) {
+// `root` (optional) is another copy of data/logs/td — the berth-first restart reader's test seam.
+function tdLogDir(area, root = TD_LOG_ROOT) {
   if (!isValidArea(area)) throw new Error(`invalid TD area id: ${JSON.stringify(area)}`);
-  return area === ROOT_AREA ? TD_LOG_ROOT : path.join(TD_LOG_ROOT, area);
+  return area === ROOT_AREA ? root : path.join(root, area);
 }
 
-function tdLogFile(area, dateStamp) {
-  return path.join(tdLogDir(area), `td-${dateStamp}.jsonl`);
+function tdLogFile(area, dateStamp, root = TD_LOG_ROOT) {
+  return path.join(tdLogDir(area, root), `td-${dateStamp}.jsonl`);
 }
 
 // The distinct TD areas the configured crossings need C-Class from, in config order.

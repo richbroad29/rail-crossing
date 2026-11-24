@@ -28,14 +28,25 @@ function check(label, actual, expected) {
 const at = s => RealDate.parse(`2026-11-16T${s}Z`);
 const hms = ms => new RealDate(ms).toISOString().slice(11, 19);
 
+// Step 5: a healthy feed. The engine publishes only once it has replayed its logged hour (empty here: a cold start)
+// and heard every area of its routes; the heartbeats then come every 30 s, as the real feed's do.
+function healthyFeed(e) {
+  quiet(() => e.restoreFromLog([]));
+  let last = NOW - 30e3;
+  const beat = () => { const end = NOW; while (last + 30e3 <= end) { last += 30e3; NOW = last; for (const a of routes.areas) e.recordTdHeartbeat({ area: a, ts: new RealDate(last).toISOString(), event: 'CT' }); } NOW = end; };
+  beat();
+  return beat;
+}
 // Feed [event, label, from, to, 'HH:MM:SS'] in order; after each, what the engine shows.
 function run(events) {
   NOW = at(events[0][4]) - 60e3;
   const e = quiet(() => new BerthFirstEngine('portslade', JSON.parse(JSON.stringify(def)), routes));
   quiet(() => e.updateScheduleTrains([]));
+  const beat = healthyFeed(e);
   const out = [];
   for (const [event, headcode, from, to, t] of events) {
     NOW = at(t);
+    beat();
     quiet(() => { e.recordTdEvent({ headcode, ts: new RealDate(NOW).toISOString(), area: 'LA', event, from, to }); e._recompute(); });
     const api = quiet(() => e.getApiState(10));
     const trains = api.berthFirst.trains.filter(x => x.state === 'approaching');
