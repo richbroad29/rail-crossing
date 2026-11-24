@@ -27,7 +27,10 @@ shared/crossing.js               Public app: presentation over the core
 shared/crossings.json            Per-crossing config (timing params, IDs, feedback URL)
 shared/crossing.css              Styles
 shared/apps-script-feedback.gs   Copy of the Google Apps Script behind the feedback Sheet
-shared/icon-180.png, icon.svg    Icons
+shared/theme.css                 EVERY colour the public pages use (and the font) — change the look here only
+shared/fonts/                    Schibsted Grotesk, self-hosted (SIL OFL)
+shared/icon.svg                  The mark (2026-11 rebrand "U2"): favicon + header logo; the PNGs are made from it
+shared/icon-*.png, /favicon.ico  Made by scripts/render-icons.mjs from shared/icon.svg — never edit by hand
 shared/track.js                  Usage counts (GoatCounter events); event names in docs/analytics.md
 shared/finder.js                 FINDING CORE — search / nearest / recents / request links, shared by menu + homepage
 shared/menu.js, menu.css         The burger menu on crossing pages
@@ -37,6 +40,7 @@ scripts/crossing-list.csv        MASTER crossing list (Network Rail + road/town/
 scripts/build-crossings.js       Generates every page/file marked generated, from definitions + the list
 scripts/templates/               crossing-page.html, home-page.html
 scripts/render-local-maps.mjs    Makes each live crossing's local map picture (Mac + Chrome)
+scripts/render-icons.mjs         Makes the icon PNGs and favicon.ico from shared/icon.svg (Mac + Chrome)
 scripts/finder-test.js           Tests for shared/finder.js against the search rules
 README.md                        Almost empty
 portslade/observe/               Barrier-observation PWA — field data-collection tool (separate app, /portslade/observe/)
@@ -113,6 +117,18 @@ the countdown says, never when the app asserts the barrier is down. Absent = unl
 behaviour); 0 = never queued. For a new crossing: run the backtest, read N off §6a.
 
 The **frontend has no build step** — edit files, push to `main`, GitHub Pages deploys within ~1 minute.
+
+### The look lives in `shared/theme.css` (2026-11 rebrand, "Seaside")
+
+Every colour on the public pages is a `--rc-*` name in `shared/theme.css`; the stylesheets refer to the names
+and never to a colour. Code picks a CLASS, never a colour: `crossing.js` sets `st-*` on the status box,
+`cv-*` on the countdown values and `bw-*` on `#barrierWrap`; `home.js` reads the map pins and map style with
+`tok()`; `build-crossings.js` and `render-local-maps.mjs` read theirs from the file too. `closure-card.css`
+keeps the observer's own dark colours as fallbacks (the observer does not load theme.css). The public page
+shows closures as ROWS (`CLOSURE_CARD.rowHtml`, `listHtml(…, { layout: 'rows' })`); the observer keeps the
+cards. Status words (BARRIERS DOWN …) and card labels (Next Open …) are sentence-cased by CSS only: the DOM
+text the audit tools read is unchanged. Schibsted Grotesk's tabular figures widen `:` and `.`, so times and
+distances are not set tabular.
 
 ### Run `sh scripts/bump-assets.sh` before pushing a frontend change
 

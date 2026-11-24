@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Makes each crossing page's local map picture (burger-menu ticket 12): ~550 m across (zoom 15), centred on
 // the crossing, the crossing unmistakable, nearby named businesses from OpenStreetMap (cafés, pubs,
-// shops, supermarkets, petrol stations, pharmacies; nearest 8), the street map in /map's calm dark
-// look, and the OpenStreetMap credit. Writes <id>/local-map.webp and <id>/local-map.json (what is
+// shops, supermarkets, petrol stations, pharmacies; nearest 8), the street map in /map's calm light
+// look (the site's colours, read from shared/theme.css since the 2026-11 rebrand), and the OpenStreetMap credit. Writes <id>/local-map.webp and <id>/local-map.json (what is
 // on it, for the page's alt text). scripts/build-crossings.js puts it in the About block.
 //
 // Run on the Mac (needs Google Chrome; ~20 s a crossing), after `node scripts/build-crossings.js`,
@@ -31,6 +31,9 @@ const ZOOM = Number(opt('zoom') || 15);
 const OUT = opt('out');                            // try a zoom without touching the pages: --out=<dir>
 const metresPerPx = lat => 40075016.686 * Math.cos(lat * Math.PI / 180) / (512 * 2 ** ZOOM);
 const UA = 'railcrossing.uk local map build';
+// The picture's colours and map style come from shared/theme.css, the one list of the site's colours.
+const THEME_CSS = readFileSync(join(ROOT, 'shared', 'theme.css'), 'utf8');
+const T = name => { const m = THEME_CSS.match(new RegExp(`--rc-${name}:\\s*([^;]+);`)); if (!m) throw new Error(`shared/theme.css has no --rc-${name}`); return m[1].trim(); };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const MISSING = argv.includes('--missing');
 const only = argv.find(a => !a.startsWith('--'));
@@ -124,16 +127,17 @@ function page(e, biz, stns) {
   const stp = { type: 'FeatureCollection', features: stns.map(st => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [st.lon, st.lat] }, properties: { name: `${st.name} station` } })) };
   return `<!doctype html><html><head><meta charset="utf-8">
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css">
-<style>html,body{margin:0;background:#0c0c0c}#m{width:${W}px;height:${H}px}
-.lx{width:13px;height:13px;border-radius:50%;background:#DC2626;border:2.5px solid #fff;box-shadow:0 0 0 1.5px #0F172A,0 0 0 5px rgba(220,38,38,.35)}
-.lxl{position:absolute;top:22px;left:9px;transform:translateX(-50%);white-space:nowrap;text-align:center;background:#fff;color:#0F172A;font:700 9.5px/1.2 -apple-system,system-ui,sans-serif;padding:2px 5px;border-radius:5px;box-shadow:0 1px 4px rgba(0,0,0,.5)}
-.cr{position:absolute;right:0;bottom:0;font:9px/1.2 -apple-system,system-ui,sans-serif;color:#94A3B8;background:rgba(12,12,12,.75);padding:1px 4px;border-radius:3px}</style>
+<style>@font-face{font-family:'Schibsted Grotesk';font-weight:400 900;src:url(/shared/fonts/schibsted-grotesk-latin.woff2) format('woff2')}
+html,body{margin:0;background:${T('map-sea')}}#m{width:${W}px;height:${H}px}
+.lx{width:13px;height:13px;border-radius:50%;background:${T('lamp')};border:2.5px solid #fff;box-shadow:0 0 0 1.5px ${T('text')},0 0 0 5px rgba(220,38,38,.35)}
+.lxl{position:absolute;top:22px;left:9px;transform:translateX(-50%);white-space:nowrap;text-align:center;background:#fff;color:${T('text')};font:700 9.5px/1.2 'Schibsted Grotesk',-apple-system,system-ui,sans-serif;padding:2px 5px;border-radius:5px;box-shadow:0 1px 4px rgba(0,0,0,.25)}
+.cr{position:absolute;right:0;bottom:0;font:9px/1.2 'Schibsted Grotesk',-apple-system,system-ui,sans-serif;color:${T('dim')};background:${T('map-attrib')};padding:1px 4px;border-radius:3px}</style>
 <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script><script src="/map/style.js"></script></head>
 <body><div id="m"></div><div class="cr">© OpenStreetMap contributors · OpenMapTiles · OpenFreeMap</div><script>
-var map = new maplibregl.Map({ container: 'm', style: 'https://tiles.openfreemap.org/styles/dark', center: [${e.lon}, ${e.lat}],
+var map = new maplibregl.Map({ container: 'm', style: 'https://tiles.openfreemap.org/styles/${T('map-base')}', center: [${e.lon}, ${e.lat}],
   zoom: ${ZOOM}, interactive: false, attributionControl: false, fadeDuration: 0, preserveDrawingBuffer: true });
 map.on('load', function () {
-  RM.style.planStyle(map.getStyle(), 'dark').forEach(function (o) { try { if (!map.getLayer(o.id)) return;
+  RM.style.planStyle(map.getStyle(), '${T('map-plan')}').forEach(function (o) { try { if (!map.getLayer(o.id)) return;
     if (o.op === 'visibility') map.setLayoutProperty(o.id, 'visibility', o.value); else if (o.op === 'paint') map.setPaintProperty(o.id, o.prop, o.value);
     else if (o.op === 'minzoom') map.setLayerZoomRange(o.id, o.min, 24); else if (o.op === 'filter') map.setFilter(o.id, o.value); } catch (x) {} });
   // Road names: the base style labels a road at most once every 350 px, wider than this whole picture,
@@ -141,15 +145,15 @@ map.on('load', function () {
   ['highway_name_other', 'highway_name_motorway'].forEach(function (id) { if (map.getLayer(id)) {
     map.setLayoutProperty(id, 'symbol-spacing', 120); map.setLayoutProperty(id, 'text-padding', 1); } });
   map.addSource('biz', { type: 'geojson', data: ${JSON.stringify(pts)} });
-  map.addLayer({ id: 'biz-dot', type: 'circle', source: 'biz', paint: { 'circle-radius': 3.5, 'circle-color': '#F59E0B', 'circle-stroke-color': '#0F172A', 'circle-stroke-width': 1.2 } });
+  map.addLayer({ id: 'biz-dot', type: 'circle', source: 'biz', paint: { 'circle-radius': 3.5, 'circle-color': '${T('warn')}', 'circle-stroke-color': '#FFFFFF', 'circle-stroke-width': 1.2 } });
   map.addLayer({ id: 'biz-name', type: 'symbol', source: 'biz', layout: { 'text-field': ['get', 'name'], 'text-font': ['Noto Sans Regular'], 'text-size': 10,
-    'text-variable-anchor': ['top', 'bottom', 'right', 'left'], 'text-radial-offset': 0.55, 'text-max-width': 8, 'text-padding': 1 }, paint: { 'text-color': '#FCD34D', 'text-halo-color': '#0c0c0c', 'text-halo-width': 1.5 } });
+    'text-variable-anchor': ['top', 'bottom', 'right', 'left'], 'text-radial-offset': 0.55, 'text-max-width': 8, 'text-padding': 1 }, paint: { 'text-color': '${T('warn')}', 'text-halo-color': '#FFFFFF', 'text-halo-width': 1.5 } });
   // Stations last, so their names win any clash with a business (the top layer is placed first).
   map.addSource('stn', { type: 'geojson', data: ${JSON.stringify(stp)} });
-  map.addLayer({ id: 'stn-dot', type: 'circle', source: 'stn', paint: { 'circle-radius': 4, 'circle-color': '#E2E8F0', 'circle-stroke-color': '#3B82F6', 'circle-stroke-width': 2 } });
+  map.addLayer({ id: 'stn-dot', type: 'circle', source: 'stn', paint: { 'circle-radius': 4, 'circle-color': '#FFFFFF', 'circle-stroke-color': '${T('pin-live')}', 'circle-stroke-width': 2 } });
   map.addLayer({ id: 'stn-name', type: 'symbol', source: 'stn', layout: { 'text-field': ['get', 'name'], 'text-font': ['Noto Sans Bold'], 'text-size': 10.5,
     'text-variable-anchor': ['top', 'bottom', 'right', 'left', 'top-right', 'top-left', 'bottom-right', 'bottom-left'], 'text-radial-offset': 0.7, 'text-max-width': 9 },
-    paint: { 'text-color': '#FFFFFF', 'text-halo-color': '#0c0c0c', 'text-halo-width': 1.8 } });
+    paint: { 'text-color': '${T('text')}', 'text-halo-color': '#FFFFFF', 'text-halo-width': 1.8 } });
   // The crossing's dot and label are HTML on top of the map, so the map can't see them when it works
   // out where names fit. Transparent images the size of them, in the top layers (placed first), make
   // every name keep clear of them, moving to another side where it can (text-variable-anchor).
@@ -179,6 +183,7 @@ const pages = {};
 const server = createServer((req, res) => {
   const u = new URL(req.url, 'http://x');
   if (pages[u.pathname]) { res.writeHead(200, { 'content-type': 'text/html' }); return res.end(pages[u.pathname]); }
+  if (u.pathname === '/shared/fonts/schibsted-grotesk-latin.woff2') { res.writeHead(200, { 'content-type': 'font/woff2' }); return res.end(readFileSync(join(ROOT, 'shared', 'fonts', 'schibsted-grotesk-latin.woff2'))); }
   if (u.pathname === '/map/style.js') { res.writeHead(200, { 'content-type': 'text/javascript' }); return res.end(readFileSync(join(ROOT, 'map', 'style.js'))); }
   res.writeHead(404); res.end();
 }).listen(0);
