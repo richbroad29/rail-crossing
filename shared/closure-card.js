@@ -96,7 +96,7 @@
     html += '<div class="closure-hdr">';
 
     if (isCurrent) {
-      html += '<span class="closure-time" style="color:#FCA5A5">NOW — ' + P.fmtShort(p.end) + '</span>';
+      html += '<span class="closure-time closure-now">NOW — ' + P.fmtShort(p.end) + '</span>';
       // How much longer it stays shut, counting down — the SAME value and the same
       // formatter as the Next Open card above, deliberately. derive() sets that card from
       // `current.end` and `current.holdingOpen` (predict.js), which is exactly the pair

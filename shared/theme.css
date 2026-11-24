@@ -1,0 +1,126 @@
+/*
+ * shared/theme.css — EVERY colour the public pages use, in one place.
+ *
+ * Loaded first by every generated page (crossing, coming-soon, county, homepage), before the
+ * page's own stylesheets, which refer to these names and never to a colour directly. Change the
+ * look of the site here and nowhere else.
+ *
+ * Also read from code:
+ *   - shared/home.js reads the --rc-pin-* and --rc-map-* values for the homepage map, which
+ *     MapLibre draws itself and CSS cannot reach.
+ *   - scripts/build-crossings.js reads --rc-browser-bar and --rc-app-splash into each page's
+ *     <meta name="theme-color"> and the web-app manifests, which cannot refer to CSS.
+ *
+ * NOT here, on purpose:
+ *   - The observer app (portslade/observe/) has its own look in observe.css. It shares
+ *     closure-card.css, which falls back to the observer's dark values when this file is absent.
+ *   - The live train map (/map/) has its own light and dark tokens in map/map.css.
+ *   - Each crossing's direction-arrow colours come from its definition (shared/crossings.json).
+ *   - The app icons and favicon are drawn in shared/icon.svg and the icon PNGs.
+ */
+:root{
+  /* page */
+  --rc-bg:#0F172A;              /* page ground */
+  --rc-panel:#111C33;           /* menu drawer, homepage search box and pop-ups */
+  --rc-surface:#1E293B;         /* cards and sections */
+  --rc-sunk:#0F172A;            /* a closure inside the Upcoming Closures section */
+  --rc-line:#334155;            /* borders on buttons, pills and inputs */
+  --rc-line-soft:#273449;       /* hairlines between rows, picture frames */
+  --rc-header-line:#1E293B;     /* the rule under a crossing page's name */
+  --rc-press:#334155;           /* background of a button while pressed */
+  --rc-text:#E2E8F0;            /* main text */
+  --rc-text-2:#CBD5E1;          /* body copy and secondary values */
+  --rc-dim:#94A3B8;             /* labels and captions */
+  --rc-faint:#64748B;           /* the quietest text */
+  --rc-fainter:#475569;         /* footer small print */
+  --rc-strong:#FFFFFF;          /* emphasis inside a note */
+  --rc-color-scheme:dark;       /* form controls and scrollbars */
+
+  /* brand */
+  --rc-accent:#3B82F6;          /* buttons, live pins, focus rings */
+  --rc-accent-press:#2563EB;
+  --rc-on-accent:#FFFFFF;
+  --rc-link:#93C5FD;            /* links inside copy */
+  --rc-info:#38BDF8;            /* a train's position; the share icon in Add as app */
+  --rc-warn:#F59E0B;            /* warnings and "your guess" highlights */
+  --rc-donate:#FBBF24;          /* Support on GoFundMe */
+  --rc-donate-press:#D97706;
+  --rc-on-donate:#000000;
+
+  /* tags and pills */
+  --rc-pill-bg:#334155;         /* "Closed 2m 30s · in 8 min" */
+  --rc-pill-ink:#94A3B8;
+  --rc-tag-bg:#334155;          /* "Coming soon" and similar badges */
+  --rc-tag-ink:#CBD5E1;
+  --rc-soon-stripe:rgba(148,163,184,.05);   /* the faint hatching on a coming-soon row */
+
+  /* barrier status card */
+  --rc-closed:#DC2626;   --rc-on-closed:#FFFFFF;   --rc-closed-glow:0 0 30px rgba(220,38,38,.5);
+  --rc-closing:#F59E0B;  --rc-on-closing:#000000;  --rc-closing-glow:0 0 30px rgba(245,158,11,.5);
+  --rc-open:#16A34A;     --rc-on-open:#FFFFFF;     --rc-open-glow:0 0 30px rgba(22,163,74,.5);
+  --rc-unknown:#6B7280;  --rc-on-unknown:#FFFFFF;  /* NO LIVE DATA */
+
+  /* countdown values on the Next Open / Next Close cards */
+  --rc-open-text:#16A34A;
+  --rc-close-text:#F59E0B;
+  --rc-held-text:#94A3B8;       /* a held train: the number is a lower bound */
+  --rc-idle-text:#475569;       /* "--" before there is data */
+
+  /* soft state fills: the current closure, the error box, the feedback buttons */
+  --rc-closed-soft:#7F1D1D;     --rc-on-closed-soft:#FCA5A5;
+  --rc-open-soft:#064E3B;       --rc-on-open-soft:#6EE7B7;
+  --rc-ok-line:#16A34A;         /* Refresh button outline once a refresh has landed */
+
+  /* the barrier drawing */
+  --rc-post:#555555;
+  --rc-road:#888888;            /* road line and road name */
+  --rc-lamp:#DC2626;            /* the flashing lights */
+  --rc-arm-idle:#475569;        --rc-stripe-idle:#94A3B8;      /* before there is data */
+  --rc-arm-closed:#DC2626;      --rc-stripe-closed:#FFFFFF;
+  --rc-arm-closing:#F59E0B;     --rc-stripe-closing:#000000;
+  --rc-arm-open:#16A34A;        --rc-stripe-open:#15803D;
+
+  /* overlays and shadows */
+  --rc-scrim:rgba(0,0,0,.7);              /* behind the crossing page's pop-up */
+  --rc-backdrop:rgba(2,6,23,.6);          /* behind the menu drawer */
+  --rc-backdrop-strong:rgba(2,6,23,.7);   /* behind the homepage's pop-up */
+  --rc-shadow-search:0 6px 20px rgba(0,0,0,.45);
+  --rc-shadow-dropdown:0 18px 40px rgba(0,0,0,.5);
+  --rc-shadow-chip:0 4px 14px rgba(0,0,0,.4);
+  --rc-shadow-app:0 4px 14px rgba(0,0,0,.45);
+  --rc-shadow-sheet:0 -6px 30px rgba(0,0,0,.55);
+  --rc-shadow-num:0 2px 6px rgba(0,0,0,.6);
+
+  /* the homepage map (shared/home.js reads the pin and map values) */
+  --rc-map-base:dark;                     /* OpenFreeMap style name */
+  --rc-map-plan:dark;                     /* map/style.js planStyle theme: light or dark */
+  --rc-map-sea:#0A1222;                   /* behind the map before its tiles arrive */
+  --rc-map-glass:rgba(15,23,42,.82);      /* the legend over the map */
+  --rc-map-attrib:rgba(15,23,42,.75);     /* the OpenStreetMap credit */
+  --rc-map-attrib-invert:1;               /* 1 = flip the credit's (i) icon for a dark map */
+  --rc-pin-live:#3B82F6;
+  --rc-pin-live-ring:#FFFFFF;
+  --rc-pin-live-halo:rgba(59,130,246,0.3);
+  --rc-pin-soon:#7B8BA3;
+  --rc-pin-soon-ring:#0F172A;
+  --rc-pin-selected:#E2E8F0;
+  --rc-pin-selected-ring:#FFFFFF;
+  --rc-pin-label:#F8FAFC;
+  --rc-pin-label-halo:#0F172A;
+  --rc-pin-you:#22D3EE;
+  --rc-pin-you-ring:#FFFFFF;
+  --rc-pin-you-halo:rgba(34,211,238,.22);
+  --rc-num-bg:#FFFFFF;                    /* numbered circles for Nearby */
+  --rc-num-ink:#0F172A;
+  --rc-num-soon-bg:#CBD5E1;
+
+  /* the browser bar and the app's loading screen (read by scripts/build-crossings.js) */
+  --rc-browser-bar:#0F172A;
+  --rc-app-splash:#0F172A;
+
+  /* the debug panel (?debug=1, internal) */
+  --rc-debug-bg:#0A1120;
+  --rc-debug-line:#1E293B;
+  --rc-debug-text:#475569;
+  --rc-debug-faint:#334155;
+}

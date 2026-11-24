@@ -277,10 +277,13 @@
         } catch (e) { /* a layer this version of the style lacks */ }
       });
     }
+    // The map's style and pin colours come from shared/theme.css: MapLibre draws them itself, so the
+    // page's CSS cannot reach them. Read once the stylesheet has applied (it loads before this file).
+    function tok(name) { return getComputedStyle(document.documentElement).getPropertyValue('--rc-' + name).trim(); }
     function build(list) {
       try {
         map = new maplibregl.Map({
-          container: 'map', style: 'https://tiles.openfreemap.org/styles/dark', bounds: GB, fitBoundsOptions: { padding: pad() },
+          container: 'map', style: 'https://tiles.openfreemap.org/styles/' + (tok('map-base') || 'dark'), bounds: GB, fitBoundsOptions: { padding: pad() },
           minZoom: 4, maxZoom: 17, maxBounds: [[-32, 40], [26, 70]], attributionControl: false, dragRotate: false,
           pitchWithRotate: false, touchPitch: false, renderWorldCopies: false, cooperativeGestures: false
         });
@@ -298,7 +301,7 @@
         // before the layout settles and cut the south coast off). A pending view (a search to fit,
         // Nearby, a known location) replaces it below.
         map.resize(); map.fitBounds(GB, { padding: pad(), animate: false });
-        if (window.RM && RM.style) applyPlan(RM.style.planStyle(map.getStyle(), 'dark'));
+        if (window.RM && RM.style) applyPlan(RM.style.planStyle(map.getStyle(), tok('map-plan') || 'dark'));
         map.addSource('crossings', { type: 'geojson', data: {
           type: 'FeatureCollection',
           features: list.map(function (e) {
@@ -308,18 +311,18 @@
         } });
         var r = ['interpolate', ['linear'], ['zoom']].concat(DOT.r);
         map.addLayer({ id: 'soon-dots', type: 'circle', source: 'crossings', filter: ['!', ['get', 'live']],
-          paint: { 'circle-radius': r, 'circle-color': '#7B8BA3', 'circle-stroke-color': '#0F172A', 'circle-stroke-width': DOT.w } });
+          paint: { 'circle-radius': r, 'circle-color': tok('pin-soon'), 'circle-stroke-color': tok('pin-soon-ring'), 'circle-stroke-width': DOT.w } });
         map.addLayer({ id: 'sel-dot', type: 'circle', source: 'crossings', filter: ['==', ['get', 'n'], -1],
-          paint: { 'circle-radius': FINE ? 5 : 7, 'circle-color': '#E2E8F0', 'circle-stroke-color': '#FFFFFF', 'circle-stroke-width': 2 } });
+          paint: { 'circle-radius': FINE ? 5 : 7, 'circle-color': tok('pin-selected'), 'circle-stroke-color': tok('pin-selected-ring'), 'circle-stroke-width': 2 } });
         map.addLayer({ id: 'live-halo', type: 'circle', source: 'crossings', filter: ['get', 'live'],
-          paint: { 'circle-radius': FINE ? 8 : 12, 'circle-color': 'rgba(59,130,246,0.3)' } });
+          paint: { 'circle-radius': FINE ? 8 : 12, 'circle-color': tok('pin-live-halo') } });
         map.addLayer({ id: 'live-pin', type: 'circle', source: 'crossings', filter: ['get', 'live'],
-          paint: { 'circle-radius': FINE ? 4.5 : 6.5, 'circle-color': '#3B82F6', 'circle-stroke-color': '#FFFFFF', 'circle-stroke-width': FINE ? 1.5 : 2 } });
+          paint: { 'circle-radius': FINE ? 4.5 : 6.5, 'circle-color': tok('pin-live'), 'circle-stroke-color': tok('pin-live-ring'), 'circle-stroke-width': FINE ? 1.5 : 2 } });
         // Live names only from about village scale (zoom 11), never over the whole-GB view.
         map.addLayer({ id: 'live-label', type: 'symbol', source: 'crossings', filter: ['get', 'live'], minzoom: 11,
           layout: { 'text-field': ['get', 'name'], 'text-font': ['Noto Sans Regular'], 'text-size': 13,
             'text-anchor': 'left', 'text-offset': [1, 0], 'text-allow-overlap': true },
-          paint: { 'text-color': '#F8FAFC', 'text-halo-color': '#0F172A', 'text-halo-width': 1.6 } });
+          paint: { 'text-color': tok('pin-label'), 'text-halo-color': tok('pin-label-halo'), 'text-halo-width': 1.6 } });
         map.on('click', onTap);
         if (FINE) map.on('mousemove', function (e) { map.getCanvas().style.cursor = pick(e.point) ? 'pointer' : ''; });
         var p = pending; pending = []; p.forEach(function (fn) { fn(); });

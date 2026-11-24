@@ -40,6 +40,18 @@ const { execFileSync } = require('child_process');
 const crypto = require('crypto');
 
 const ROOT = path.resolve(__dirname, '..');
+// The browser-bar and app-splash colours, read from shared/theme.css (the one list of the site's
+// colours), because a <meta name="theme-color"> and a web-app manifest cannot refer to CSS.
+const THEME = (() => {
+  const css = fs.readFileSync(path.join(ROOT, 'shared', 'theme.css'), 'utf8');
+  const read = name => {
+    const m = css.match(new RegExp(`--rc-${name}:\\s*(#[0-9A-Fa-f]{6})`));
+    if (!m) throw new Error(`shared/theme.css has no --rc-${name} colour`);
+    return m[1];
+  };
+  return { browserBar: read('browser-bar'), appSplash: read('app-splash') };
+})();
+const withTheme = t => t.replace(/\{\{themeColor\}\}/g, THEME.browserBar);
 const SITE = 'https://railcrossing.uk';
 const DEFS_REF = 'origin/backend-v2';
 const DEFS_PATH = 'backend/config/crossings';
@@ -293,8 +305,8 @@ function manifest(id, d, r) {
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#0F172A",
-  "theme_color": "#0F172A",
+  "background_color": "${THEME.appSplash}",
+  "theme_color": "${THEME.browserBar}",
   "icons": [
     { "src": "../shared/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
     { "src": "../shared/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
@@ -407,8 +419,8 @@ const HOME_MANIFEST = `{
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#0F172A",
-  "theme_color": "#0F172A",
+  "background_color": "${THEME.appSplash}",
+  "theme_color": "${THEME.browserBar}",
   "icons": [
     { "src": "shared/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
     { "src": "shared/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
@@ -663,7 +675,7 @@ for (const r of Object.values(LIST))
   if (r.excluded !== 'yes' && !liveNumbers.has(r.uid) && (!SOON_COUNTIES || SOON_COUNTIES.includes(countyOf(r)))) soonSlugs[r.uid] = SLUGS[r.uid];
 const directoryText = directory(defs, rows, LIST, soonSlugs);
 const directoryUrl = `shared/directory.json?v=${directoryVersion(directoryText)}`;
-const template = fs.readFileSync(path.join(__dirname, 'templates', 'crossing-page.html'), 'utf8');
+const template = withTheme(fs.readFileSync(path.join(__dirname, 'templates', 'crossing-page.html'), 'utf8'));
 
 const token = (fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8').match(/shared\/[A-Za-z0-9._-]+\.css\?v=(\d+)/) || [])[1];
 // County lists, for every county with at least one crossing page (coming soon or live, listed).
@@ -678,10 +690,10 @@ for (const [id, d] of Object.entries(defs)) {
 }
 writes['shared/crossings.json'] = websiteSettings(defs);
 writes['shared/directory.json'] = directoryText;
-const homeTemplate = fs.readFileSync(path.join(__dirname, 'templates', 'home-page.html'), 'utf8');
+const homeTemplate = withTheme(fs.readFileSync(path.join(__dirname, 'templates', 'home-page.html'), 'utf8'));
 writes['index.html'] = homePage(defs, rows, directoryText, directoryUrl, homeTemplate, countyListHtml(countyCounts));
-const soonTemplate = fs.readFileSync(path.join(__dirname, 'templates', 'soon-page.html'), 'utf8');
-const countyTemplate = fs.readFileSync(path.join(__dirname, 'templates', 'county-page.html'), 'utf8');
+const soonTemplate = withTheme(fs.readFileSync(path.join(__dirname, 'templates', 'soon-page.html'), 'utf8'));
+const countyTemplate = withTheme(fs.readFileSync(path.join(__dirname, 'templates', 'county-page.html'), 'utf8'));
 const listedLive = Object.entries(defs).filter(([, d]) => d.presentation.listed !== false);
 const liveSentence = listedLive.length
   ? `It's live at ${andList(listedLive.map(([id, d]) => `<a href="/${esc(id)}/">${esc(d.name)}</a>`))} now.` : '';

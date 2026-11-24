@@ -148,11 +148,11 @@ function fillEventCard(slot, ev, t, heldT) {
   $('c' + slot + 'label').textContent = ev ? (ev.kind === 'open' ? 'Next Open' : 'Next Close') : '';
   var v = $('c' + slot + 'value');
   if (!ev || !ev.at) {
-    v.textContent = ev ? '--' : ''; v.style.color = '#475569';
+    v.textContent = ev ? '--' : ''; setValueTone(v, 'cv-idle');
     $('c' + slot + 'sub').textContent = ''; return;
   }
   v.textContent = PREDICT.fmtEta(ev.at.getTime() - (ev.held ? heldT : t), ev.held);
-  v.style.color = ev.held ? '#94A3B8' : (ev.kind === 'open' ? '#16A34A' : '#F59E0B');
+  setValueTone(v, ev.held ? 'cv-held' : (ev.kind === 'open' ? 'cv-open' : 'cv-close'));
   $('c' + slot + 'sub').textContent = ev.sub;
 }
 
@@ -198,13 +198,25 @@ function renderEventCards(pr, t, closedForMs, openForMs) {
   window.requestAnimationFrame(function () { track.classList.add('shifted'); });
 }
 
-function getColors(st) {
-  switch(st) {
-    case 'CLOSED': return {bg:'#DC2626',text:'#FFF',glow:'0 0 30px rgba(220,38,38,.5)'};
-    case 'CLOSING_SOON': return {bg:'#F59E0B',text:'#000',glow:'0 0 30px rgba(245,158,11,.5)'};
-    case 'OPEN': return {bg:'#16A34A',text:'#FFF',glow:'0 0 30px rgba(22,163,74,.5)'};
-    default: return {bg:'#6B7280',text:'#FFF',glow:'none'};
-  }
+// Colours live in shared/theme.css. The code only says WHICH tone applies, as a class, so the
+// look of the site can change without touching this file. classList.add/remove only: the audit
+// harnesses run this file against a stub DOM that has no toggle.
+var STATUS_TONES = ['st-closed', 'st-closing', 'st-open', 'st-none'];
+var VALUE_TONES = ['cv-idle', 'cv-open', 'cv-close', 'cv-held'];
+var BARRIER_TONES = ['bw-closed', 'bw-closing', 'bw-open'];
+function setTone(el, all, tone) {
+  all.forEach(function (c) { el.classList.remove(c); });
+  if (tone) el.classList.add(tone);
+}
+function setStatusTone(st) {
+  setTone($('statusCard'), STATUS_TONES,
+    st === 'CLOSED' ? 'st-closed' : st === 'CLOSING_SOON' ? 'st-closing' : st === 'OPEN' ? 'st-open' : 'st-none');
+}
+function setValueTone(el, tone) { setTone(el, VALUE_TONES, tone); }
+// The barrier drawing: null puts it back to the page's own LOADING look (grey booms).
+function setBarrierTone(st) {
+  setTone($('barrierWrap'), BARRIER_TONES,
+    st === 'CLOSED' ? 'bw-closed' : st === 'CLOSING_SOON' ? 'bw-closing' : st === 'OPEN' ? 'bw-open' : null);
 }
 
 // Direction-dependent config helpers — supports both old flat values and new {east, west} objects
@@ -374,20 +386,18 @@ function showMoreClosures() {
 // No data to describe (see liveData): say so in the status card, and put the rest back to the
 // page's own LOADING look — grey booms as drawn in the markup, no lights, no countdowns.
 function showNoLiveData() {
-  var c = getColors('NONE');
   var card = $('statusCard');
   card.classList.remove('pulse');
-  card.style.background = c.bg; card.style.color = c.text; card.style.boxShadow = c.glow;
+  setStatusTone('NONE');
   $('statusTitle').textContent = 'NO LIVE DATA';
   $('statusMsg').textContent = 'Can\u2019t reach the train data. Retrying\u2026';
   $('barrierArmL').style.transform = '';
   $('barrierArmR').style.transform = '';
-  document.querySelectorAll('.arm-bar').forEach(function(b) { b.setAttribute('fill', '#475569'); });
-  document.querySelectorAll('.stripe').forEach(function(s) { s.setAttribute('fill', '#94A3B8'); });
+  setBarrierTone(null);
   ['lightA', 'lightB'].forEach(function(id) { $(id).setAttribute('opacity', '0'); $(id).setAttribute('class', ''); });
   for (var i = 0; i < 2; i++) {
     $('c' + i + 'label').textContent = '';
-    $('c' + i + 'value').textContent = '--'; $('c' + i + 'value').style.color = '#475569';
+    $('c' + i + 'value').textContent = '--'; setValueTone($('c' + i + 'value'), 'cv-idle');
     $('c' + i + 'sub').textContent = '';
   }
   cardLeftKind = null;   // so the first good poll fills the cards in place, not with a slide
@@ -435,9 +445,7 @@ function updateStatus() {
       else { msg = 'Next closure in ' + fmtCountdown(ms); }
     } else { msg = 'No more closures expected today'; }
   }
-  var c = getColors(status);
-  var card = $('statusCard');
-  card.style.background = c.bg; card.style.color = c.text; card.style.boxShadow = c.glow;
+  setStatusTone(status);
   $('statusTitle').textContent = status === 'CLOSED' ? 'BARRIERS DOWN' : status === 'CLOSING_SOON' ? 'CLOSING SOON' : 'CROSSING CLEAR';
   $('statusMsg').textContent = msg;
   // Two booms, mirrored, so one angle drives both with the sign flipped. CLOSING_SOON sits
@@ -449,12 +457,9 @@ function updateStatus() {
   // the boom as it rises keeps it in frame but draws a stubby half-boom, which reads as a
   // broken barrier rather than a raised one.
   var deg = status === 'CLOSED' ? 0 : status === 'CLOSING_SOON' ? 55 : 80;
-  var barFill = status === 'CLOSED' ? '#DC2626' : status === 'CLOSING_SOON' ? '#F59E0B' : '#16A34A';
-  var stripeFill = status === 'CLOSED' ? '#FFF' : status === 'CLOSING_SOON' ? '#000' : '#15803d';
   $('barrierArmL').style.transform = 'rotate(-' + deg + 'deg)';
   $('barrierArmR').style.transform = 'rotate(' + deg + 'deg)';
-  document.querySelectorAll('.arm-bar').forEach(function(b) { b.setAttribute('fill', barFill); });
-  document.querySelectorAll('.stripe').forEach(function(s) { s.setAttribute('fill', stripeFill); });
+  setBarrierTone(status);
   // setAttribute('class'), NOT .className: on an SVG element className is a read-only
   // SVGAnimatedString, so `el.className = 'blink-a'` silently does nothing — which is why
   // the wig-wag lights appeared but never actually blinked.
@@ -770,8 +775,8 @@ function fbRevealMsg(txt){
 function showModal(type) {
   var title = '', body = '';
   var appUrl = BASE_URL + crossingId + '/';
-  var shareIcon = '<svg style="display:inline-block;vertical-align:middle;margin:0 3px" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#38BDF8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14v5a2 2 0 002 2h12a2 2 0 002-2v-5"/><path d="M12 3v12"/><path d="M8 7l4-4 4 4"/></svg>';
-  var dotsIcon = '<svg style="display:inline-block;vertical-align:middle;margin:0 3px" width="16" height="16" viewBox="0 0 24 24" fill="#38BDF8"><circle cx="12" cy="5" r="2.5"/><circle cx="12" cy="12" r="2.5"/><circle cx="12" cy="19" r="2.5"/></svg>';
+  var shareIcon = '<svg style="display:inline-block;vertical-align:middle;margin:0 3px;color:var(--rc-info)" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14v5a2 2 0 002 2h12a2 2 0 002-2v-5"/><path d="M12 3v12"/><path d="M8 7l4-4 4 4"/></svg>';
+  var dotsIcon = '<svg style="display:inline-block;vertical-align:middle;margin:0 3px;color:var(--rc-info)" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2.5"/><circle cx="12" cy="12" r="2.5"/><circle cx="12" cy="19" r="2.5"/></svg>';
   if (type === 'homescreen') {
     if (isIOS) {
       title = 'Add as App \u2014 iPhone';

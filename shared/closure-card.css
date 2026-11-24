@@ -9,21 +9,22 @@
  * Both apps link this file. Keep it self-contained: no dependency on anything in
  * crossing.css or observe.css, in either direction.
  */
-.closure-card{background:#0F172A;border-radius:8px;padding:10px;margin-bottom:8px}
+.closure-card{background:var(--rc-sunk,#0F172A);border-radius:8px;padding:10px;margin-bottom:8px}
 .closure-card:last-child{margin-bottom:0}
-.closure-active{border:1px solid #DC2626}
+.closure-active{border:1px solid var(--rc-closed,#DC2626)}
 .closure-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;gap:6px;min-width:0}
 .closure-time{font-size:13px;font-weight:700;font-variant-numeric:tabular-nums;flex-shrink:0}
 /* min-width:0 + shrink so a long pill wraps inside the card instead of pushing the card
    wider than the viewport. It is nowrap by preference, not at any cost. */
-.closure-pill{font-size:10px;color:#94A3B8;background:#334155;padding:2px 8px;border-radius:4px;white-space:nowrap;font-variant-numeric:tabular-nums;min-width:0;overflow:hidden;text-overflow:ellipsis}
-.closure-pill-active{color:#FCA5A5;background:#7F1D1D}
-.closure-train{font-size:11px;color:#CBD5E1;padding:2px 0;display:flex;align-items:center;gap:4px}
+.closure-pill{font-size:10px;color:var(--rc-pill-ink,#94A3B8);background:var(--rc-pill-bg,#334155);padding:2px 8px;border-radius:4px;white-space:nowrap;font-variant-numeric:tabular-nums;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.closure-pill-active{color:var(--rc-on-closed-soft,#FCA5A5);background:var(--rc-closed-soft,#7F1D1D)}
+.closure-now{color:var(--rc-on-closed-soft,#FCA5A5)}
+.closure-train{font-size:11px;color:var(--rc-text-2,#CBD5E1);padding:2px 0;display:flex;align-items:center;gap:4px}
 .closure-train-route{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
 .closure-time-group{display:flex;align-items:baseline;gap:2px}
-.closure-imminent{color:#F59E0B}
+.closure-imminent{color:var(--rc-warn,#F59E0B)}
 /* A close whose trigger has not fired: the time shown is a lower bound, not a prediction
    (register #14). Deliberately NOT the amber of .closure-imminent — that means "about to
    happen" and this means the opposite, a train stopped short with the barrier still up. */
-.closure-held{color:#94A3B8}
-.closure-warn{font-size:9px;color:#F59E0B;margin-bottom:4px}
+.closure-held{color:var(--rc-held-text,#94A3B8)}
+.closure-warn{font-size:9px;color:var(--rc-warn,#F59E0B);margin-bottom:4px}
