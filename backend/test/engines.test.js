@@ -144,7 +144,7 @@ console.log('\nWith a berth-first shadow (routes file without learned routes: it
   check('first check logs both engines', logged.map(([c, d]) => `${c}:${d.role}:${d.engine}`).join(),
     'closures:serving:classic,closures:shadow:berth-first');
   check('  ...the serving line carries the published closures',
-    logged[0][1].closures.length, e.serving.portslade.getApiState(40).upcomingClosures.length);
+    logged[0][1].closures.length, e.serving.portslade.getApiState().upcomingClosures.length);
   logged.length = 0;
   e.logClosureChanges();
   check('nothing changed: nothing logged', logged.length, 0);

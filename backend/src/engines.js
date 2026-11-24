@@ -162,8 +162,12 @@ class CrossingEngines {
     }
   }
 
+  // What is logged is what the page is given: getApiState() with the engine's own default limit (6, api.js), the
+  // closures a phone receives without Show More. Measured on 23 Nov through this code with a berth-first shadow
+  // (fixab/why/s6cost.js, 24 Nov): 40 closures a line made 9,814 lines / 34.4 MB a day, 6 make 9,551 lines / 12.0 MB,
+  // in a log kept plain for 90 days. (The daily log is ~6 MB a day without them.)
   _logIfChanged(id, role, engine) {
-    const api = engine.getApiState(40);
+    const api = engine.getApiState();
     const closures = (api.upcomingClosures || []).map(closureSummary);
     // An engine that cannot predict (berth-first outage or restart) publishes no closures: logged as its own change.
     const unavailable = api.unavailable ? api.unavailable.reason : null;
