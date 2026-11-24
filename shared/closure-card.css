@@ -28,3 +28,26 @@
    happen" and this means the opposite, a train stopped short with the barrier still up. */
 .closure-held{color:var(--rc-held-text,#94A3B8)}
 .closure-warn{font-size:9px;color:var(--rc-warn,#F59E0B);margin-bottom:4px}
+
+/* The public app's closure ROWS (rowHtml, 2026-11 rebrand). No tabular figures on the times:
+   Schibsted Grotesk's tabular colon is digit-wide and reads as "22 : 43". Only the public pages use these, and
+   they load shared/theme.css, so no observer fallbacks are needed here. A three-column grid:
+   when | trains | pill, with the duration line running underneath from the left. Every row uses
+   the same fixed first column so the station names line up down the list, and the time and the
+   pill sit centred against the trains when a route runs to two lines. */
+.cr-row{display:grid;grid-template-columns:62px minmax(0,1fr) auto;column-gap:18px;row-gap:4px;align-items:center;padding:10px 16px;margin:0 -16px;border-top:1px solid var(--rc-line-soft)}
+.cr-row:last-of-type{border-bottom:1px solid var(--rc-line-soft)}
+.cr-current{background:var(--rc-closed-soft)}
+.cr-when{grid-column:1;grid-row:1;font-size:19px;font-weight:800;letter-spacing:-.3px;line-height:1.15;color:var(--rc-text)}
+.cr-when.cr-now{color:var(--rc-on-closed-soft)}
+.cr-when.cr-held{color:var(--rc-held-text)}
+.cr-when.cr-imminent{color:var(--rc-close-text)}
+.cr-trains{grid-column:2;grid-row:1;display:flex;flex-direction:column;gap:2px;min-width:0}
+.cr-train{font-size:15px;font-weight:650;line-height:1.3;overflow-wrap:anywhere}
+.cr-pill{grid-column:3;grid-row:1;justify-self:end;font-size:12px;font-weight:700;color:var(--rc-pill-ink);background:var(--rc-pill-bg);border-radius:999px;padding:4px 10px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.cr-pill-imminent{color:var(--rc-on-closing);background:var(--rc-closing)}
+.cr-under{grid-column:1 / 3;grid-row:2;font-size:12px;font-weight:500;color:var(--rc-dim);white-space:nowrap;font-variant-numeric:tabular-nums}
+.cr-under.cr-now{color:var(--rc-on-closed-soft);font-weight:700}
+.cr-warn{grid-column:1 / 4;grid-row:3;font-size:12px;color:var(--rc-warn)}
+/* Placeholder rows, shown until the first data arrives (see the crossing-page template) */
+.cr-skel .cr-when,.cr-skel .cr-train{color:var(--rc-faint)}

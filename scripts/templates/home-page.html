@@ -39,17 +39,26 @@
 </head>
 <body>
 <div class="hp">
-  <div class="hp-mapwrap">
-    <div id="map" class="hp-map" role="region" aria-label="Map of road level crossings in Great Britain"></div>
-    <div class="hp-mapstatus" id="mapStatus">Loading map…</div>
-    <button class="add-app-btn hidden hp-app js-add-app" type="button"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M12 8v6M9.5 11.5 12 14l2.5-2.5"/></svg>Add as app</button>
-    <div class="hp-float">
+  <!-- The sea-blue header (2026-11 rebrand): mark and name, the page's heading, search and Nearby,
+       above the map rather than floating on it. Styles: shared/menu.css (.top …), shared/home.css. -->
+  <header class="top hp-top">
+    <div class="top-in hp-top-in">
+      <div class="top-bar">
+        <a class="brand" href="/" aria-current="page"><img src="shared/icon.svg" alt="" width="28" height="28">railcrossing.uk</a>
+      </div>
+      <h1 class="hp-h1">Find level crossings near you <span class="hp-h1-sub">and know when the barriers will come down</span></h1>
       <div class="hp-search" id="hpSearch">
         <label class="hp-sbox" for="hpQ"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="hpQ" type="search" autocomplete="off" enterkeyhint="search" placeholder="Town, road or postcode" aria-label="Search crossings by town, road or postcode" aria-controls="hpDD"><button class="hp-clear" id="hpClear" type="button" aria-label="Clear search" hidden><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></label>
         <div class="hp-dd" id="hpDD" hidden></div>
       </div>
       <button class="hp-nearbtn" id="nearBtn" type="button"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.5" fill="currentColor"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>Show nearby crossings</button>
     </div>
+  </header>
+
+  <div class="hp-mapwrap">
+    <div id="map" class="hp-map" role="region" aria-label="Map of road level crossings in Great Britain"></div>
+    <div class="hp-mapstatus" id="mapStatus">Loading map…</div>
+    <button class="add-app-btn hidden hp-app js-add-app" type="button"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M12 8v6M9.5 11.5 12 14l2.5-2.5"/></svg>Add as app</button>
     <div class="hp-legend"><span><i class="lg-live"></i>Live ({{liveCount}})</span><span><i class="lg-soon"></i>Coming soon ({{soonCountText}})</span></div>
     <div id="placeCard" class="hp-place" hidden></div>
   </div>
@@ -63,7 +72,6 @@
 {{{countyList}}}
 
     <section class="hp-copy">
-      <h1 class="hp-h1">Find level crossings near you <span class="hp-h1-sub">and know when the barriers will come down</span></h1>
       <p>railcrossing.uk predicts when the barriers at a level crossing will close, and when they'll open again, for every train: passenger, freight and empty trains. It's free, works on any phone, and you can add it to your home screen like an app.</p>
       <button class="add-app-btn hidden hp-app-inline js-add-app" type="button"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M12 8v6M9.5 11.5 12 14l2.5-2.5"/></svg>Add as app</button>
 

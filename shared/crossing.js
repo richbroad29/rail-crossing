@@ -353,13 +353,13 @@ function renderClosures() {
     return;
   }
   $('closureList').innerHTML = CLOSURE_CARD.listHtml(closurePeriods, now, closuresVisible,
-    PREDICT.heldRef(now.getTime(), payloadAgeMs));
+    PREDICT.heldRef(now.getTime(), payloadAgeMs), { layout: 'rows' });
   // "Are there more?" is now the BACKEND's count, not the length of what it sent — the
   // response is capped at what we asked for, so `relevant.length` can no longer answer it
   // and Show More would have hidden itself the moment the cap bound.
   var haveMore = Math.max(closureTotal, relevant.length);
   if (haveMore > closuresVisible) {
-    $('showMoreBtn').textContent = 'Show More';
+    $('showMoreBtn').textContent = 'Show more closures';
     $('showMoreBtn').classList.remove('hidden');
     $('showMoreBtn').disabled = false;
     $('showMoreBtn').style.opacity = '';

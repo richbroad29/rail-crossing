@@ -138,6 +138,47 @@ console.log('\nUpcoming closures read as a range\n');
 check('start — end in the header',
       /closure-time">(\d\d:\d\d) — (\d\d:\d\d)</.test(C.cardHtml(upcoming[0], new Date(T0))), true);
 
+// The public app's ROW layout (rowHtml, 2026-11 rebrand) shows the same countdown in words —
+// "Open in 1m 16s" under the current closure — so the mirror has to hold there too. Its only
+// rewordings are the two awkward fmtEta tokens: "held" and "Soon" become sentences.
+console.log('\nRow layout: the current closure\'s "Open in" mirrors the Next Open card\n');
+const openInOf = html => {
+  const m = /cr-under cr-now">([^<]*)</.exec(html); if (!m) return null;
+  const t = m[1].replace(/&gt;/g, '>');   // rowHtml escapes its text; the page shows '>'
+  if (t === 'Open once the train is clear') return 'held';
+  if (t === 'Opening soon') return 'Soon';
+  return t.replace(/^Open in /, '');
+};
+[false, true].forEach(held => {
+  [136, 76, 9, -5].forEach(off => {
+    const ps = periods(off, held);
+    if (!ps.length) return;
+    const now = new Date(T0);
+    const html = C.rowHtml(ps[0], now);
+    if (openInOf(html) === null) return;
+    check('rows, ' + (held ? 'held' : 'live') + ', end ' + (off < 0 ? off : '+' + off) + 's',
+          openInOf(html), boxOf(P.derive(ps, now, 0), T0));
+  });
+});
+{
+  const held = periods(18, true);
+  const now = new Date(T0 + 8000), pr = P.derive(held, now, 8000);
+  check('rows: still agree while held, mid-poll', openInOf(C.rowHtml(held[0], now, pr.heldRef)),
+        P.fmtEta(pr.nextOpenTime.getTime() - pr.heldRef, pr.openHeld));
+}
+console.log('\nRow layout: an upcoming closure\n');
+{
+  const row = C.rowHtml(upcoming[0], new Date(T0));
+  check('the time it closes on the left', /cr-when">(\d\d:\d\d)</.test(row), true);
+  check('how long underneath, with the card\'s own formatter', /cr-under">Closed for ([^<]*)</.exec(row)[1],
+        P.fmtDownFor(upcoming[0].end - (upcoming[0].predictedStart || upcoming[0].start)));
+  check('how soon in the pill, fmtWhen capitalised', /cr-pill">([^<]*)</.exec(row)[1],
+        (s => s.charAt(0).toUpperCase() + s.slice(1))(P.fmtWhen(upcoming[0].predictedStart - T0, upcoming[0].window.halfWidthSecs >= 60)));
+  check('no direction arrow before the origin', /cr-train">A → B</.test(row), true);
+  check('listHtml picks rows only when asked', /cr-row/.test(C.listHtml(upcoming, new Date(T0), 3, T0)), false);
+  check('...and rows when asked', /cr-row/.test(C.listHtml(upcoming, new Date(T0), 3, T0, { layout: 'rows' })), true);
+}
+
 console.log();
 if (fail > 0) { console.error(`${fail} FAILED, ${pass} passed`); process.exit(1); }
 console.log(`All ${pass} checks passed.`);

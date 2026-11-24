@@ -30,13 +30,17 @@
 </script>
 </head>
 <body>
-<div class="wrap">
-  <div class="hdr">
-    <div class="hdr-text">
-      <h1 class="hdr-title">Level crossings in {{county}}</h1>
-      <div class="hdr-road">{{countText}}</div>
+<header class="top">
+  <div class="top-in">
+    <div class="top-bar">
+      <a class="brand" data-track="home-link: {{countySlug}} county header" href="/"><img src="../../shared/icon.svg" alt="" width="28" height="28">railcrossing.uk</a>
     </div>
+    <h1 class="hdr-title">Level crossings in {{county}}</h1>
+    <div class="hdr-road">{{countText}}</div>
   </div>
+</header>
+
+<div class="wrap">
 
   <section class="section">
     <p class="info-text">Every road level crossing in {{county}}, by town. {{{liveLine}}} Each crossing's page says where it is, what type it is and which crossings are nearby.</p>

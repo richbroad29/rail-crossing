@@ -6,7 +6,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Crossing">
-<meta name="theme-color" content="#0F172A">
+<meta name="theme-color" content="#0B5C78">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="../shared/icon-180.png">
 <link rel="icon" type="image/svg+xml" href="../shared/icon.svg">
@@ -107,65 +107,72 @@
 </script>
 </head>
 <body>
-<div class="wrap">
-  <div class="hdr">
-    <div class="hdr-text">
-      <h1 class="hdr-title" id="crossingName">Portslade Level Crossing</h1>
-      <div class="hdr-road" id="crossingRoad">Boundary Road</div>
+<!-- The sea-blue header (2026-11 rebrand): mark and name, Menu, the crossing's name and road, and
+     the barrier status box with the drawing beside it. Its styles are in shared/menu.css (.top …)
+     and shared/crossing.css (.hdr-*, .status-*). -->
+<header class="top">
+  <div class="top-in">
+    <div class="top-bar">
+      <a class="brand" data-track="home-link: portslade header" href="/"><img src="../shared/icon.svg" alt="" width="28" height="28">railcrossing.uk</a>
+      <button class="top-menu" id="menuBtn" type="button" data-track="menu-open: portslade page" aria-controls="menuDrawer" aria-expanded="false">Menu<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
     </div>
-    <button class="pm-burger" id="menuBtn" type="button" data-track="menu-open: portslade page" aria-label="Menu" aria-controls="menuDrawer" aria-expanded="false"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
-  </div>
+    <h1 class="hdr-title" id="crossingName">Portslade Level Crossing</h1>
+    <div class="hdr-road" id="crossingRoad">Boundary Road</div>
 
-  <!-- data-nosnippet on everything live: a search snippet or AI answer quoting "closed in 7 min" from
-       the moment of the crawl would be wrong by the time anyone read it. They quote the About block. -->
-  <div class="status-card" id="statusCard" data-nosnippet>
-    <div class="status-title" id="statusTitle">LOADING...</div>
-    <div class="status-msg" id="statusMsg">Fetching live train data...</div>
+    <!-- data-nosnippet on everything live: a search snippet or AI answer quoting "closed in 7 min" from
+         the moment of the crawl would be wrong by the time anyone read it. They quote the About block. -->
+    <div class="status-card" id="statusCard" data-nosnippet>
+      <div class="status-text">
+        <div class="status-title" id="statusTitle">LOADING...</div>
+        <div class="status-msg" id="statusMsg">Fetching live train data...</div>
+      </div>
+      <div class="barrier-wrap" id="barrierWrap" aria-hidden="true">
+        <!-- Two booms, one each side. Posts flush with the ends of the road and standing ON the
+             road line (y=95), booms a constant 91 long so they stop 10 apart when down.
+             The frame is DELIBERATELY too short to contain a raised boom: 91 long pivoting at
+             y=49 needs 90 units of headroom and the viewBox gives 19, so the raised and closing
+             booms run off the top and are clipped. That is the intended trade — a frame tall
+             enough to hold them leaves half the picture empty whenever the barriers are down,
+             which is the state people look at it in. Clipped at the edge reads as "continues
+             past the frame"; drawing the boom shorter instead (an earlier attempt scaled it)
+             reads as a stubby half-boom, which is worse. Keep the length constant.
+             Move the viewBox top and you trade empty space against how much boom is visible. -->
+        <svg width="200" height="68" viewBox="0 30 200 68">
+          <rect x="2" y="45" width="8" height="50" rx="2" class="bw-post"/>
+          <rect x="190" y="45" width="8" height="50" rx="2" class="bw-post"/>
+          <!-- Every fill here comes from shared/theme.css through its class (.arm-bar, .stripe,
+               .bw-post ...): the LOADING look until updateStatus() puts a bw-* state class on
+               #barrierWrap. Never drop the classes: an SVG rect with no fill defaults to black,
+               which on a dark background is invisible, so the barrier appeared to be missing for
+               the first moment after load. -->
+          <g id="barrierArmL" style="transform-origin:6px 49px;transition:transform 1s ease">
+            <rect x="6" y="45" width="91" height="8" rx="3" class="arm-bar"/>
+            <rect x="22" y="45" width="13" height="8" rx="1" class="stripe" opacity=".3"/>
+            <rect x="48" y="45" width="13" height="8" rx="1" class="stripe" opacity=".3"/>
+            <rect x="74" y="45" width="13" height="8" rx="1" class="stripe" opacity=".3"/>
+          </g>
+          <g id="barrierArmR" style="transform-origin:194px 49px;transition:transform 1s ease">
+            <rect x="103" y="45" width="91" height="8" rx="3" class="arm-bar"/>
+            <rect x="113" y="45" width="13" height="8" rx="1" class="stripe" opacity=".3"/>
+            <rect x="139" y="45" width="13" height="8" rx="1" class="stripe" opacity=".3"/>
+            <rect x="165" y="45" width="13" height="8" rx="1" class="stripe" opacity=".3"/>
+          </g>
+          <!-- r=5.5 against an 8-wide post, so the lamp overhangs it by 1.5 on each side, and
+               reaches x=0.5 / x=199.5. The posts sit 2 in from the frame edge for exactly this
+               reason: on a post flush with the edge the outer half of the lamp would fall
+               outside the viewBox and be sliced flat. Any larger radius needs the posts moved
+               further in again. -->
+          <circle cx="6" cy="70" r="5.5" id="lightA" opacity="0"/>
+          <circle cx="194" cy="70" r="5.5" id="lightB" opacity="0"/>
+          <line x1="0" y1="95" x2="200" y2="95" class="bw-road" stroke-width="3" stroke-dasharray="10,8"/>
+          <text x="100" y="92" text-anchor="middle" class="bw-label" font-size="8" font-family="monospace" id="roadLabel">BOUNDARY ROAD</text>
+        </svg>
+      </div>
+    </div>
   </div>
+</header>
 
-  <div class="barrier-wrap" id="barrierWrap">
-    <!-- Two booms, one each side. Posts flush with the ends of the road and standing ON the
-         road line (y=95), booms a constant 91 long so they stop 10 apart when down.
-         The frame is DELIBERATELY too short to contain a raised boom: 91 long pivoting at
-         y=49 needs 90 units of headroom and the viewBox gives 19, so the raised and closing
-         booms run off the top and are clipped. That is the intended trade — a frame tall
-         enough to hold them leaves half the picture empty whenever the barriers are down,
-         which is the state people look at it in. Clipped at the edge reads as "continues
-         past the frame"; drawing the boom shorter instead (an earlier attempt scaled it)
-         reads as a stubby half-boom, which is worse. Keep the length constant.
-         Move the viewBox top and you trade empty space against how much boom is visible. -->
-    <svg width="200" height="68" viewBox="0 30 200 68">
-      <rect x="2" y="45" width="8" height="50" rx="2" class="bw-post"/>
-      <rect x="190" y="45" width="8" height="50" rx="2" class="bw-post"/>
-      <!-- Every fill here comes from shared/theme.css through its class (.arm-bar, .stripe,
-           .bw-post ...): the LOADING look until updateStatus() puts a bw-* state class on
-           #barrierWrap. Never drop the classes: an SVG rect with no fill defaults to black,
-           which on a dark background is invisible, so the barrier appeared to be missing for
-           the first moment after load. -->
-      <g id="barrierArmL" style="transform-origin:6px 49px;transition:transform 1s ease">
-        <rect x="6" y="45" width="91" height="8" rx="3" class="arm-bar"/>
-        <rect x="22" y="45" width="13" height="8" rx="1" class="stripe" opacity=".3"/>
-        <rect x="48" y="45" width="13" height="8" rx="1" class="stripe" opacity=".3"/>
-        <rect x="74" y="45" width="13" height="8" rx="1" class="stripe" opacity=".3"/>
-      </g>
-      <g id="barrierArmR" style="transform-origin:194px 49px;transition:transform 1s ease">
-        <rect x="103" y="45" width="91" height="8" rx="3" class="arm-bar"/>
-        <rect x="113" y="45" width="13" height="8" rx="1" class="stripe" opacity=".3"/>
-        <rect x="139" y="45" width="13" height="8" rx="1" class="stripe" opacity=".3"/>
-        <rect x="165" y="45" width="13" height="8" rx="1" class="stripe" opacity=".3"/>
-      </g>
-      <!-- r=5.5 against an 8-wide post, so the lamp overhangs it by 1.5 on each side, and
-           reaches x=0.5 / x=199.5. The posts sit 2 in from the frame edge for exactly this
-           reason: on a post flush with the edge the outer half of the lamp would fall
-           outside the viewBox and be sliced flat. Any larger radius needs the posts moved
-           further in again. -->
-      <circle cx="6" cy="70" r="5.5" id="lightA" opacity="0"/>
-      <circle cx="194" cy="70" r="5.5" id="lightB" opacity="0"/>
-      <line x1="0" y1="95" x2="200" y2="95" class="bw-road" stroke-width="3" stroke-dasharray="10,8"/>
-      <text x="100" y="92" text-anchor="middle" class="bw-label" font-size="8" font-family="monospace" id="roadLabel">BOUNDARY ROAD</text>
-    </svg>
-  </div>
-
+<div class="wrap">
   <!-- A two-slot timeline of the next two events, each "when it happens" over "how long the
        state it starts lasts". The slots are POSITIONAL, not fixed roles: slot 0 is always
        whatever happens next, so it is Next Open while the barriers are down and Next Close
@@ -210,17 +217,17 @@
     <div class="fb-msg hidden" id="fbMsg"></div>
   </div>
 
-  <div class="section">
+  <div class="section section-plain">
     <div class="section-hdr">
-      <h2 class="sec-h2">Upcoming Closures</h2>
+      <h2 class="sec-h2">Upcoming closures</h2>
       <button class="refresh-btn" id="refreshBtn" data-track="refresh: portslade page" onclick="refreshData()"></button>
     </div>
     <!-- Placeholder cards the size of real ones, so the list doesn't push the page down when the
          first closures arrive (that shift was 0.09 CLS on a phone; Google's limit is 0.1). The usual
-         first view is three closures and Show More, so three cards and a hidden Show More stand in;
+         first view is three closures and Show More, so three rows and a hidden Show More stand in;
          renderClosures() replaces the lot. -->
-    <div id="closureList" data-nosnippet><div class="closure-card closure-skel" aria-hidden="true"><div class="closure-hdr"><div class="closure-time-group"><span class="closure-time">&nbsp;</span></div></div><div class="closure-train"><span class="closure-train-route">Fetching live data...</span></div></div><div class="closure-card closure-skel" aria-hidden="true"><div class="closure-hdr"><div class="closure-time-group"><span class="closure-time">&nbsp;</span></div></div><div class="closure-train">&nbsp;</div></div><div class="closure-card closure-skel" aria-hidden="true"><div class="closure-hdr"><div class="closure-time-group"><span class="closure-time">&nbsp;</span></div></div><div class="closure-train">&nbsp;</div></div><button class="show-more-btn" type="button" tabindex="-1" aria-hidden="true" disabled style="visibility:hidden">Show More</button></div>
-    <button class="show-more-btn hidden" id="showMoreBtn" data-track="show-more: portslade page" onclick="showMoreClosures()">Show More</button>
+    <div id="closureList" data-nosnippet><div class="cr-row cr-skel" aria-hidden="true"><span class="cr-when">&nbsp;</span><span class="cr-trains"><span class="cr-train">Fetching live data...</span></span><span class="cr-under">&nbsp;</span></div><div class="cr-row cr-skel" aria-hidden="true"><span class="cr-when">&nbsp;</span><span class="cr-trains"><span class="cr-train">&nbsp;</span></span><span class="cr-under">&nbsp;</span></div><div class="cr-row cr-skel" aria-hidden="true"><span class="cr-when">&nbsp;</span><span class="cr-trains"><span class="cr-train">&nbsp;</span></span><span class="cr-under">&nbsp;</span></div><button class="show-more-btn" type="button" tabindex="-1" aria-hidden="true" disabled style="visibility:hidden">Show more closures</button></div>
+    <button class="show-more-btn hidden" id="showMoreBtn" data-track="show-more: portslade page" onclick="showMoreClosures()">Show more closures</button>
   </div>
 
   <!-- About this crossing (burger-menu ticket 12): fixed facts, written in at build time from the
@@ -248,17 +255,17 @@
   </section>
 
   <div class="section">
-    <h2 style="font-size:12px;font-weight:600;margin-bottom:6px">How It Works</h2>
+    <h2 class="about-hdr">How it works</h2>
     <div class="info-text">
       Powered by live train times and real-time railway signalling. As trains approach, we forecast when the barriers will come down &mdash; and by detecting the exact moment each train clears the crossing, we give you a sharper estimate of when they'll lift again.
     </div>
-    <a class="feedback-link" data-track="feedback-form: portslade page" href="https://forms.gle/MvEes4H9pqSVyKpS8" target="_blank">Share Feedback</a>
+    <a class="feedback-link" data-track="feedback-form: portslade page" href="https://forms.gle/MvEes4H9pqSVyKpS8" target="_blank">Share feedback</a>
   </div>
 
   <div class="section">
-    <h2 style="font-size:12px;font-weight:600;margin-bottom:8px">Quick Links</h2>
+    <h2 class="about-hdr">Quick links</h2>
     <div class="setup-row">
-      <a class="setup-btn" data-track="request-from: portslade page" href="https://forms.gle/Tv3UcPDVcLygoG1D9" target="_blank" style="text-decoration:none">Request Your Local Crossing</a>
+      <a class="setup-btn" data-track="request-from: portslade page" href="https://forms.gle/Tv3UcPDVcLygoG1D9" target="_blank" style="text-decoration:none">Request your local crossing</a>
       <a class="setup-btn coffee-btn" data-track="gofundme: portslade page" href="https://www.gofundme.com/f/predict-level-crossing-closures-across-britain" target="_blank" rel="noopener" style="text-decoration:none">Support on GoFundMe</a>
     </div>
   </div>

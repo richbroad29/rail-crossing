@@ -170,11 +170,69 @@
     return out;
   }
 
-  function listHtml(periods, now, limit, heldT) {
-    var rel = relevant(periods, now, limit);
-    if (!rel.length) return '<div class="empty">No upcoming closures</div>';
-    return rel.map(function (p) { return cardHtml(p, now, heldT); }).join('');
+  function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+
+  // The same closure as a ROW — the public app's layout since the 2026-11 rebrand. Left: when it
+  // closes ("Now" for the current one), with how long underneath ("Closed for 2m 30s", or for the
+  // current one "Open in 1m 12s"). Middle: every train, origin → destination. Right: how soon, in a
+  // pill ("In 8 min"). The observer keeps cardHtml.
+  //
+  // Same values, same formatters and the same held / imminent rules as cardHtml — only arranged
+  // differently — so the two layouts cannot describe one closure two ways. In particular the
+  // current closure's "Open in" countdown is P.fmtEta on exactly the pair the Next Open card is
+  // derived from (see the comment in cardHtml), and card-test.js checks the two agree.
+  function rowHtml(p, now, heldT) {
+    var t = now.getTime();
+    if (typeof heldT !== 'number') heldT = t;
+    var isCurrent = t >= p.start.getTime() && (p.holdingOpen || t <= p.end.getTime());
+    var duration = P.fmtDownFor(p.end - (p.predictedStart || p.start));
+    var when, whenCls = '', under, pill = '', pillCls = '';
+    if (isCurrent) {
+      var eta = P.fmtEta(p.end.getTime() - (p.holdingOpen ? heldT : t), p.holdingOpen);
+      when = 'Now'; whenCls = ' cr-now';
+      // fmtEta's awkward tokens, put into words: "held" once even the bound has passed (the train
+      // has not cleared), "Soon" when a live countdown has reached zero before the state catches up.
+      under = eta === 'held' ? 'Open once the train is clear' : eta === 'Soon' ? 'Opening soon' : 'Open in ' + eta;
+    } else {
+      var w = p.window || { imminent: false, halfWidthSecs: 120 };
+      var pStart = p.predictedStart || p.start;
+      under = 'Closed for ' + duration;
+      if (p.closePending) {
+        // The trigger has not fired and its projection has expired: a lower bound, not a time.
+        when = 'Held'; whenCls = ' cr-held';
+        pill = 'Not before ' + P.fmtCountdown(Math.max(0, pStart.getTime() - heldT));
+      } else if (w.imminent) {
+        // The trigger HAS fired; only the start is too close to put a clock time on.
+        when = 'Soon'; whenCls = ' cr-imminent';
+        pill = 'Any moment now'; pillCls = ' cr-pill-imminent';
+      } else {
+        when = P.fmtShort(pStart);
+        pill = cap(P.fmtWhen(pStart.getTime() - t, w.halfWidthSecs >= 60));
+      }
+    }
+    var html = '<div class="cr-row' + (isCurrent ? ' cr-current' : '') + '">';
+    html += '<span class="cr-when' + whenCls + '">' + esc(when) + '</span>';
+    html += '<span class="cr-trains">';
+    for (var j = 0; j < p.trains.length; j++) {
+      var tr = p.trains[j];
+      html += '<span class="cr-train">' + esc(tr.origin) + ' → ' + esc(tr.destination) + esc(typeLabel(tr)) + '</span>';
+    }
+    html += '</span>';
+    if (pill) html += '<span class="cr-pill' + pillCls + '">' + esc(pill) + '</span>';
+    html += '<span class="cr-under' + (isCurrent ? ' cr-now' : '') + '">' + esc(under) + '</span>';
+    if (p.trains.some(function (x) { return x.isUncertain; })) {
+      html += '<span class="cr-warn">⚠ Timing uncertain — train delayed with no estimate</span>';
+    }
+    return html + '</div>';
   }
 
-  root.CLOSURE_CARD = { cardHtml: cardHtml, listHtml: listHtml, relevant: relevant, typeLabel: typeLabel };
+  // `opts.layout`: 'rows' for the public app, anything else (the observer) for the cards.
+  function listHtml(periods, now, limit, heldT, opts) {
+    var rel = relevant(periods, now, limit);
+    if (!rel.length) return '<div class="empty">No upcoming closures</div>';
+    var one = opts && opts.layout === 'rows' ? rowHtml : cardHtml;
+    return rel.map(function (p) { return one(p, now, heldT); }).join('');
+  }
+
+  root.CLOSURE_CARD = { cardHtml: cardHtml, rowHtml: rowHtml, listHtml: listHtml, relevant: relevant, typeLabel: typeLabel };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

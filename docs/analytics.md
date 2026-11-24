@@ -43,7 +43,7 @@ A crossing is always named the same way, so one crossing's taps add up across th
 | `app-installed: <page>` | An install that completed, however it was started (our button or the browser's own menu). Only Chrome-family browsers report this: Android, and desktop Chrome/Edge. iPhone never does |
 | `gofundme: <where>` | A GoFundMe link pressed: `homepage FAQ`, `homepage footer`, `portslade page` |
 | `map-link: <where>` | A link to the live train map: `homepage footer`, `portslade page footer`, `portslade local map` (the street-map picture in About this crossing) |
-| `home-link: <where>` | A link back to the homepage from a crossing page: `portslade menu`, `portslade page footer` |
+| `home-link: <where>` | A link back to the homepage from a crossing page: `portslade menu`, `portslade page footer`, `portslade header` (the logo and name in the sea-blue header, since the 2026-11 rebrand; also `<slug> header` on coming-soon pages and `<county> county header` on county lists) |
 | `county-link: <where>` | A link to a county's list of crossings: `homepage` (Crossings by county), `<crossing> page footer` |
 | `county-tap: <county> -> <crossing>` | A crossing tapped in a county list (`/crossings/<county>/`); names are page addresses |
 | `nearby-page-tap: <from> -> <to>` | A crossing tapped in a coming-soon page's Nearby crossings; names are page addresses |
