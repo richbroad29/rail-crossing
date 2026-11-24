@@ -80,10 +80,12 @@ for (const [id, config] of Object.entries(crossingsConfig)) {
 async function pollAll() {
   for (const [id, config] of Object.entries(crossingsConfig)) {
     try {
+      const cancelled = [];
       const trains = await pollCrossing(id, config, auth, {
-        timetableDirection: q => crossingStates[id].timetableDirection(q)
+        timetableDirection: q => crossingStates[id].timetableDirection(q),
+        cancelledOut: cancelled
       });
-      engines.ldb(id, trains);
+      engines.ldb(id, trains, cancelled);
       console.log(`LDB ${id}: ${trains.length} trains, state=${crossingStates[id].state}`);
     } catch (err) {
       console.error(`LDB poll failed for ${id}:`, err.message);

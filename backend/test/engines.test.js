@@ -128,6 +128,13 @@ console.log('\nWith a berth-first shadow (routes file without learned routes: it
   check('the serving engine is unchanged by the shadow', stable(e.serving.portslade.getApiState()), stable(control.getApiState()));
   check('the shadow holds its own copy of the board, not the serving engine\'s',
     e.shadows.portslade.ldbTrains !== e.serving.portslade.ldbTrains && e.shadows.portslade.ldbTrains[0] !== trains[0], true);
+  // The board's cancelled services (run-through, design §5.5): the shadow gets its own copy; the classic serving
+  // engine has nothing that reads them and is unchanged.
+  const cancelled = [{ uid: 'X00001', trainid: '1H96', sta: '2026-11-19T22:01:00', isCancelled: true }];
+  e.ldb('portslade', board(), cancelled); control.updateLdbTrains(board());
+  check('cancelled services: the classic serving engine is unchanged', stable(e.serving.portslade.getApiState()), stable(control.getApiState()));
+  check('cancelled services: the shadow has them', e.shadows.portslade.ldbCancelled.length, 1);
+  check('cancelled services: ...its own copy', e.shadows.portslade.ldbCancelled[0] !== cancelled[0], true);
   check('  ...equal in content', JSON.stringify(e.shadows.portslade.ldbTrains), JSON.stringify(trains));
   check('the shadow tracked berth events from both its areas (LA step + interpose, TB step)',
     JSON.stringify([e.shadows.portslade.tracker.stats.steps, e.shadows.portslade.tracker.stats.interposes]), JSON.stringify([2, 1]));

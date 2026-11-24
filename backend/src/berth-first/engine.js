@@ -31,6 +31,7 @@ const { compileRoutes } = require('./routes');
 const { linkEntries } = require('./link');
 const ClosureTiming = require('./timing');
 const { trainTypeOf } = require('../train-type');
+const { parseLondonWallClock } = require('../time-utils');
 
 const CROSSED_KEEP_MS = 10 * 60e3;     // a train is kept this long after its clear step (barrier-up lags are < 1 min)
 const STALL_DEFAULT_SECS = 300;        // a berth with too few trains for a measured stall threshold
@@ -73,6 +74,9 @@ class BerthFirstEngine {
   ownsTdArea(area) { return this.areas.has(area); }
 
   updateLdbTrains(trains) { this.timing.updateLdbTrains(trains || []); }
+  // The board poll's cancelled services (design §5.5): a train the berths have whose stop at the crossing's station
+  // is cancelled runs through it. Replaced on every poll, as the board itself is.
+  updateLdbCancelled(services) { this.ldbCancelled = Array.isArray(services) ? services : []; }
   updateScheduleTrains(trains) { this.timing.updateScheduleTrains(trains || []); }
 
   // Every berth event the listener emits (index.js / engines.js fan each out to every engine): the
@@ -201,16 +205,38 @@ class BerthFirstEngine {
   // instead of 0006 + 100 s) and the crossing's own station (schedule.tiploc_station -> fast). The berths that
   // show it, and their thresholds, are learned (routes file runThrough, with its earlier berth). The merged
   // trains are fresh copies every recompute, so the timetable and board entries themselves are never changed.
+  //
+  // Darwin (design §5.5, westbound's only signal: Portslade's stop is in the clear-step berth itself): a train on the
+  // berths whose stop at the crossing's station the board lists as cancelled runs through it — timed as fast. 36 of 37
+  // westbound run-throughs over 44 days had that cancellation in the 10 min before; 8 of 3,758 stoppers had it too
+  // (they close early, the safe side). Matched by UID, else by headcode within 30 min of its booked time here.
   _applyRunThrough(kept) {
     const sch = this.config.schedule || {};
     const byId = new Map(this.view.map(v => [v.id, v]));
     for (const m of kept) {
       const v = byId.get(m.bfId);
-      if (!v || !v.ranThrough || !v.ranThrough.size || v.dir !== m.direction) continue;
-      m.ranThrough = [...v.ranThrough];
-      if (sch.tiploc_approach_call && v.ranThrough.has(sch.tiploc_approach_call)) m.callsAtApproach = false;
-      if (sch.tiploc_station && v.ranThrough.has(sch.tiploc_station)) { m.callsAtStation = false; m.runThroughStation = true; }
+      const ran = new Set(v && v.dir === m.direction && v.ranThrough ? v.ranThrough : []);
+      if (sch.tiploc_station && this._stopCancelled(m)) { ran.add(sch.tiploc_station); m.stopCancelled = true; }
+      if (!ran.size) continue;
+      m.ranThrough = [...ran];
+      if (sch.tiploc_approach_call && ran.has(sch.tiploc_approach_call)) m.callsAtApproach = false;
+      if (sch.tiploc_station && ran.has(sch.tiploc_station)) { m.callsAtStation = false; m.runThroughStation = true; }
     }
+  }
+
+  _stopCancelled(m) {
+    const list = this.ldbCancelled || [];
+    if (!list.length) return false;
+    const ref = m.scheduledTime || m.bestTime;
+    const refMs = ref instanceof Date ? ref.getTime() : (ref ? Date.parse(ref) : NaN);
+    for (const c of list) {
+      if (!c || c.isCancelled === false) continue;
+      if (m.uid && c.uid) { if (m.uid === c.uid) return true; continue; }
+      if (!m.headcode || c.trainid !== m.headcode) continue;
+      const t = parseLondonWallClock(c.sta || c.std || '');
+      if (t && Number.isFinite(refMs) && Math.abs(t.getTime() - refMs) <= 30 * 60e3) return true;
+    }
+    return false;
   }
 
   // A forecast row: the timing's own estimate for a train not on the berths, and whether it is overdue.

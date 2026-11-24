@@ -7,6 +7,10 @@
 //   B. the same train stopping as booked (145 s in 0010): unchanged, 0006 + 100 s.
 //   C. 1N43, 9 Nov: stopped at Shoreham (122 s in 0010) but ran through Southwick (46 s in 0006): the station's own
 //      berth shows it when it leaves 0006, and the close comes at once instead of after the crossing.
+//   D. 1H34 west, 18 Nov: booked at Portslade, 32 min late, ran through it (28 s in 0005, the clear-step berth, so
+//      the berths cannot show it in time). Today's rule closes at 0003 + 61 s = 15:58:20, 6 s before it crossed. With
+//      Darwin's cancelled Portslade stop (the board's cancelled services) it is fast: 0001 + 2 s, floored at 10 s = 15:56:39.
+//   E. the cancellation must be this train's: another UID changes nothing.
 // usage: node test/berth-runthrough.test.js
 const fs = require('fs');
 const path = require('path');
@@ -30,20 +34,22 @@ function check(label, actual, expected) {
 
 const hms = ms => new RealDate(ms).toISOString().slice(11, 19);
 const at = s => RealDate.parse(`2026-11-18T${s}Z`);
-// One run of 1N43 east: [from, to, 'HH:MM:SS'] steps, fed one at a time; returns what the engine said after each.
-function run(steps) {
+const N43 = { uid: 'G88658', headcode: '1N43', direction: 'east', estimatedCrossingMins: 17 * 60 + 28.4, callsAtStation: true, callsAtApproach: true, origin: 'SOTON', destination: 'BRGHTN' };
+// One run of a train: [from, to, 'HH:MM:SS'] steps, fed one at a time; returns what the engine said after each.
+// `cancelled`: the board's cancelled services, given before the first step (as engines.ldb gives them each poll).
+function run(steps, tt = N43, cancelled = null) {
   NOW = at(steps[0][2]) - 60e3;
   const e = quiet(() => new BerthFirstEngine('portslade', JSON.parse(JSON.stringify(def)), routes));
-  quiet(() => e.updateScheduleTrains([{ uid: 'G88658', headcode: '1N43', category: 'XX', operator: 'SN', trainType: 'passenger', direction: 'east',
-    estimatedCrossingMins: 17 * 60 + 28.4, source: 'cif', legIndex: 0, legCount: 1, callsAtStation: true, callsAtApproach: true,
-    runsAsRequired: false, daysPattern: '1111100', origin: 'SOTON', destination: 'BRGHTN' }]));
-  const out = {};
+  if (cancelled) e.updateLdbCancelled(cancelled);
+  quiet(() => e.updateScheduleTrains([{ category: 'XX', operator: 'SN', trainType: 'passenger', source: 'cif', legIndex: 0, legCount: 1,
+    runsAsRequired: false, daysPattern: '1111100', ...tt }]));
+  const hc = tt.headcode, out = {};
   for (const [from, to, t] of steps) {
     NOW = at(t);
-    quiet(() => { e.recordTdEvent({ headcode: '1N43', ts: new RealDate(NOW).toISOString(), area: 'LA', event: 'CA', from, to }); e._recompute(); });
-    const m = (e.timing._bfMerged || []).find(x => x.headcode === '1N43');
+    quiet(() => { e.recordTdEvent({ headcode: hc, ts: new RealDate(NOW).toISOString(), area: 'LA', event: 'CA', from, to }); e._recompute(); });
+    const m = (e.timing._bfMerged || []).find(x => x.headcode === hc);
     const api = quiet(() => e.getApiState(10));
-    const p = api.upcomingClosures.find(c => c.trains.some(x => x.headcode === '1N43'));
+    const p = api.upcomingClosures.find(c => c.trains.some(x => x.headcode === hc));
     out[`${from}>${to}`] = { cls: m ? e.timing._classOf(m) : null, close: p && p.closeConfirmed ? hms(RealDate.parse(p.start)) : null,
       ranThrough: (m && m.ranThrough) || [], state: api.state };
   }
@@ -74,6 +80,25 @@ console.log('\nC. 1N43 9 Nov (times moved to 18 Nov): stopped at Shoreham, ran t
   check('122 s in 0010 (a Shoreham stop): stoppingLocal', r['0010>0008'].cls, 'stoppingLocal');
   check('...so the close waits for 0006 + 100 s = 17:30:22', r['0008>0006'].close, '17:30:22');
   check('left 0006 after 46 s: not calling at Southwick, barrier down at once', [r['0006>0004'].cls, r['0006>0004'].ranThrough, r['0006>0004'].state], ['stopping', ['STHWICK'], 'CLOSED']);
+}
+
+console.log('\nD. 1H34 west 18 Nov: booked at Portslade, ran through it; Darwin had cancelled the stop');
+const H34 = { uid: 'G26423', headcode: '1H34', direction: 'west', estimatedCrossingMins: 15 * 60 + 26.5, callsAtStation: true, callsAtApproach: false, origin: 'VICTRIC', destination: 'LTLHMPT' };
+const H34steps = [['T682', 'T677', '15:54:15'], ['T677', '0001', '15:56:29'], ['0001', '0003', '15:57:19'], ['0003', '0005', '15:57:58'], ['0005', '0007', '15:58:26']];
+const cancel = uid => [{ uid, rid: '202611187126423', trainid: '1H34', sta: '2026-11-18T15:26:00', std: '2026-11-18T15:26:30', isCancelled: true, operatorCode: 'SN' }];
+{
+  const r = run(H34steps, H34);
+  check('no cancellation: stopping, closes 0003 + 61 s = 15:58:20, 6 s before it crossed', [r['0001>0003'].cls, r['0003>0005'].close], ['stopping', '15:58:20']);
+  const c = run(H34steps, H34, cancel('G26423'));
+  check('Portslade stop cancelled: fast from the start', [c['T677>0001'].cls, c['T677>0001'].ranThrough], ['fast', ['PSLDAWH']]);
+  check('closes at 0001 + 2 s, floored at 10 s after the strike (minAfterStrikeSecs) = 15:56:39', c['T677>0001'].close, '15:56:39');
+  check('BARRIERS DOWN well before it crosses (15:58:26)', c['0003>0005'].state, 'CLOSED');
+}
+
+console.log('\nE. a cancellation for another train');
+{
+  const c = run(H34steps, H34, cancel('G99999'));
+  check('another UID: still stopping, closes 15:58:20', [c['0001>0003'].cls, c['0003>0005'].close], ['stopping', '15:58:20']);
 }
 
 global.Date = RealDate;

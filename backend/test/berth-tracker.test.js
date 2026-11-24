@@ -152,6 +152,6 @@ console.log('\n-- 1P75 19/20 Nov: one headcode, two trains (TB and B3) at the sa
   check('one in each area, both moving at the same time', [spans.map(s => s.area).sort(), Math.max(...spans.map(s => s.from)) < Math.min(...spans.map(s => s.to))], [['B3', 'TB'], true]);
 }
 
-fs.rmSync(tmp, { recursive: true, force: true });
+fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });   // macOS: rm -r can race its own deletes (ENOTEMPTY, 24 Nov)
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

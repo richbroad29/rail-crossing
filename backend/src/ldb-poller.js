@@ -529,6 +529,9 @@ async function pollCrossing(crossingId, config, auth, opts = {}) {
   const deduped = deduplicateTrains(allTrains);
   logger.logLdb(crossingId, deduped);
   if (cancelled.length) logger.logLdbCancelled(crossingId, station, cancelled);
+  // opts.cancelledOut (optional array): this poll's cancelled services, for an engine that reads them (berth-first's
+  // run-through, design §5.5: a stop cancelled here means the train runs through). The return value is unchanged.
+  if (Array.isArray(opts.cancelledOut)) opts.cancelledOut.push(...cancelled);
   return deduped;
 }
 

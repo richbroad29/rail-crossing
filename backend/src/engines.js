@@ -70,9 +70,17 @@ class CrossingEngines {
     }
   }
 
-  ldb(id, trains) {
-    this.serving[id].updateLdbTrains(trains);
-    this._toShadow(id, 'ldb', sh => sh.updateLdbTrains(copy(trains)));
+  // `cancelled` (optional): the same poll's cancelled services. Only an engine with updateLdbCancelled reads them
+  // (berth-first's run-through); the classic engine has none, so it is handed nothing new. Given before the trains,
+  // so the recompute the trains trigger already sees them.
+  ldb(id, trains, cancelled) {
+    const st = this.serving[id];
+    if (cancelled && typeof st.updateLdbCancelled === 'function') st.updateLdbCancelled(cancelled);
+    st.updateLdbTrains(trains);
+    this._toShadow(id, 'ldb', sh => {
+      if (cancelled && typeof sh.updateLdbCancelled === 'function') sh.updateLdbCancelled(copy(cancelled));
+      sh.updateLdbTrains(copy(trains));
+    });
   }
 
   schedule(id, trains) {
