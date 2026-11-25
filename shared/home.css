@@ -45,6 +45,20 @@ button{font-family:inherit}
 .add-app-btn:active{background:var(--accent-d)}
 .add-app-btn.hidden{display:none}
 .hp-app{position:absolute;z-index:4;top:12px;right:max(12px,env(safe-area-inset-right,0px));height:34px;border-radius:17px;padding:0 14px 0 11px;font-size:12px;box-shadow:var(--rc-shadow-app)}
+/* Expand map / Close map, the map's top-left corner (2026-11-25). On the page one finger and the wheel
+   scroll past the map; full screen, the same map is fixed over everything and one finger moves it. */
+.hp-expand{position:absolute;z-index:4;top:12px;left:max(12px,env(safe-area-inset-left,0px));height:34px;padding:0 13px 0 10px;border:1px solid var(--rc-line);border-radius:17px;background:var(--panel);color:var(--fg);font-size:12px;font-weight:700;display:inline-flex;align-items:center;gap:6px;cursor:pointer;box-shadow:var(--rc-shadow-app);-webkit-tap-highlight-color:transparent}
+.hp-expand:active{background:var(--rc-press)}
+.hp-mapwrap.is-full{position:fixed;inset:0;height:auto;z-index:45}
+.hp-mapwrap.is-full .hp-expand{top:14px;height:40px;border-radius:20px;padding:0 16px 0 12px;font-size:14px;background:var(--accent);border-color:var(--accent);color:var(--rc-on-accent)}
+.hp-mapwrap.is-full .hp-app{display:none}
+html.hp-map-full,html.hp-map-full body{overflow:hidden}
+/* The map library's "Use two fingers…" / "Use ⌘ + scroll…" hint, in the site's type and colours */
+.hp-map .maplibregl-cooperative-gesture-screen{background:var(--rc-scrim);font-family:var(--font);font-size:20px;font-weight:800;letter-spacing:-.3px;line-height:1.25;text-align:center;padding:24px}
+/* + and − (mouse and trackpad only), under Add as app */
+.hp-map .maplibregl-ctrl-top-right{top:46px}
+.hp-map .maplibregl-ctrl-group{border-radius:10px;border:1px solid var(--rc-line);box-shadow:var(--rc-shadow-app);overflow:hidden}
+.hp-map .maplibregl-ctrl-group button{width:40px;height:40px}
 .hp-app-inline{align-self:flex-start;height:40px;border-radius:20px;padding:0 16px 0 13px;font-size:14px}
 .hp-legend{position:absolute;z-index:3;left:max(12px,env(safe-area-inset-left,0px));bottom:30px;background:var(--rc-map-glass);border-radius:10px;padding:7px 10px;display:flex;flex-direction:column;align-items:flex-start;gap:4px;font-size:12px;color:var(--dim);pointer-events:none}
 .hp-legend i{display:inline-block;vertical-align:-1px;margin-right:6px}

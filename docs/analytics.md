@@ -20,6 +20,8 @@ A crossing is always named the same way, so one crossing's taps add up across th
 |---|---|
 | `map-tap: <crossing> (live)` / `(coming soon)` | A crossing tapped on the homepage map |
 | `list-tap: <crossing>` | A crossing tapped in the Live crossings list below the homepage map |
+| `map-expand: homepage` | Expand map pressed (the homepage map full screen; since 2026-11-25) |
+| `map-move: homepage page` / `homepage full screen` | The first time in a visit that the person moved or zoomed the homepage map themselves (two fingers, drag, pinch, + −, ⌘/Ctrl + scroll), on the page or full screen. Moves made by search or Nearby don't count. Since 2026-11-25 |
 | `search: <words>` | Something searched for (homepage or crossing-page menu): sent 2 s after typing stops, or on Enter. Lower-cased |
 | `search (no results): <words>` | The same, when nothing matched. Good for spotting crossings or places people want |
 | `search-tap: <crossing>` | A live crossing tapped in the homepage search results |

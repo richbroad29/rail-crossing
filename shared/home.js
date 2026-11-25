@@ -24,7 +24,8 @@
   var ICON = {
     soon: '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
     near: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.5" fill="currentColor"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>',
-    close: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>'
+    close: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>',
+    expand: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>'
   };
   function note(t, cls) { return '<div class="pm-note' + (cls ? ' ' + cls : '') + '">' + t + '</div>'; }
   // Usage counts (shared/track.js; names listed in docs/analytics.md). A crossing is named the
@@ -249,7 +250,9 @@
     var FINE = window.matchMedia && matchMedia('(pointer: fine)').matches;   // mouse: smaller marks
     var DOT = FINE ? { r: [4, 1.6, 7, 2, 9, 2.6, 12, 3.4], w: 0.75, tol: 5 } : { r: [4, 2.5, 7, 3, 9, 4, 12, 5], w: 1, tol: 14 };
     var GB = [[-6.3, 49.95], [1.8, 58.7]];
-    function pad() { return { top: 120, bottom: 70, left: 30, right: 30 }; }
+    // Room at the top for the Expand map / Add as app buttons, at the bottom for the legend. (The top
+    // was 120 while the search box floated over the map, before the 2026-11 rebrand moved it above.)
+    function pad() { return { top: 60, bottom: 70, left: 30, right: 30 }; }
     function whenReady(fn) { if (map && map.loaded()) fn(); else pending.push(fn); }
     function fail() {
       mapStatus.textContent = 'The map couldn’t load. Search and the list of live crossings below still work.';
@@ -285,11 +288,25 @@
         map = new maplibregl.Map({
           container: 'map', style: 'https://tiles.openfreemap.org/styles/' + (tok('map-base') || 'dark'), bounds: GB, fitBoundsOptions: { padding: pad() },
           minZoom: 4, maxZoom: 17, maxBounds: [[-32, 40], [26, 70]], attributionControl: false, dragRotate: false,
-          pitchWithRotate: false, touchPitch: false, renderWorldCopies: false, cooperativeGestures: false
+          pitchWithRotate: false, touchPitch: false, renderWorldCopies: false,
+          // On the page the map lets the page scroll (2026-11-25, see setFull below): one finger and the
+          // mouse wheel scroll the PAGE; two fingers, ⌘/Ctrl + scroll, a trackpad pinch, double-click
+          // and + − move the map. Full screen (Expand map) turns this off so one finger moves the map.
+          cooperativeGestures: !full,
+          locale: { 'CooperativeGesturesHandler.MobileHelpText': 'Use two fingers to move the map, or tap Expand map' }
         });
       } catch (e) { fail(); return; }
       map.touchZoomRotate.disableRotation();
       map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
+      // + and − for a mouse or trackpad, whose scroll wheel now scrolls the page. A phone pinches.
+      if (FINE) map.addControl(new maplibregl.NavigationControl({ showCompass: false, visualizePitch: false }), 'top-right');
+      // How many visitors browse the map themselves (not search or Nearby moving it): the first move
+      // per visit that a person made. Programmatic moves (fitBounds, panTo) carry no originalEvent.
+      var moved = false;
+      map.on('movestart', function (e) {
+        if (moved || !e.originalEvent) return;
+        moved = true; TRACK('map-move: homepage ' + (full ? 'full screen' : 'page'));
+      });
       var loaded = false;
       map.on('error', function () { if (!loaded) fail(); });
       // A map that stalls rather than errors (tiles unreachable, a browser that never finishes the
@@ -386,9 +403,49 @@
         var b = new maplibregl.LngLatBounds([here.lon, here.lat], [here.lon, here.lat]);
         n.top.forEach(function (x, i) { marker([x.e.lon, x.e.lat], '<div class="pin-num">' + (i + 1) + '</div>'); b.extend([x.e.lon, x.e.lat]); });
         if (n.nearestLive) marker([n.nearestLive.e.lon, n.nearestLive.e.lat], '<div class="pin-num">★</div>');
-        map.fitBounds(b, { padding: { top: 140, bottom: 70, left: 50, right: 150 }, maxZoom: 14 });   // right: room for live names, drawn to the right of their pins
+        map.fitBounds(b, { padding: { top: 70, bottom: 70, left: 50, right: 150 }, maxZoom: 14 });   // right: room for live names, drawn to the right of their pins
       });
     }
+    // ---- Expand map: the same map, full screen (2026-11-25) ------------------------------------------
+    // On the page, one finger and the wheel scroll past the map (cooperativeGestures above). Expand map
+    // fixes the SAME map over the whole screen and hands one finger back to the map. Close map, the
+    // phone's Back or Esc returns, and because it is the same map it is still on the place and zoom the
+    // user left it at (a resize keeps the centre and zoom; nothing re-fits it). A selected crossing stays
+    // selected, and the map shifts only if its pin would fall outside the smaller page map. The page
+    // does not scroll while the map is full screen, and comes back where it was.
+    var full = false, savedY = 0;
+    var wrap = document.querySelector('.hp-mapwrap'), expandBtn = $('mapExpand');
+    if (history.state && history.state.hpMapFull) history.replaceState(null, '');   // a reload while full
+    function setFull(on) {
+      if (on === full) return;
+      full = on;
+      if (on) savedY = window.scrollY;
+      wrap.classList.toggle('is-full', on);
+      document.documentElement.classList.toggle('hp-map-full', on);
+      expandBtn.innerHTML = on ? ICON.close + 'Close map' : ICON.expand + 'Expand map';
+      if (map) {
+        if (on) map.cooperativeGestures.disable(); else map.cooperativeGestures.enable();
+        map.resize();
+        if (!on && sel) keepInView([sel.lon, sel.lat]);
+      }
+      if (!on) window.scrollTo(0, savedY);
+    }
+    // Pan only as far as needed to bring a point back into view, clear of the place card.
+    function keepInView(ll) {
+      var p = map.project(ll), c = map.getCanvas(), m = 40;
+      var bottom = c.clientHeight - m - (placeCard.hidden ? 0 : placeCard.offsetHeight);
+      if (p.x < m || p.y < m || p.x > c.clientWidth - m || p.y > bottom) map.panTo(ll);
+    }
+    if (expandBtn) {
+      expandBtn.addEventListener('click', function () {
+        if (!full) { TRACK('map-expand: homepage'); history.pushState({ hpMapFull: true }, ''); setFull(true); }
+        else if (history.state && history.state.hpMapFull) history.back();   // popstate closes it
+        else setFull(false);
+      });
+      window.addEventListener('popstate', function () { if (full) setFull(false); });
+      document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && full) expandBtn.click(); });
+    }
+
     // Start: the directory and the library in parallel; the map draws once both are here.
     Promise.all([ready, loadLib()]).then(function (res) { build(res[0]); }, fail);
     // Already allowed location (never prompts): start zoomed to the visitor.
