@@ -118,6 +118,28 @@ behaviour); 0 = never queued. For a new crossing: run the backtest, read N off �
 
 The **frontend has no build step** — edit files, push to `main`, GitHub Pages deploys within ~1 minute.
 
+### The design system: read it before any design, copy or frontend change (2026-11-25)
+
+The public site's whole look and voice is written up as a design system, **railcrossing.uk Seaside**:
+https://claude.ai/artifact/NDtanDKUv2Vy5yUMc1jka5 (a claude.ai Design System artifact in Rich's account, private to
+him). Before designing, mocking up or building anything a visitor sees (a page, a component, a state, a line of
+copy), read its `project/README.md` with the Artifact tool (`action: "read"`, `path: "project/README.md"`), then the
+sections that apply:
+- `writing.md`: voice, the exact status words, time and distance formats, the safety line.
+- `barrier-states.md`: what each state shows in each place; red, amber and green belong to the barrier alone.
+- `decisions.md`: Rich's settled design calls, dated. Don't reopen one without a new reason.
+- `components/<Name>/README.md`: the component you are touching. They are this repo's own classes, so build from
+  them before inventing new ones. Mock-ups use its tokens and Schibsted Grotesk.
+
+**Keep it current.** It describes `main` as of `b457ef4`. When a change to the look, a component, the copy rules or
+a decision of Rich's ships, update the design system in the same piece of work (the token or component it changes,
+plus a dated line in `decisions.md`) and say so in the report to Rich. `shared/theme.css` stays the source of truth
+for values: if the two disagree, theme.css wins and the design system is corrected. Its source files are on Rich's
+Mac in `~/rc-data/design-system/`. `build-tokens.py` regenerates `tokens.json` from theme.css, and
+`build-components.py` regenerates the previews from markup captured by `~/rc-data/brand-harness/capture.mjs`. A
+session without that folder reads the artifact's files back with the Artifact tool, edits them, and republishes only
+the changed ones (the index last, per the type's own instructions).
+
 ### The look lives in `shared/theme.css` (2026-11 rebrand, "Seaside")
 
 Every colour on the public pages is a `--rc-*` name in `shared/theme.css`; the stylesheets refer to the names
@@ -480,6 +502,7 @@ planted answer first; that is how two of its bugs were caught.
 
 ## Common tasks — quick reference
 
+- **Change anything a visitor sees** (look, layout, copy, a state): read the design system first and update it after. See "The design system" above.
 - **Tweak timing parameters**: edit `backend/config/crossings/<id>.json` on `backend-v2` (`closeBefore` / `openAfter` / `openLagSecs` / `closeTrigger`) and deploy — the frontend renders the backend's closures. (`shared/crossings.json` feeds only the client-side confidence-window / debug-panel display.)
 - **Change closure logic**: backend `_computeClosures()` / `_anchorEndToClearStep()` in `backend/src/crossing-state.js` (authoritative); frontend just maps them via `buildClosuresFromVps()` in `shared/crossing.js`.
 - **Change direction detection**: it's backend-side now — `analyseRoute()` in `backend/src/schedule-parser.js` (CIF) and the LDB poller. The frontend just reads `t.direction`.
