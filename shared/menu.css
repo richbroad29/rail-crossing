@@ -58,3 +58,8 @@ body.pm-lock{overflow:hidden}
 .top-menu{height:44px;margin-right:-10px;padding:0 10px;border:0;border-radius:10px;background:transparent;color:var(--rc-on-hero);font:inherit;font-size:14px;font-weight:600;display:inline-flex;align-items:center;gap:8px;cursor:pointer;-webkit-tap-highlight-color:transparent}
 .top-menu:active{background:var(--rc-hero-press)}
 .brand:focus-visible,.top-menu:focus-visible{outline:2px solid var(--rc-on-hero);outline-offset:2px}
+
+/* Numbered steps (Add as app on both pages, the location help in the menu and search). Browsers
+   draw list numbers in tabular figures, and Schibsted Grotesk's tabular full stop is as wide as a
+   digit, so "1." read "1 ." (2026-11-25). Here because every public page loads menu.css. */
+li::marker{font-variant-numeric:normal}
