@@ -23,6 +23,9 @@
 //          (_freshClearStep).
 //        - a train the engine found running through the crossing's station is not stopping (_isStopping;
 //          design §5.5 — the engine also clears its booked approach stop on the merged copy).
+//   4. corrections to the copied rules, found in the shadow and proven by a 14-day page replay (Rich
+//      agreed each one; the live engine keeps the original until Portslade switches):
+//        - _coalesceOverlapping asks only the trains whose close is not held (25 Nov, two "Now" rows).
 //
 const fs = require('fs');
 const path = require('path');
@@ -2501,15 +2504,24 @@ class CrossingState {
         // throughout and caught none of it. See the merge-rule note in memory before retrying:
         // the approach needs the hysteresis below replaced with a confirmation rule first,
         // because moving all merging into this pass makes that latch universal.
+        // Register #20, same rule as the base pass: a HELD close is a LOWER BOUND, so "it lands
+        // before the previous end" is not the #15 inversion — it is the only thing we are entitled
+        // to say while the train is queued. Merging on it is what hid 96s of real barrier-up on
+        // 2026-08-23. Without this the base pass's split is undone here, because a bound floored at
+        // `now` always precedes a live period end.
+        // BERTH-FIRST (4): the rule is applied per TRAIN, not per period. The original skipped the
+        // whole period if ANY of its trains was held, so a period whose other train had a real close
+        // inside the previous closure was left overlapping it, and the page showed two "Now" rows:
+        // 25 Nov 11:14:48, 1S23e's struck close (11:13:41) inside 2Y24w's closure, beside 1H25e held,
+        // 30 s (the shadow logged it as live did). Only the trains whose close is not held are asked;
+        // a period of held trains alone is still never joined on its bound. Replay 11-24 Nov: two-"Now"
+        // 15 s samples 8 -> 1, inverted closure ticks 194 -> 180, page different in 36 of 80,640 samples;
+        // on the 1 s page missed, DOWN while the barrier is up, barrier down not DOWN, Closing soon unchanged.
+        const firm = next.filter(a => !a.closeHeld);
+        if (!firm.length) continue;
         const nextClose = Math.min(
-          ...next.map(a => Math.min(a.predClose.getTime(), a.confClose.getTime())));
+          ...firm.map(a => Math.min(a.predClose.getTime(), a.confClose.getTime())));
         if (nextClose > prevEnd) continue;
-        // Register #20, same rule as the base pass: this period's close is a LOWER BOUND,
-        // so "it lands before the previous end" is not the #15 inversion — it is the only
-        // thing we are entitled to say while the train is queued. Merging on it is what
-        // hid 96s of real barrier-up on 2026-08-23. Without this the base pass's split is
-        // undone here, because a bound floored at `now` always precedes a live period end.
-        if (next.some(a => a.closeHeld)) continue;
         if (this._barrierKnownToLift(prev, next, now)) continue;
         groups[i] = prev.concat(next);
         groups.splice(i + 1, 1);
