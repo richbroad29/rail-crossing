@@ -33,7 +33,9 @@ const metresPerPx = lat => 40075016.686 * Math.cos(lat * Math.PI / 180) / (512 *
 const UA = 'railcrossing.uk local map build';
 // The picture's colours and map style come from shared/theme.css, the one list of the site's colours.
 const THEME_CSS = readFileSync(join(ROOT, 'shared', 'theme.css'), 'utf8');
-const T = name => { const m = THEME_CSS.match(new RegExp(`--rc-${name}:\\s*([^;]+);`)); if (!m) throw new Error(`shared/theme.css has no --rc-${name}`); return m[1].trim(); };
+// A job name points at the palette (`--rc-text:var(--slate-900)`), so follow var() to the value.
+const raw = name => { const m = THEME_CSS.match(new RegExp(`--${name}:\\s*([^;]+);`)); if (!m) throw new Error(`shared/theme.css has no --${name}`); return m[1].trim(); };
+const T = name => { let v = raw('rc-' + name); for (let i = 0, r; i < 8 && (r = v.match(/^var\(--([\w-]+)\)$/)); i++) v = raw(r[1]); return v; };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const MISSING = argv.includes('--missing');
 const only = argv.find(a => !a.startsWith('--'));

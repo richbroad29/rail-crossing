@@ -131,8 +131,8 @@ sections that apply:
 - `components/<Name>/README.md`: the component you are touching. They are this repo's own classes, so build from
   them before inventing new ones. Mock-ups use its tokens and Schibsted Grotesk.
 
-**Keep it current.** It describes `main` as of `b457ef4`. When a change to the look, a component, the copy rules or
-a decision of Rich's ships, update the design system in the same piece of work (the token or component it changes,
+**Keep it current.** It describes `main` as of the palette change (2026-11-25). When a change to the look, a
+component, the copy rules or a decision of Rich's ships, update the design system in the same piece of work (the token or component it changes,
 plus a dated line in `decisions.md`) and say so in the report to Rich. `shared/theme.css` stays the source of truth
 for values: if the two disagree, theme.css wins and the design system is corrected. Its source files are on Rich's
 Mac in `~/rc-data/design-system/`. `build-tokens.py` regenerates `tokens.json` from theme.css, and
@@ -143,7 +143,14 @@ the changed ones (the index last, per the type's own instructions).
 ### The look lives in `shared/theme.css` (2026-11 rebrand, "Seaside")
 
 Every colour on the public pages is a `--rc-*` name in `shared/theme.css`; the stylesheets refer to the names
-and never to a colour. Code picks a CLASS, never a colour: `crossing.js` sets `st-*` on the status box,
+and never to a colour. The file has **two layers** (2026-11-25, Rich): a **palette** of 32 solid colours in six
+families (`--sand-*`, `--slate-*`, `--sea-*`, `--red-*`, `--amber-*`, `--green-*`, plus `--white`, `--black`,
+`--cyan-600`, `--map-ground`), each defined once, and the **jobs**, the `--rc-*` names, each pointing at a palette
+colour (`--rc-accent:var(--sea-700)`). Stylesheets and code use only the job names. A new job reuses a palette
+colour; a new palette colour needs a reason no existing one will do. See-through values stay written out as
+`rgba()` with a comment naming the palette colour they thin (no `color-mix()`, for older iPhones). Anything that
+reads theme.css as text must follow `var()` to the value, as `build-crossings.js` and `render-local-maps.mjs` do.
+Code picks a CLASS, never a colour: `crossing.js` sets `st-*` on the status box,
 `cv-*` on the countdown values and `bw-*` on `#barrierWrap`; `home.js` reads the map pins and map style with
 `tok()`; `build-crossings.js` and `render-local-maps.mjs` read theirs from the file too. `closure-card.css`
 keeps the observer's own dark colours as fallbacks (the observer does not load theme.css). The public page

@@ -44,12 +44,16 @@ const ROOT = path.resolve(__dirname, '..');
 // colours), because a <meta name="theme-color"> and a web-app manifest cannot refer to CSS.
 const THEME = (() => {
   const css = fs.readFileSync(path.join(ROOT, 'shared', 'theme.css'), 'utf8');
-  const read = name => {
-    const m = css.match(new RegExp(`--rc-${name}:\\s*(#[0-9A-Fa-f]{6})`));
-    if (!m) throw new Error(`shared/theme.css has no --rc-${name} colour`);
-    return m[1];
+  // A job name points at the palette (`--rc-browser-bar:var(--sea-700)`), so follow var() to the colour.
+  const read = (name, seen = 0) => {
+    const m = css.match(new RegExp(`--${name}:\\s*([^;]+);`));
+    if (!m) throw new Error(`shared/theme.css has no --${name}`);
+    const v = m[1].trim(), ref = v.match(/^var\(--([\w-]+)\)$/);
+    if (ref && seen < 8) return read(ref[1], seen + 1);
+    if (!/^#[0-9A-Fa-f]{6}$/.test(v)) throw new Error(`shared/theme.css --${name} is not a #rrggbb colour: ${v}`);
+    return v;
   };
-  return { browserBar: read('browser-bar'), appSplash: read('app-splash') };
+  return { browserBar: read('rc-browser-bar'), appSplash: read('rc-app-splash') };
 })();
 const withTheme = t => t.replace(/\{\{themeColor\}\}/g, THEME.browserBar);
 const SITE = 'https://railcrossing.uk';

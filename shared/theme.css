@@ -7,14 +7,22 @@
  *
  * The look (2026-11 rebrand, "Seaside"): warm sand ground, white cards, one sea blue for the
  * brand, and the barrier states as soft tints — red, amber and green are reserved for the
- * barrier and never used for anything else. Mock-ups and the decisions behind them are on the
- * design canvas linked from the rebrand commit.
+ * barrier and never used for anything else. The design system that describes it, and the
+ * decisions behind it, is linked from CLAUDE.md ("The design system").
  *
- * Also read from code:
+ * TWO LAYERS (2026-11-25, Rich):
+ *   1. THE PALETTE: every solid colour the site uses, once, in six families (sand, slate, sea,
+ *      red, amber, green). A new colour is added here only if no palette colour will do.
+ *   2. THE JOBS: the --rc-* names. Each says what a colour is FOR and points at the palette, so
+ *      one job can change without touching the others. Stylesheets and code use only these.
+ *      See-through values stay written out (rgba), each noting the palette colour it thins.
+ *
+ * Also read from code (each resolves var() through the palette):
  *   - shared/home.js reads the --rc-pin-* and --rc-map-* values for the homepage map, which
  *     MapLibre draws itself and CSS cannot reach.
  *   - scripts/build-crossings.js reads --rc-browser-bar and --rc-app-splash into each page's
  *     <meta name="theme-color"> and the web-app manifests, which cannot refer to CSS.
+ *   - scripts/render-local-maps.mjs reads the map and text colours for the local map pictures.
  *
  * NOT here, on purpose:
  *   - The observer app (portslade/observe/) has its own look in observe.css. It shares
@@ -33,82 +41,119 @@
   /* type: Schibsted Grotesk, served from shared/fonts (SIL Open Font Licence, OFL.txt beside it) */
   --rc-font:'Schibsted Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,system-ui,sans-serif;
 
+  /* ==== 1. THE PALETTE ===================================================================== */
+  /* sand: warm neutrals (page, cards, lines, the barrier drawing) */
+  --white:#FFFFFF;
+  --sand-50:#FBF7F0;
+  --sand-100:#F3ECE0;
+  --sand-200:#ECE3D4;
+  --sand-300:#DDD2BF;
+  --sand-400:#C9BFAE;
+  --sand-450:#B9AF9F;
+  --sand-500:#B0A694;
+  --sand-600:#A39A8B;
+  --sand-700:#8A8170;
+  /* slate: text */
+  --slate-500:#6A717A;
+  --slate-600:#4F5966;
+  --slate-700:#36404C;
+  --slate-900:#1D2733;
+  --black:#000000;
+  /* sea: the brand (plus the you-are-here cyan and the map's own ground) */
+  --sea-50:#DCEEF2;
+  --sea-100:#CFE4EA;
+  --sea-700:#0B5C78;
+  --sea-800:#084A61;
+  --cyan-600:#0891B2;
+  --map-ground:#F1F2EE;
+  /* red: barriers down */
+  --red-100:#FBE2DF;
+  --red-600:#DC2626;
+  --red-800:#991B1B;
+  /* amber: closing soon */
+  --amber-100:#FDF0CF;
+  --amber-500:#F59E0B;
+  --amber-700:#B45309;
+  --amber-900:#7C3F06;
+  /* green: crossing clear */
+  --green-100:#E2F4E7;
+  --green-600:#16A34A;
+  --green-700:#15803D;
+  --green-900:#14532D;
+
+  /* ==== 2. THE JOBS ======================================================================== */
   /* page */
-  --rc-bg:#FBF7F0;              /* page ground: sand */
-  --rc-panel:#FFFFFF;           /* menu drawer, search results, pop-ups */
-  --rc-surface:#FFFFFF;         /* cards and sections */
-  --rc-sunk:#F8F2E8;            /* a closure card inside a white section (observer layout) */
-  --rc-line:#DDD2BF;            /* borders on buttons, pills and inputs */
-  --rc-line-soft:#ECE3D4;       /* hairlines between rows, card edges, picture frames */
-  --rc-header-line:#ECE3D4;     /* the rule under a page title on sand */
-  --rc-press:#F3ECE0;           /* background of a button or row while pressed */
-  --rc-text:#1D2733;            /* main text */
-  --rc-text-2:#36404C;          /* body copy and secondary values */
-  --rc-dim:#4F5966;             /* labels and captions */
-  --rc-faint:#6A717A;           /* the quietest text (4.6:1 on sand) */
-  --rc-fainter:#6A717A;         /* footer small print */
-  --rc-strong:#1D2733;          /* emphasis inside a note */
-  --rc-color-scheme:light;      /* form controls and scrollbars */
+  --rc-bg:var(--sand-50);               /* page ground: sand */
+  --rc-panel:var(--white);              /* menu drawer, search results, pop-ups */
+  --rc-surface:var(--white);            /* cards and sections */
+  --rc-line:var(--sand-300);            /* borders on buttons, pills and inputs */
+  --rc-line-soft:var(--sand-200);       /* hairlines between rows, card edges, picture frames */
+  --rc-press:var(--sand-100);           /* background of a button or row while pressed */
+  --rc-text:var(--slate-900);           /* main text */
+  --rc-text-2:var(--slate-700);         /* body copy and secondary values */
+  --rc-dim:var(--slate-600);            /* labels and captions */
+  --rc-faint:var(--slate-500);          /* the quietest text (4.6:1 on sand) */
+  --rc-fainter:var(--slate-500);        /* footer small print */
+  --rc-strong:var(--slate-900);         /* emphasis inside a note */
+  --rc-color-scheme:light;              /* form controls and scrollbars */
 
   /* the sea-blue header panel at the top of every page */
-  --rc-hero:#0B5C78;
-  --rc-on-hero:#FBF7F0;
-  --rc-on-hero-dim:#DCEEF2;     /* the line under a title in the header */
-  --rc-hero-line:rgba(251,247,240,.55);   /* outline buttons in the header */
-  --rc-status-idle:rgba(251,247,240,.14); /* the status box before there is data */
-  --rc-hero-press:rgba(251,247,240,.14);  /* a header button while pressed */
+  --rc-hero:var(--sea-700);
+  --rc-on-hero:var(--sand-50);
+  --rc-on-hero-dim:var(--sea-50);       /* the line under a title in the header */
+  --rc-hero-line:rgba(251,247,240,.55);   /* sand-50 at 55%: outline buttons in the header */
+  --rc-status-idle:rgba(251,247,240,.14); /* sand-50 at 14%: the status box before there is data */
+  --rc-hero-press:rgba(251,247,240,.14);  /* sand-50 at 14%: a header button while pressed */
 
   /* brand */
-  --rc-accent:#0B5C78;          /* sea blue: buttons, live pins, focus rings */
-  --rc-accent-press:#084A61;
-  --rc-on-accent:#FFFFFF;
-  --rc-link:#0B5C78;            /* links inside copy */
-  --rc-info:#0B5C78;            /* a train's position; the share icon in Add as app */
-  --rc-warn:#B45309;            /* warnings and "your guess" highlights (amber, dark enough to read) */
-  --rc-donate:#DCEEF2;          /* Support on GoFundMe: sea glass, not yellow (amber means closing soon) */
-  --rc-donate-press:#CFE4EA;
-  --rc-on-donate:#0B5C78;
+  --rc-accent:var(--sea-700);           /* sea blue: buttons, live pins, focus rings */
+  --rc-accent-press:var(--sea-800);
+  --rc-on-accent:var(--white);
+  --rc-link:var(--sea-700);             /* links inside copy */
+  --rc-info:var(--sea-700);             /* a train's position; the share icon in Add as app */
+  --rc-warn:var(--amber-700);           /* warnings and "your guess" highlights (amber, dark enough to read) */
+  --rc-donate:var(--sea-50);            /* Support on GoFundMe: sea glass, not yellow (amber means closing soon) */
+  --rc-donate-press:var(--sea-100);
+  --rc-on-donate:var(--sea-700);
 
   /* tags and pills */
-  --rc-pill-bg:#F3ECE0;         /* "In 8 min" */
-  --rc-pill-ink:#36404C;
-  --rc-tag-bg:#DCEEF2;          /* "Coming soon", "Live" and similar badges */
-  --rc-tag-ink:#0B5C78;
-  --rc-soon-stripe:rgba(29,39,51,.035);   /* the faint hatching on a coming-soon row */
+  --rc-pill-bg:var(--sand-100);         /* "In 8 min" */
+  --rc-pill-ink:var(--slate-700);
+  --rc-tag-bg:var(--sea-50);            /* "Coming soon", "Live" and similar badges */
+  --rc-tag-ink:var(--sea-700);
+  --rc-soon-stripe:rgba(29,39,51,.035);   /* slate-900 at 3.5%: the faint hatching on a coming-soon row */
 
   /* barrier status box: soft tints, dark text (no glow on a light page) */
-  --rc-closed:#FBE2DF;   --rc-on-closed:#991B1B;   --rc-closed-glow:none;
-  --rc-closing:#FDF0CF;  --rc-on-closing:#7C3F06;  --rc-closing-glow:none;
-  --rc-open:#E2F4E7;     --rc-on-open:#14532D;     --rc-open-glow:none;
-  --rc-unknown:#ECE3D4;  --rc-on-unknown:#36404C;  /* NO LIVE DATA */
+  --rc-closed:var(--red-100);      --rc-on-closed:var(--red-800);      --rc-closed-glow:none;
+  --rc-closing:var(--amber-100);   --rc-on-closing:var(--amber-900);   --rc-closing-glow:none;
+  --rc-open:var(--green-100);      --rc-on-open:var(--green-900);      --rc-open-glow:none;
+  --rc-unknown:var(--sand-200);    --rc-on-unknown:var(--slate-700);   /* NO LIVE DATA */
 
   /* countdown values on the Next open / Next close figures */
-  --rc-open-text:#15803D;
-  --rc-close-text:#B45309;
-  --rc-held-text:#6A717A;       /* a held train: the number is a lower bound */
-  --rc-idle-text:#A39A8B;       /* "--" before there is data */
+  --rc-open-text:var(--green-700);
+  --rc-close-text:var(--amber-700);
+  --rc-held-text:var(--slate-500);      /* a held train: the number is a lower bound */
+  --rc-idle-text:var(--sand-600);       /* "--" before there is data */
 
   /* soft state fills: the current closure, the error box, the feedback buttons */
-  --rc-closed-soft:#FBE2DF;     --rc-on-closed-soft:#991B1B;
-  --rc-open-soft:#E2F4E7;       --rc-on-open-soft:#14532D;
-  --rc-ok-line:#15803D;         /* Refresh button outline once a refresh has landed */
+  --rc-closed-soft:var(--red-100);      --rc-on-closed-soft:var(--red-800);
+  --rc-open-soft:var(--green-100);      --rc-on-open-soft:var(--green-900);
+  --rc-ok-line:var(--green-700);        /* Refresh button once a refresh has landed */
 
   /* the barrier drawing (the booms stay the real colours: red and white, amber, green) */
-  --rc-post:#A39A8B;
-  --rc-road:#B9AF9F;            /* road line and road name */
-  --rc-lamp:#DC2626;            /* the flashing lights */
-  --rc-arm-idle:#C9BFAE;        --rc-stripe-idle:#F3ECE0;      /* before there is data */
-  --rc-arm-closed:#DC2626;      --rc-stripe-closed:#FFFFFF;
-  --rc-arm-closing:#F59E0B;     --rc-stripe-closing:#000000;
-  --rc-arm-open:#16A34A;        --rc-stripe-open:#15803D;
+  --rc-post:var(--sand-600);
+  --rc-road:var(--sand-450);            /* the dashed road line */
+  --rc-lamp:var(--red-600);             /* the flashing lights */
+  --rc-arm-idle:var(--sand-400);        --rc-stripe-idle:var(--sand-100);    /* before there is data */
+  --rc-arm-closed:var(--red-600);       --rc-stripe-closed:var(--white);
+  --rc-arm-closing:var(--amber-500);    --rc-stripe-closing:var(--black);
+  --rc-arm-open:var(--green-600);       --rc-stripe-open:var(--green-700);
 
   /* overlays and shadows (warm and light) */
-  --rc-scrim:rgba(29,39,51,.45);          /* behind the crossing page's pop-up */
-  --rc-backdrop:rgba(29,39,51,.35);       /* behind the menu drawer */
-  --rc-backdrop-strong:rgba(29,39,51,.45);/* behind the homepage's pop-up */
-  --rc-shadow-search:0 6px 20px rgba(60,40,10,.12);
+  --rc-scrim:rgba(29,39,51,.45);          /* slate-900 at 45%: behind the crossing page's pop-up */
+  --rc-backdrop:rgba(29,39,51,.35);       /* slate-900 at 35%: behind the menu drawer */
+  --rc-backdrop-strong:rgba(29,39,51,.45);/* slate-900 at 45%: behind the homepage's pop-up */
   --rc-shadow-dropdown:0 18px 40px rgba(60,40,10,.18);
-  --rc-shadow-chip:0 4px 14px rgba(60,40,10,.12);
   --rc-shadow-app:0 4px 14px rgba(60,40,10,.18);
   --rc-shadow-sheet:0 -6px 30px rgba(60,40,10,.16);
   --rc-shadow-num:0 2px 6px rgba(0,0,0,.25);
@@ -116,34 +161,34 @@
   /* the homepage map (shared/home.js reads the pin and map values) */
   --rc-map-base:positron;                 /* OpenFreeMap style name */
   --rc-map-plan:light;                    /* map/style.js planStyle theme: light or dark */
-  --rc-map-sea:#F1F2EE;                   /* behind the map before its tiles arrive */
-  --rc-map-glass:rgba(255,255,255,.92);   /* the legend over the map */
-  --rc-map-attrib:rgba(255,255,255,.8);   /* the OpenStreetMap credit */
+  --rc-map-sea:var(--map-ground);         /* behind the map before its tiles arrive */
+  --rc-map-glass:rgba(255,255,255,.92);   /* white at 92%: the legend over the map */
+  --rc-map-attrib:rgba(255,255,255,.8);   /* white at 80%: the OpenStreetMap credit */
   --rc-map-attrib-invert:0;               /* 1 = flip the credit's (i) icon for a dark map */
-  --rc-pin-live:#0B5C78;
-  --rc-pin-live-ring:#FFFFFF;
-  --rc-pin-live-halo:rgba(11,92,120,0.22);
-  --rc-pin-soon:#B0A694;
-  --rc-pin-soon-ring:#FFFFFF;
-  --rc-pin-selected:#1D2733;
-  --rc-pin-selected-ring:#FFFFFF;
-  --rc-pin-label:#1D2733;
-  --rc-pin-label-halo:#FFFFFF;
-  --rc-pin-you:#0891B2;
-  --rc-pin-you-ring:#FFFFFF;
-  --rc-pin-you-halo:rgba(8,145,178,.2);
-  --rc-num-bg:#0B5C78;                    /* numbered circles for Nearby */
-  --rc-num-ink:#FFFFFF;
-  --rc-num-soon-bg:#8A8170;
+  --rc-pin-live:var(--sea-700);
+  --rc-pin-live-ring:var(--white);
+  --rc-pin-live-halo:rgba(11,92,120,0.22);  /* sea-700 at 22% */
+  --rc-pin-soon:var(--sand-500);
+  --rc-pin-soon-ring:var(--white);
+  --rc-pin-selected:var(--slate-900);
+  --rc-pin-selected-ring:var(--white);
+  --rc-pin-label:var(--slate-900);
+  --rc-pin-label-halo:var(--white);
+  --rc-pin-you:var(--cyan-600);
+  --rc-pin-you-ring:var(--white);
+  --rc-pin-you-halo:rgba(8,145,178,.2);   /* cyan-600 at 20% */
+  --rc-num-bg:var(--sea-700);             /* numbered circles for Nearby */
+  --rc-num-ink:var(--white);
+  --rc-num-soon-bg:var(--sand-700);
 
   /* the browser bar matches the sea-blue header; the app's loading screen is sand
      (read by scripts/build-crossings.js) */
-  --rc-browser-bar:#0B5C78;
-  --rc-app-splash:#FBF7F0;
+  --rc-browser-bar:var(--sea-700);
+  --rc-app-splash:var(--sand-50);
 
   /* the debug panel (?debug=1, internal) */
-  --rc-debug-bg:#F3ECE0;
-  --rc-debug-line:#ECE3D4;
-  --rc-debug-text:#4F5966;
-  --rc-debug-faint:#8A8170;
+  --rc-debug-bg:var(--sand-100);
+  --rc-debug-line:var(--sand-200);
+  --rc-debug-text:var(--slate-600);
+  --rc-debug-faint:var(--sand-700);
 }
