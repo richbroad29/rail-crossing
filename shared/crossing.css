@@ -37,7 +37,6 @@ h1.hdr-title{margin:6px 0 0}
 .barrier-wrap svg{display:block;width:124px;height:auto}
 .bw-post{fill:var(--rc-post)}
 .bw-road{stroke:var(--rc-road)}
-.bw-label{fill:var(--rc-road)}
 #lightA,#lightB{fill:var(--rc-lamp)}
 .arm-bar{fill:var(--rc-arm-idle)}
 .stripe{fill:var(--rc-stripe-idle)}
@@ -50,15 +49,21 @@ h1.hdr-title{margin:6px 0 0}
    the whole strip one slot left: the spent figure leaves, the right one takes the left slot,
    and the waiting one arrives. `overflow:hidden` on the window is what makes the third slot
    invisible until it is pushed in.
-   A slot is exactly half the window: basis (100% - gap)/2, so the shift distance is
-   slot + gap = 50% + 4px. Keep those two in step if the gap changes.
+   A slot is half the window less half the gap: basis (100% - 28px)/2, so the shift distance is
+   slot + gap = 50% + 14px. Keep the gap, the basis and the shift in step.
+   The rule is drawn IN the gap, on the right of the figure before it (.card::after), never as a
+   border on the figure after it (2026-11-25, Rich). As a border it travelled with the incoming
+   figure into the left slot, so when the strip snapped back a moment after the slide (the next
+   tick refills slots 0 and 1) the text jumped left and the rule vanished. In the gap, the rule
+   leaves to the left with the outgoing figure, the incoming one arrives exactly where it stays,
+   and the snap-back changes nothing on screen. The third slot's rule sits outside the window.
    The .55s here and CARD_SHIFT_MS in crossing.js describe the same animation. */
 .cards{overflow:hidden;margin-top:2px;padding:4px 0 16px;border-bottom:1px solid var(--rc-line-soft)}
-.cards-track{display:flex;gap:8px;transition:transform .55s cubic-bezier(.4,0,.2,1)}
-.cards-track.shifted{transform:translateX(calc(-50% - 4px))}
+.cards-track{display:flex;gap:28px;transition:transform .55s cubic-bezier(.4,0,.2,1)}
+.cards-track.shifted{transform:translateX(calc(-50% - 14px))}
 @media (prefers-reduced-motion:reduce){.cards-track{transition:none}}
-.card{flex:0 0 calc((100% - 8px)/2);display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;min-height:76px;min-width:0}
-.card+.card{border-left:1px solid var(--rc-line-soft);padding-left:14px}
+.card{flex:0 0 calc((100% - 28px)/2);position:relative;display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;min-height:76px;min-width:0}
+.card::after{content:'';position:absolute;top:0;bottom:0;right:-14.5px;width:1px;background:var(--rc-line-soft)}
 /* crossing.js writes "Next Open" / "Next Close"; shown in sentence case. */
 .card-label{font-size:13px;font-weight:600;color:var(--rc-dim);text-transform:lowercase}
 .card-label::first-letter{text-transform:uppercase}

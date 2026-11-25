@@ -39,7 +39,7 @@ method) or is labelled a guess; and derive rather than store wherever the engine
 | `name` | Full display name | Portslade Level Crossing | Live |
 | `road` | The road that crosses the railway | Boundary Road | Live |
 | `crossingNumber` | Network Rail's crossing number (Crossing UID). Joins the crossing to its row in `scripts/crossing-list.csv`, which supplies its position, town, council, county, country and Network Rail type: never typed into the definition. The website build stops if it is missing, not in the list, excluded there, or used by another crossing | 1950 | Live (2026-11-12) |
-| `roadLabel` | Short form for the drawing of the barrier (long names clip) | BOUNDARY ROAD (from `road`) | Hard-coded |
+| `roadLabel` | No longer used: the road name was taken off the barrier drawing (2026-11-25). Ignored if present | — | — |
 | `stationName` | Nearby station in words, shown in the crossing page's "About this crossing" block | Portslade | Live (2026-11-12) |
 | `listed` | Whether the crossing appears on the home page. Lets a crossing be set up before it is public | true | New (every crossing is listed) |
 | `pageTitle` | **Optional override.** The build generates "<name>, <road>: live barrier times"; set this only when that reads badly | — (generated: "Portslade Level Crossing, Boundary Road: live barrier times") | Live (2026-11-12) |

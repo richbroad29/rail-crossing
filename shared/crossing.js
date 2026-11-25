@@ -830,8 +830,6 @@ async function initCrossing(id) {
   // The page's <title> is written in at build time (scripts/build-crossings.js) and is already
   // right; overwriting it here with the bare name would undo it for every crawler that runs code.
 
-  var roadLabel = $('roadLabel');
-  if (roadLabel) roadLabel.textContent = CFG.road.toUpperCase();
 
   setRefreshState('idle');
   fbFetchTriggers();   // static per deploy, and only the feedback picker reads it — fire

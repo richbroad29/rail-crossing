@@ -253,7 +253,7 @@ const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(
 function page(id, d, r, template) {
   const p = d.presentation, f = pageFacts(id, d, r);
   const vals = {
-    id, name: d.name, road: d.road, roadLabel: p.roadLabel || d.road.toUpperCase(),
+    id, name: d.name, road: d.road,
     pageTitle: f.pageTitle, description: f.description, appShortName: p.appShortName,
     url: `${SITE}/${id}/`, where: f.where, stationName: p.stationName,
     typeCode: f.typeCode, typeWords: f.typeWords, figures: f.figures, directoryUrl: `../${directoryUrl}`, crossingNumber: d.crossingNumber
