@@ -143,8 +143,8 @@ the changed ones (the index last, per the type's own instructions).
 ### The look lives in `shared/theme.css` (2026-11 rebrand, "Seaside")
 
 Every colour on the public pages is a `--rc-*` name in `shared/theme.css`; the stylesheets refer to the names
-and never to a colour. The file has **two layers** (2026-11-25, Rich): a **palette** of 32 solid colours in six
-families (`--sand-*`, `--slate-*`, `--sea-*`, `--red-*`, `--amber-*`, `--green-*`, plus `--white`, `--black`,
+and never to a colour. The file has **two layers** (2026-11-25, Rich): a **palette** of 29 solid colours in six
+families (`--sand-*`, `--slate-*`, `--sea-*`, `--red-*`, `--amber-*`, `--green-*`, plus `--white`,
 `--cyan-600`, `--map-ground`), each defined once, and the **jobs**, the `--rc-*` names, each pointing at a palette
 colour (`--rc-accent:var(--sea-700)`). Stylesheets and code use only the job names. A new job reuses a palette
 colour; a new palette colour needs a reason no existing one will do. See-through values stay written out as

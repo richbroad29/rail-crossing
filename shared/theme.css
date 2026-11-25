@@ -12,7 +12,9 @@
  *
  * TWO LAYERS (2026-11-25, Rich):
  *   1. THE PALETTE: every solid colour the site uses, once, in six families (sand, slate, sea,
- *      red, amber, green). A new colour is added here only if no palette colour will do.
+ *      red, amber, green): 29 colours. A new colour is added here only if no palette colour will
+ *      do. Three near-duplicates were folded in on 2026-11-25 (the road line, the coming-soon pin
+ *      and the closing-soon stripes); keep it from growing back.
  *   2. THE JOBS: the --rc-* names. Each says what a colour is FOR and points at the palette, so
  *      one job can change without touching the others. Stylesheets and code use only these.
  *      See-through values stay written out (rgba), each noting the palette colour it thins.
@@ -49,8 +51,6 @@
   --sand-200:#ECE3D4;
   --sand-300:#DDD2BF;
   --sand-400:#C9BFAE;
-  --sand-450:#B9AF9F;
-  --sand-500:#B0A694;
   --sand-600:#A39A8B;
   --sand-700:#8A8170;
   /* slate: text */
@@ -58,7 +58,6 @@
   --slate-600:#4F5966;
   --slate-700:#36404C;
   --slate-900:#1D2733;
-  --black:#000000;
   /* sea: the brand (plus the you-are-here cyan and the map's own ground) */
   --sea-50:#DCEEF2;
   --sea-100:#CFE4EA;
@@ -142,11 +141,11 @@
 
   /* the barrier drawing (the booms stay the real colours: red and white, amber, green) */
   --rc-post:var(--sand-600);
-  --rc-road:var(--sand-450);            /* the dashed road line */
+  --rc-road:var(--sand-600);            /* the dashed road line: the post colour, so the drawing is one grey */
   --rc-lamp:var(--red-600);             /* the flashing lights */
   --rc-arm-idle:var(--sand-400);        --rc-stripe-idle:var(--sand-100);    /* before there is data */
   --rc-arm-closed:var(--red-600);       --rc-stripe-closed:var(--white);
-  --rc-arm-closing:var(--amber-500);    --rc-stripe-closing:var(--black);
+  --rc-arm-closing:var(--amber-500);    --rc-stripe-closing:var(--slate-900);
   --rc-arm-open:var(--green-600);       --rc-stripe-open:var(--green-700);
 
   /* overlays and shadows (warm and light) */
@@ -168,7 +167,7 @@
   --rc-pin-live:var(--sea-700);
   --rc-pin-live-ring:var(--white);
   --rc-pin-live-halo:rgba(11,92,120,0.22);  /* sea-700 at 22% */
-  --rc-pin-soon:var(--sand-500);
+  --rc-pin-soon:var(--sand-600);
   --rc-pin-soon-ring:var(--white);
   --rc-pin-selected:var(--slate-900);
   --rc-pin-selected-ring:var(--white);
